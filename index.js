@@ -50,16 +50,33 @@ client.once('ready', () => {
   console.log(`🌐 Connected to Solana: ${process.env.SOLANA_RPC_URL}`);
   console.log(`💰 Wallet: ${crypto.getWallet()?.publicKey.toString()}`);
   console.log(`📡 LivePay Solana Payroll Engine is LIVE`);
+  console.log(`📡 Interaction handler registered and listening for slash commands`);
 });
 
 // Interaction handler
 client.on('interactionCreate', async interaction => {
+  console.log(`📨 Interaction received: type=${interaction.type}`);
+  if (interaction.isChatInputCommand()) {
+    console.log(`   Command: ${interaction.commandName}`);
+  }
+  if (interaction.isButton()) {
+    console.log(`   Button: ${interaction.customId}`);
+  }
+  if (interaction.isModalSubmit()) {
+    console.log(`   Modal: ${interaction.customId}`);
+  }
+  
   // Handle slash commands
   if (interaction.isChatInputCommand()) {
+    console.log(`🔧 Processing command: ${interaction.commandName}`);
     const command = client.commands.get(interaction.commandName);
-    if (!command) return;
+    if (!command) {
+      console.log(`❌ Command not found: ${interaction.commandName}`);
+      return;
+    }
 
     try {
+      console.log(`⚡ Executing command: ${interaction.commandName}`);
       await command.execute(interaction);
     } catch (error) {
       console.error('❌ Error executing command:', error);
