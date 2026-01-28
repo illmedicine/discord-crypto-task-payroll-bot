@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const crypto = require('./utils/crypto');
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 
 // Command collection
 client.commands = new Collection();
@@ -54,19 +54,58 @@ client.once('ready', () => {
 
 // Interaction handler
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
+  // Handle slash commands
+  if (interaction.isChatInputCommand()) {
+    const command = client.commands.get(interaction.commandName);
+    if (!command) return;
 
-  const command = client.commands.get(interaction.commandName);
-  if (!command) return;
+    try {
+      await command.execute(interaction);
+    } catch (error) {
+      console.error('❌ Error executing command:', error);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: '❌ An error occurred executing this command.', ephemeral: true });
+      } else {
+        await interaction.reply({ content: '❌ An error occurred executing this command.', ephemeral: true });
+      }
+    }
+  }
 
-  try {
-    await command.execute(interaction);
-  } catch (error) {
-    console.error('❌ Error executing command:', error);
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ content: '❌ An error occurred executing this command.', ephemeral: true });
-    } else {
-      await interaction.reply({ content: '❌ An error occurred executing this command.', ephemeral: true });
+  // Handle button interactions for proof verification
+  if (interaction.isButton()) {
+    if (interaction.customId.startsWith('proof_verification_')) {
+      const submitProofCommand = client.commands.get('submit-proof');
+      if (submitProofCommand && submitProofCommand.handleVerificationButton) {
+        try {
+          await submitProofCommand.handleVerificationButton(interaction, client);
+        } catch (error) {
+          console.error('❌ Error handling verification button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+    }
+  }
+
+  // Handle modal submissions
+  if (interaction.isModalSubmit()) {
+    if (interaction.customId.startsWith('proof_modal_')) {
+      const submitProofCommand = client.commands.get('submit-proof');
+      if (submitProofCommand && submitProofCommand.handleModal) {
+        try {
+          await submitProofCommand.handleModal(interaction);
+        } catch (error) {
+          console.error('❌ Error handling proof modal:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred submitting your proof.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred submitting your proof.', ephemeral: true });
+          }
+        }
+      }
     }
   }
 });
