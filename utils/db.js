@@ -143,12 +143,18 @@ const initDb = () => {
 // Guild Wallet operations
 const setGuildWallet = (guildId, walletAddress, configuredByUserId) => {
   return new Promise((resolve, reject) => {
+    console.log(`[DB] Setting guild wallet - guildId: ${guildId}, wallet: ${walletAddress}`);
     db.run(
       `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by) VALUES (?, ?, ?)`,
       [guildId, walletAddress, configuredByUserId],
-      (err) => {
-        if (err) reject(err);
-        else resolve();
+      function(err) {
+        if (err) {
+          console.error(`[DB] Error setting guild wallet:`, err);
+          reject(err);
+        } else {
+          console.log(`[DB] Guild wallet set successfully`);
+          resolve();
+        }
       }
     );
   });
@@ -156,12 +162,18 @@ const setGuildWallet = (guildId, walletAddress, configuredByUserId) => {
 
 const getGuildWallet = (guildId) => {
   return new Promise((resolve, reject) => {
+    console.log(`[DB] Getting guild wallet - guildId: ${guildId}`);
     db.get(
       `SELECT * FROM guild_wallets WHERE guild_id = ?`,
       [guildId],
       (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
+        if (err) {
+          console.error(`[DB] Error getting guild wallet:`, err);
+          reject(err);
+        } else {
+          console.log(`[DB] Guild wallet retrieved:`, row ? `found ${row.wallet_address}` : 'not found');
+          resolve(row);
+        }
       }
     );
   });
