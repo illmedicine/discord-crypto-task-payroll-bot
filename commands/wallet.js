@@ -36,57 +36,57 @@ module.exports = {
       try {
         // Check if wallet is already configured for this server
         const existingWallet = await db.getGuildWallet(guildId);
-      
-      if (existingWallet) {
+        
+        if (existingWallet) {
+          const embed = new EmbedBuilder()
+            .setColor('#FF0000')
+            .setTitle('🔒 Treasury Wallet Locked')
+            .setDescription('This Discord server already has a treasury wallet configured.')
+            .addFields(
+              { name: 'Configured Wallet', value: `\`${existingWallet.wallet_address}\`` },
+              { name: 'Status', value: '🔒 Immutable - Cannot be changed' },
+              { name: 'Configured On', value: new Date(existingWallet.configured_at).toLocaleString() },
+              { name: 'Note', value: 'The treasury wallet for this server was locked when first configured and cannot be changed.' }
+            )
+            .setTimestamp();
+
+          return interaction.editReply({
+            embeds: [embed]
+          });
+        }
+
+        const address = interaction.options.getString('address');
+
+        // Validate Solana address
+        if (!crypto.isValidSolanaAddress(address)) {
+          return interaction.editReply({
+            content: '❌ Invalid Solana address. Please check and try again.'
+          });
+        }
+
+        // Set the guild wallet (one-time configuration)
+        await db.setGuildWallet(guildId, address, interaction.user.id);
+
         const embed = new EmbedBuilder()
-          .setColor('#FF0000')
-          .setTitle('🔒 Treasury Wallet Locked')
-          .setDescription('This Discord server already has a treasury wallet configured.')
+          .setColor('#14F195')
+          .setTitle('✅ Treasury Wallet Configured')
+          .setDescription('Server treasury wallet has been set and locked.')
           .addFields(
-            { name: 'Configured Wallet', value: `\`${existingWallet.wallet_address}\`` },
-            { name: 'Status', value: '🔒 Immutable - Cannot be changed' },
-            { name: 'Configured On', value: new Date(existingWallet.configured_at).toLocaleString() },
-            { name: 'Note', value: 'The treasury wallet for this server was locked when first configured and cannot be changed.' }
+            { name: 'Treasury Address', value: `\`${address}\`` },
+            { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
+            { name: 'Status', value: '🔒 Locked & Immutable' },
+            { name: 'Configured By', value: interaction.user.username },
+            { name: 'Important', value: 'This wallet cannot be changed. It is now the permanent treasury for this Discord server.' }
           )
           .setTimestamp();
 
+        return interaction.editReply({ embeds: [embed] });
+      } catch (error) {
+        console.error('Wallet connect error:', error);
         return interaction.editReply({
-          embeds: [embed]
+          content: `❌ Error: ${error.message}`
         });
       }
-
-      const address = interaction.options.getString('address');
-
-      // Validate Solana address
-      if (!crypto.isValidSolanaAddress(address)) {
-        return interaction.editReply({
-          content: '❌ Invalid Solana address. Please check and try again.'
-        });
-      }
-
-      // Set the guild wallet (one-time configuration)
-      await db.setGuildWallet(guildId, address, interaction.user.id);
-
-      const embed = new EmbedBuilder()
-        .setColor('#14F195')
-        .setTitle('✅ Treasury Wallet Configured')
-        .setDescription('Server treasury wallet has been set and locked.')
-        .addFields(
-          { name: 'Treasury Address', value: `\`${address}\`` },
-          { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
-          { name: 'Status', value: '🔒 Locked & Immutable' },
-          { name: 'Configured By', value: interaction.user.username },
-          { name: 'Important', value: 'This wallet cannot be changed. It is now the permanent treasury for this Discord server.' }
-        )
-        .setTimestamp();
-
-      return interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-      console.error('Wallet connect error:', error);
-      return interaction.editReply({
-        content: `❌ Error: ${error.message}`
-      });
-    }
     }
 
     if (subcommand === 'balance') {
@@ -118,7 +118,10 @@ module.exports = {
 
         return interaction.editReply({ embeds: [embed] });
       } catch (error) {
-        return interaction.editReply(`❌ Error fetching balance: ${error.message}`);
+        console.error('Wallet balance error:', error);
+        return interaction.editReply({
+          content: `❌ Error fetching balance: ${error.message}`
+        });
       }
     }
 
@@ -126,34 +129,34 @@ module.exports = {
       await interaction.deferReply();
       try {
         const guildWallet = await db.getGuildWallet(guildId);
-      
-      if (!guildWallet) {
+        
+        if (!guildWallet) {
+          return interaction.editReply({
+            content: '❌ No treasury wallet configured for this server.'
+          });
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor('#14F195')
+          .setTitle('📋 Treasury Wallet Information')
+          .addFields(
+            { name: 'Public Address', value: `\`${guildWallet.wallet_address}\`` },
+            { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
+            { name: 'Wallet Type', value: 'Server Treasury (Phantom)' },
+            { name: 'Status', value: '🔒 Locked & Immutable' },
+            { name: 'Configured At', value: new Date(guildWallet.configured_at).toLocaleString() },
+            { name: 'RPC Endpoint', value: process.env.SOLANA_RPC_URL || 'api.mainnet-beta.solana.com' },
+            { name: 'Purpose', value: 'Permanent treasury for all server payroll & transactions' }
+          )
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+      } catch (error) {
+        console.error('Wallet info error:', error);
         return interaction.editReply({
-          content: '❌ No treasury wallet configured for this server.'
+          content: `❌ Error: ${error.message}`
         });
       }
-
-      const embed = new EmbedBuilder()
-        .setColor('#14F195')
-        .setTitle('📋 Treasury Wallet Information')
-        .addFields(
-          { name: 'Public Address', value: `\`${guildWallet.wallet_address}\`` },
-          { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
-          { name: 'Wallet Type', value: 'Server Treasury (Phantom)' },
-          { name: 'Status', value: '🔒 Locked & Immutable' },
-          { name: 'Configured At', value: new Date(guildWallet.configured_at).toLocaleString() },
-          { name: 'RPC Endpoint', value: process.env.SOLANA_RPC_URL || 'api.mainnet-beta.solana.com' },
-          { name: 'Purpose', value: 'Permanent treasury for all server payroll & transactions' }
-        )
-        .setTimestamp();
-
-      return interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-      console.error('Wallet info error:', error);
-      return interaction.editReply({
-        content: `❌ Error: ${error.message}`
-      });
-    }
     }
   }
 };
