@@ -55,7 +55,7 @@ client.once('ready', () => {
 
 // Interaction handler
 client.on('interactionCreate', async interaction => {
-  console.log(`📨 Interaction received: type=${interaction.type}`);
+  console.log(`[${new Date().toISOString()}] 📨 Interaction received: type=${interaction.type}`);
   if (interaction.isChatInputCommand()) {
     console.log(`   Command: ${interaction.commandName}`);
   }
@@ -76,16 +76,19 @@ client.on('interactionCreate', async interaction => {
     }
 
     try {
-      console.log(`⚡ Executing command: ${interaction.commandName}`);
+      console.log(`⚡ About to execute: ${interaction.commandName}`);
       await command.execute(interaction);
+      console.log(`✅ Command executed successfully: ${interaction.commandName}`);
     } catch (error) {
-      console.error('❌ Error executing command:', error);
+      console.error('❌ Error executing command:', error.message);
+      console.error(error.stack);
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp({ content: '❌ An error occurred executing this command.', ephemeral: true });
       } else {
         await interaction.reply({ content: '❌ An error occurred executing this command.', ephemeral: true });
       }
     }
+    return;
   }
 
   // Handle button interactions for proof verification
@@ -105,6 +108,7 @@ client.on('interactionCreate', async interaction => {
         }
       }
     }
+    return;
   }
 
   // Handle modal submissions
@@ -124,6 +128,7 @@ client.on('interactionCreate', async interaction => {
         }
       }
     }
+    return;
   }
 });
 
