@@ -1,35 +1,59 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const crypto = require('../utils/crypto');
+const db = require('../utils/db');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('wallet')
-    .setDescription('Manage your Solana wallet with Phantom integration')
+    .setDescription('Manage server treasury wallet with Phantom integration')
     .addSubcommand(subcommand =>
       subcommand
         .setName('connect')
-        .setDescription('Connect your Phantom wallet')
+        .setDescription('Connect server treasury wallet (only once per server)')
         .addStringOption(option =>
           option.setName('address')
-            .setDescription('Your Solana wallet address')
+            .setDescription('Server treasury Solana wallet address')
             .setRequired(true)
         )
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('balance')
-        .setDescription('Check your wallet balance')
+        .setDescription('Check treasury wallet balance')
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('info')
-        .setDescription('View your wallet information')
+        .setDescription('View treasury wallet information')
     ),
 
   async execute(interaction) {
     const subcommand = interaction.options.getSubcommand();
+    const guildId = interaction.guildId;
 
     if (subcommand === 'connect') {
+      // Check if wallet is already configured for this server
+      const existingWallet = await db.getGuildWallet(guildId);
+      
+      if (existingWallet) {
+        const embed = new EmbedBuilder()
+          .setColor('#FF0000')
+          .setTitle('🔒 Treasury Wallet Locked')
+          .setDescription('This Discord server already has a treasury wallet configured.')
+          .addFields(
+            { name: 'Configured Wallet', value: `\`${existingWallet.wallet_address}\`` },
+            { name: 'Status', value: '🔒 Immutable - Cannot be changed' },
+            { name: 'Configured On', value: new Date(existingWallet.configured_at).toLocaleString() },
+            { name: 'Note', value: 'The treasury wallet for this server was locked when first configured and cannot be changed.' }
+          )
+          .setTimestamp();
+
+        return interaction.reply({
+          embeds: [embed],
+          ephemeral: true
+        });
+      }
+
       const address = interaction.options.getString('address');
 
       // Validate Solana address
@@ -40,16 +64,19 @@ module.exports = {
         });
       }
 
-      // Here you would store the wallet address in your database
-      // For now, just confirm the connection
+      // Set the guild wallet (one-time configuration)
+      await db.setGuildWallet(guildId, address, interaction.user.id);
+
       const embed = new EmbedBuilder()
         .setColor('#14F195')
-        .setTitle('✅ Wallet Connected')
-        .setDescription(`Successfully connected to Phantom wallet`)
+        .setTitle('✅ Treasury Wallet Configured')
+        .setDescription('Server treasury wallet has been set and locked.')
         .addFields(
-          { name: 'Wallet Address', value: `\`${address}\`` },
+          { name: 'Treasury Address', value: `\`${address}\`` },
           { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
-          { name: 'Status', value: '🟢 Connected' }
+          { name: 'Status', value: '🔒 Locked & Immutable' },
+          { name: 'Configured By', value: interaction.user.username },
+          { name: 'Important', value: 'This wallet cannot be changed. It is now the permanent treasury for this Discord server.' }
         )
         .setTimestamp();
 
@@ -60,24 +87,26 @@ module.exports = {
       await interaction.deferReply();
 
       try {
-        // In production, get the user's stored wallet address from database
-        // For now, use the bot's wallet
-        const wallet = crypto.getWallet();
-        if (!wallet) {
-          return interaction.editReply('❌ Wallet not configured.');
+        const guildWallet = await db.getGuildWallet(guildId);
+        
+        if (!guildWallet) {
+          return interaction.editReply({
+            content: '❌ No treasury wallet configured for this server. Ask a server admin to configure one with `/wallet connect`.'
+          });
         }
 
-        const balance = await crypto.getBalance(wallet.publicKey.toString());
+        const balance = await crypto.getBalance(guildWallet.wallet_address);
         const price = await crypto.getSolanaPrice();
         const usdValue = price ? (balance * price).toFixed(2) : 'N/A';
 
         const embed = new EmbedBuilder()
           .setColor('#14F195')
-          .setTitle('💰 Wallet Balance')
+          .setTitle('💰 Treasury Wallet Balance')
           .addFields(
             { name: 'SOL Balance', value: `${balance.toFixed(4)} SOL` },
             { name: 'USD Value', value: `$${usdValue}` },
-            { name: 'Address', value: `\`${wallet.publicKey.toString()}\`` }
+            { name: 'Address', value: `\`${guildWallet.wallet_address}\`` },
+            { name: 'Server Treasury', value: `Locked & Managed` }
           )
           .setTimestamp();
 
@@ -88,19 +117,26 @@ module.exports = {
     }
 
     if (subcommand === 'info') {
-      const wallet = crypto.getWallet();
-      if (!wallet) {
-        return interaction.reply('❌ Wallet not configured.');
+      const guildWallet = await db.getGuildWallet(guildId);
+      
+      if (!guildWallet) {
+        return interaction.reply({
+          content: '❌ No treasury wallet configured for this server.',
+          ephemeral: true
+        });
       }
 
       const embed = new EmbedBuilder()
         .setColor('#14F195')
-        .setTitle('📋 Wallet Information')
+        .setTitle('📋 Treasury Wallet Information')
         .addFields(
-          { name: 'Public Address', value: `\`${wallet.publicKey.toString()}\`` },
+          { name: 'Public Address', value: `\`${guildWallet.wallet_address}\`` },
           { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
-          { name: 'Wallet Type', value: 'Phantom (Solana)' },
-          { name: 'RPC Endpoint', value: process.env.SOLANA_RPC_URL || 'api.mainnet-beta.solana.com' }
+          { name: 'Wallet Type', value: 'Server Treasury (Phantom)' },
+          { name: 'Status', value: '🔒 Locked & Immutable' },
+          { name: 'Configured At', value: new Date(guildWallet.configured_at).toLocaleString() },
+          { name: 'RPC Endpoint', value: process.env.SOLANA_RPC_URL || 'api.mainnet-beta.solana.com' },
+          { name: 'Purpose', value: 'Permanent treasury for all server payroll & transactions' }
         )
         .setTimestamp();
 
