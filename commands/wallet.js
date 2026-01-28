@@ -28,14 +28,17 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    console.error(`[WALLET] Command started: ${interaction.options.getSubcommand()}`);
     const subcommand = interaction.options.getSubcommand();
     const guildId = interaction.guildId;
 
     if (subcommand === 'connect') {
       await interaction.deferReply();
       try {
+        console.error(`[WALLET] Connect: Getting existing wallet...`);
         // Check if wallet is already configured for this server
         const existingWallet = await db.getGuildWallet(guildId);
+        console.error(`[WALLET] Connect: Got wallet result`);
         
         if (existingWallet) {
           const embed = new EmbedBuilder()
@@ -50,6 +53,7 @@ module.exports = {
             )
             .setTimestamp();
 
+          console.error(`[WALLET] Connect: Sending existing wallet response`);
           return interaction.editReply({
             embeds: [embed]
           });
@@ -65,7 +69,9 @@ module.exports = {
         }
 
         // Set the guild wallet (one-time configuration)
+        console.error(`[WALLET] Connect: Setting new wallet...`);
         await db.setGuildWallet(guildId, address, interaction.user.id);
+        console.error(`[WALLET] Connect: Wallet set, sending response`);
 
         const embed = new EmbedBuilder()
           .setColor('#14F195')
@@ -93,7 +99,9 @@ module.exports = {
       await interaction.deferReply();
 
       try {
+        console.error(`[WALLET] Balance: Getting guild wallet...`);
         const guildWallet = await db.getGuildWallet(guildId);
+        console.error(`[WALLET] Balance: Got wallet, now fetching balance...`);
         
         if (!guildWallet) {
           return interaction.editReply({
@@ -101,8 +109,10 @@ module.exports = {
           });
         }
 
+        console.error(`[WALLET] Balance: Fetching balance and price...`);
         const balance = await crypto.getBalance(guildWallet.wallet_address);
         const price = await crypto.getSolanaPrice();
+        console.error(`[WALLET] Balance: Got balance ${balance}, price ${price}`);
         const usdValue = price ? (balance * price).toFixed(2) : 'N/A';
 
         const embed = new EmbedBuilder()
@@ -116,6 +126,7 @@ module.exports = {
           )
           .setTimestamp();
 
+        console.error(`[WALLET] Balance: Sending response`);
         return interaction.editReply({ embeds: [embed] });
       } catch (error) {
         console.error('Wallet balance error:', error);
@@ -128,7 +139,9 @@ module.exports = {
     if (subcommand === 'info') {
       await interaction.deferReply();
       try {
+        console.error(`[WALLET] Info: Getting guild wallet...`);
         const guildWallet = await db.getGuildWallet(guildId);
+        console.error(`[WALLET] Info: Got wallet result`);
         
         if (!guildWallet) {
           return interaction.editReply({
@@ -150,6 +163,7 @@ module.exports = {
           )
           .setTimestamp();
 
+        console.error(`[WALLET] Info: Sending response`);
         return interaction.editReply({ embeds: [embed] });
       } catch (error) {
         console.error('Wallet info error:', error);

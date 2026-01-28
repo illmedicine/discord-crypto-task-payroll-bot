@@ -57,11 +57,22 @@ const sendSol = async (recipientAddress, amountSol) => {
   }
 };
 
-// Get account balance
+// Get account balance with timeout
 const getBalance = async (publicKey) => {
   try {
     const key = new PublicKey(publicKey);
-    const balance = await connection.getBalance(key);
+    
+    // Create a timeout promise that rejects after 5 seconds
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Balance fetch timeout')), 5000)
+    );
+    
+    // Race the actual call against the timeout
+    const balance = await Promise.race([
+      connection.getBalance(key),
+      timeoutPromise
+    ]);
+    
     return balance / LAMPORTS_PER_SOL;
   } catch (error) {
     console.error('Error fetching balance:', error);
@@ -79,13 +90,22 @@ const isValidSolanaAddress = (address) => {
   }
 };
 
-// Get Solana price in USD (from CoinGecko)
+// Get Solana price in USD (from CoinGecko) with timeout
 const getSolanaPrice = async () => {
   try {
     const axios = require('axios');
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'
+    
+    // Create a timeout promise that rejects after 5 seconds
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Price fetch timeout')), 5000)
     );
+    
+    // Race the actual call against the timeout
+    const response = await Promise.race([
+      axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
+      timeoutPromise
+    ]);
+    
     return response.data.solana.usd;
   } catch (error) {
     console.error('Error fetching SOL price:', error);
