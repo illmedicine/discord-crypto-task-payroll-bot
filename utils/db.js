@@ -17,6 +17,16 @@ const initDb = () => {
       )
     `);
 
+    // Guild Settings - approve roles, etc
+    db.run(`
+      CREATE TABLE IF NOT EXISTS guild_settings (
+        guild_id TEXT PRIMARY KEY,
+        approved_roles TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
+      )
+    `);
+
     // Users table
     db.run(`
       CREATE TABLE IF NOT EXISTS users (
@@ -27,7 +37,63 @@ const initDb = () => {
       )
     `);
 
-    // Tasks table
+    // Bulk Tasks - reusable task templates
+    db.run(`
+      CREATE TABLE IF NOT EXISTS bulk_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        payout_amount REAL NOT NULL,
+        payout_currency TEXT DEFAULT 'SOL',
+        total_slots INTEGER,
+        filled_slots INTEGER DEFAULT 0,
+        created_by TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(created_by) REFERENCES users(discord_id)
+      )
+    `);
+
+    // Task Assignments - users claiming tasks
+    db.run(`
+      CREATE TABLE IF NOT EXISTS task_assignments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bulk_task_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        assigned_user_id TEXT NOT NULL,
+        status TEXT DEFAULT 'assigned',
+        assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(bulk_task_id) REFERENCES bulk_tasks(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(assigned_user_id) REFERENCES users(discord_id)
+      )
+    `);
+
+    // Proof Submissions - proof of task completion
+    db.run(`
+      CREATE TABLE IF NOT EXISTS proof_submissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_assignment_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        screenshot_url TEXT,
+        verification_url TEXT,
+        notes TEXT,
+        status TEXT DEFAULT 'pending',
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        approved_at DATETIME,
+        approved_by TEXT,
+        rejection_reason TEXT,
+        FOREIGN KEY(task_assignment_id) REFERENCES task_assignments(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(user_id) REFERENCES users(discord_id),
+        FOREIGN KEY(approved_by) REFERENCES users(discord_id)
+      )
+    `);
+
+    // Tasks table (legacy)
     db.run(`
       CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +167,211 @@ const getGuildWallet = (guildId) => {
   });
 };
 
+// Guild Settings operations
+const setApprovedRoles = (guildId, roleIds) => {
+  return new Promise((resolve, reject) => {
+    const rolesJson = JSON.stringify(roleIds);
+    db.run(
+      `INSERT OR REPLACE INTO guild_settings (guild_id, approved_roles) VALUES (?, ?)`,
+      [guildId, rolesJson],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const getApprovedRoles = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT approved_roles FROM guild_settings WHERE guild_id = ?`,
+      [guildId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row ? JSON.parse(row.approved_roles || '[]') : []);
+      }
+    );
+  });
+};
+
+// Bulk Task operations
+const createBulkTask = (guildId, title, description, payoutAmount, payoutCurrency, totalSlots, createdBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO bulk_tasks (guild_id, title, description, payout_amount, payout_currency, total_slots, created_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, title, description, payoutAmount, payoutCurrency, totalSlots, createdBy],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getActiveBulkTasks = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM bulk_tasks WHERE guild_id = ? AND status = 'active' ORDER BY created_at DESC`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const getBulkTask = (taskId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM bulk_tasks WHERE id = ?`,
+      [taskId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+// Task Assignment operations
+const assignTaskToUser = (bulkTaskId, guildId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO task_assignments (bulk_task_id, guild_id, assigned_user_id) VALUES (?, ?, ?)`,
+      [bulkTaskId, guildId, userId],
+      function (err) {
+        if (err) reject(err);
+        else {
+          // Update filled slots
+          db.run(`UPDATE bulk_tasks SET filled_slots = filled_slots + 1 WHERE id = ?`, [bulkTaskId]);
+          resolve(this.lastID);
+        }
+      }
+    );
+  });
+};
+
+const getUserAssignment = (bulkTaskId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM task_assignments WHERE bulk_task_id = ? AND assigned_user_id = ?`,
+      [bulkTaskId, userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const getUserAssignments = (userId, guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT ta.*, bt.* FROM task_assignments ta 
+       JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id 
+       WHERE ta.assigned_user_id = ? AND ta.guild_id = ?`,
+      [userId, guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+// Proof Submission operations
+const submitProof = (taskAssignmentId, guildId, userId, screenshotUrl, verificationUrl, notes) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO proof_submissions (task_assignment_id, guild_id, user_id, screenshot_url, verification_url, notes) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [taskAssignmentId, guildId, userId, screenshotUrl, verificationUrl, notes],
+      function (err) {
+        if (err) reject(err);
+        else {
+          // Update assignment status
+          db.run(`UPDATE task_assignments SET status = 'submitted' WHERE id = ?`, [taskAssignmentId]);
+          resolve(this.lastID);
+        }
+      }
+    );
+  });
+};
+
+const getPendingProofs = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT ps.*, ta.assigned_user_id, bt.title FROM proof_submissions ps
+       JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+       JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+       WHERE ps.guild_id = ? AND ps.status = 'pending' ORDER BY ps.submitted_at DESC`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const getProofSubmission = (proofId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM proof_submissions WHERE id = ?`,
+      [proofId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const approveProof = (proofId, approvedBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE proof_submissions SET status = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = ? WHERE id = ?`,
+      [approvedBy, proofId],
+      (err) => {
+        if (err) reject(err);
+        else {
+          // Update assignment status
+          db.get(`SELECT task_assignment_id FROM proof_submissions WHERE id = ?`, [proofId], (err, row) => {
+            if (row) {
+              db.run(`UPDATE task_assignments SET status = 'approved' WHERE id = ?`, [row.task_assignment_id]);
+            }
+          });
+          resolve();
+        }
+      }
+    );
+  });
+};
+
+const rejectProof = (proofId, rejectionReason, rejectedBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE proof_submissions SET status = 'rejected', rejection_reason = ?, approved_by = ? WHERE id = ?`,
+      [rejectionReason, rejectedBy, proofId],
+      (err) => {
+        if (err) reject(err);
+        else {
+          // Reset assignment status
+          db.get(`SELECT task_assignment_id FROM proof_submissions WHERE id = ?`, [proofId], (err, row) => {
+            if (row) {
+              db.run(`UPDATE task_assignments SET status = 'assigned' WHERE id = ?`, [row.task_assignment_id]);
+            }
+          });
+          resolve();
+        }
+      }
+    );
+  });
+};
+
 // User operations
 const addUser = (discordId, username, solanaAddress) => {
   return new Promise((resolve, reject) => {
@@ -128,7 +399,7 @@ const getUser = (discordId) => {
   });
 };
 
-// Task operations
+// Task operations (legacy)
 const createTask = (guildId, creatorId, recipientAddress, amount, description) => {
   return new Promise((resolve, reject) => {
     db.run(
@@ -215,6 +486,19 @@ module.exports = {
   db,
   setGuildWallet,
   getGuildWallet,
+  setApprovedRoles,
+  getApprovedRoles,
+  createBulkTask,
+  getActiveBulkTasks,
+  getBulkTask,
+  assignTaskToUser,
+  getUserAssignment,
+  getUserAssignments,
+  submitProof,
+  getPendingProofs,
+  getProofSubmission,
+  approveProof,
+  rejectProof,
   addUser,
   getUser,
   createTask,
