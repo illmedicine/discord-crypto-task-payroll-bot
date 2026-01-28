@@ -64,13 +64,14 @@ module.exports = {
     const guildId = interaction.guildId;
 
     if (subcommand === 'create') {
-      // Check if user has permission (must have manage_guild or be approved role)
-      if (!interaction.member.permissions.has('ManageGuild')) {
-        return interaction.reply({
-          content: '❌ Only server administrators can create bulk tasks.',
-          ephemeral: true
-        });
-      }
+      await interaction.deferReply();
+      try {
+        // Check if user has permission (must have manage_guild or be approved role)
+        if (!interaction.member.permissions.has('ManageGuild')) {
+          return interaction.editReply({
+            content: '❌ Only server administrators can create bulk tasks.'
+          });
+        }
 
       const title = interaction.options.getString('title');
       const description = interaction.options.getString('description');
@@ -104,16 +105,23 @@ module.exports = {
         )
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Bulk task create error:', error);
+      return interaction.editReply({
+        content: `❌ Error: ${error.message}`
+      });
+    }
     }
 
     if (subcommand === 'list') {
-      const tasks = await db.getActiveBulkTasks(guildId);
+      await interaction.deferReply();
+      try {
+        const tasks = await db.getActiveBulkTasks(guildId);
 
       if (!tasks || tasks.length === 0) {
-        return interaction.reply({
-          content: '📋 No available tasks at the moment.',
-          ephemeral: true
+        return interaction.editReply({
+          content: '📋 No available tasks at the moment.'
         });
       }
 
@@ -133,7 +141,13 @@ module.exports = {
         .setFooter({ text: 'Use /bulk-tasks claim to claim a task' })
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Bulk task list error:', error);
+      return interaction.editReply({
+        content: `❌ Error: ${error.message}`
+      });
+    }
     }
 
     if (subcommand === 'claim') {

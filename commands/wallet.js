@@ -32,8 +32,10 @@ module.exports = {
     const guildId = interaction.guildId;
 
     if (subcommand === 'connect') {
-      // Check if wallet is already configured for this server
-      const existingWallet = await db.getGuildWallet(guildId);
+      await interaction.deferReply();
+      try {
+        // Check if wallet is already configured for this server
+        const existingWallet = await db.getGuildWallet(guildId);
       
       if (existingWallet) {
         const embed = new EmbedBuilder()
@@ -48,9 +50,8 @@ module.exports = {
           )
           .setTimestamp();
 
-        return interaction.reply({
-          embeds: [embed],
-          ephemeral: true
+        return interaction.editReply({
+          embeds: [embed]
         });
       }
 
@@ -58,9 +59,8 @@ module.exports = {
 
       // Validate Solana address
       if (!crypto.isValidSolanaAddress(address)) {
-        return interaction.reply({
-          content: '❌ Invalid Solana address. Please check and try again.',
-          ephemeral: true
+        return interaction.editReply({
+          content: '❌ Invalid Solana address. Please check and try again.'
         });
       }
 
@@ -80,7 +80,13 @@ module.exports = {
         )
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Wallet connect error:', error);
+      return interaction.editReply({
+        content: `❌ Error: ${error.message}`
+      });
+    }
     }
 
     if (subcommand === 'balance') {
@@ -117,12 +123,13 @@ module.exports = {
     }
 
     if (subcommand === 'info') {
-      const guildWallet = await db.getGuildWallet(guildId);
+      await interaction.deferReply();
+      try {
+        const guildWallet = await db.getGuildWallet(guildId);
       
       if (!guildWallet) {
-        return interaction.reply({
-          content: '❌ No treasury wallet configured for this server.',
-          ephemeral: true
+        return interaction.editReply({
+          content: '❌ No treasury wallet configured for this server.'
         });
       }
 
@@ -140,7 +147,13 @@ module.exports = {
         )
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('Wallet info error:', error);
+      return interaction.editReply({
+        content: `❌ Error: ${error.message}`
+      });
+    }
     }
   }
 };
