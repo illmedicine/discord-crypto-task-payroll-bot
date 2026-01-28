@@ -7,11 +7,11 @@ const db = new sqlite3.Database(dbPath);
 // Initialize database tables
 const initDb = () => {
   db.serialize(() => {
-    // Guild/Server Treasury Wallets - one wallet per Discord server
+    // Guild/Server Treasury Wallets - one wallet per Discord server (multiple servers can use same wallet)
     db.run(`
       CREATE TABLE IF NOT EXISTS guild_wallets (
         guild_id TEXT PRIMARY KEY,
-        wallet_address TEXT NOT NULL UNIQUE,
+        wallet_address TEXT NOT NULL,
         configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         configured_by TEXT
       )
