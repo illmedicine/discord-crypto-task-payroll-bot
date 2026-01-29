@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_18", "python3", "gcc", "gnumake"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm rebuild sqlite3"]
+
+[start]
+cmd = "node index.js"
