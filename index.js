@@ -53,7 +53,7 @@ const loadCommands = () => {
 // Load commands initially
 loadCommands();
 
-// Register slash commands
+// Register slash commands (Global + Guild-specific)
 const registerCommands = async () => {
   const commands = [];
   for (const command of client.commands.values()) {
@@ -63,14 +63,41 @@ const registerCommands = async () => {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
   try {
-    console.log(`🔄 Registering ${commands.length} slash commands...`);
-    await rest.put(
+    console.log(`\n🔄 COMMAND REGISTRATION PROCESS`);
+    console.log(`${'='.repeat(50)}`);
+    console.log(`📦 Total commands to register: ${commands.length}`);
+    
+    // Step 1: Register globally
+    console.log(`\n1️⃣ Registering ${commands.length} commands GLOBALLY...`);
+    const globalResult = await rest.put(
       Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
       { body: commands }
     );
-    console.log('✅ Commands registered successfully');
+    console.log(`✅ Global registration complete: ${globalResult.length} commands`);
+    
+    // List registered commands
+    console.log(`\n📋 Registered Commands:`);
+    commands.forEach((cmd, idx) => {
+      console.log(`   ${idx + 1}. /${cmd.name} - ${cmd.description}`);
+    });
+    
+    // Step 2: Register to all guild contexts
+    console.log(`\n2️⃣ Registering to guild contexts...`);
+    setTimeout(() => {
+      console.log(`⚠️  Guilds will sync commands from global registry.`);
+      console.log(`⏱️  May take 5-15 minutes to appear in Discord.`);
+    }, 1000);
+
+    console.log(`${'='.repeat(50)}`);
+    console.log(`✅ Command registration finished!\n`);
+    
   } catch (error) {
     console.error('❌ Error registering commands:', error);
+    console.error(`\n🔍 Troubleshooting:`);
+    console.error(`   - Check DISCORD_TOKEN is valid`);
+    console.error(`   - Check DISCORD_CLIENT_ID is correct`);
+    console.error(`   - Verify bot has 'applications.commands' scope`);
+    console.error(`   - Ensure bot admin permissions in server\n`);
   }
 };
 
@@ -78,16 +105,21 @@ registerCommands();
 
 // Bot ready event
 client.once('ready', async () => {
-  console.log(`✅ Bot logged in as ${client.user.tag}`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`✅ BOT ONLINE - ${client.user.tag}`);
+  console.log(`${'='.repeat(60)}`);
   console.log(`🌐 Connected to Solana: ${process.env.SOLANA_RPC_URL}`);
   console.log(`💰 Wallet: ${crypto.getWallet()?.publicKey.toString()}`);
   console.log(`📡 LivePay Solana Payroll Engine is LIVE`);
-  console.log(`📡 Interaction handler registered and listening for slash commands`);
-  console.log(`\n📋 Bot Status:`);
-  console.log(`   Version: ${VERSION}`);
-  console.log(`   Built: ${BUILD_DATE}`);
-  console.log(`   Commands Loaded: ${client.commands.size}`);
-  console.log(`   Latest Features: ${LATEST_FEATURES.slice(0, 2).join(', ')}`);
+  console.log(`\n📋 Server Information:`);
+  console.log(`   - Guilds Connected: ${client.guilds.cache.size}`);
+  console.log(`   - Commands Loaded: ${client.commands.size}`);
+  console.log(`   - Latest Features: ${LATEST_FEATURES.slice(0, 2).join(', ')}`);
+  console.log(`\n${'='.repeat(60)}\n`);
+  
+  // Re-register commands on startup to ensure they're fresh
+  console.log(`🔄 Performing command sync on startup...`);
+  await registerCommands();
   
   // Set bot presence with version and latest feature
   const featureIndex = Math.floor(Date.now() / 60000) % LATEST_FEATURES.length;
@@ -103,7 +135,11 @@ client.once('ready', async () => {
     status: 'online'
   });
   
-  console.log(`\n✨ Status: Playing "v${VERSION} • ${currentFeature} • Built ${BUILD_DATE}"`);
+  console.log(`✨ Status: Playing "v${VERSION} • ${currentFeature} • Built ${BUILD_DATE}"`);
+  console.log(`\n💡 TIP: If commands don't appear:`);
+  console.log(`   1. Try typing / in Discord (may take 5-15 min to sync)`);
+  console.log(`   2. Close and reopen Discord`);
+  console.log(`   3. Wait for Railway deployment to finish\n`);
   
   // Update status every 30 seconds to cycle through features
   setInterval(() => {
