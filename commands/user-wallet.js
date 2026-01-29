@@ -5,14 +5,14 @@ const db = require('../utils/db');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('user-wallet')
-    .setDescription('Connect your personal Solana wallet')
+    .setDescription('Connect your personal Solana wallet (works on all servers)')
     .addSubcommand(subcommand =>
       subcommand
         .setName('connect')
-        .setDescription('Connect your Solana wallet address')
+        .setDescription('Connect your personal Solana wallet address')
         .addStringOption(option =>
           option.setName('address')
-            .setDescription('Your Solana wallet address')
+            .setDescription('Your personal Solana wallet address')
             .setRequired(true)
         )
     )
@@ -27,7 +27,7 @@ module.exports = {
         .setDescription('Update your connected wallet address')
         .addStringOption(option =>
           option.setName('address')
-            .setDescription('Your new Solana wallet address')
+            .setDescription('Your new personal Solana wallet address')
             .setRequired(true)
         )
     ),
@@ -79,11 +79,12 @@ module.exports = {
         const successEmbed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Wallet Connected Successfully')
-          .setDescription('Your Solana wallet is now connected to your Discord account.')
+          .setDescription('Your personal Solana wallet is now connected to your Discord account across all servers.')
           .addFields(
             { name: 'Wallet Address', value: `\`${address}\`` },
-            { name: 'Status', value: '🟢 Ready to receive payments' },
-            { name: 'Next Steps', value: 'Other users can now send you SOL using `/pay @yourname`' }
+            { name: 'Status', value: '🟢 Active on all servers' },
+            { name: 'Scope', value: 'Your wallet is personal and works on ANY DisCryptoBank server' },
+            { name: 'Next Steps', value: 'Server admins can now send you SOL using `/pay @yourname`' }
           )
           .setTimestamp();
 
@@ -159,10 +160,11 @@ module.exports = {
         const embed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Wallet Updated Successfully')
+          .setDescription('Your personal wallet has been updated across all DisCryptoBank servers.')
           .addFields(
             { name: 'Old Wallet', value: `\`${userData.solana_address}\`` },
             { name: 'New Wallet', value: `\`${newAddress}\`` },
-            { name: 'Status', value: '🟢 Updated and ready' }
+            { name: 'Status', value: '🟢 Updated on all servers' }
           )
           .setTimestamp();
 

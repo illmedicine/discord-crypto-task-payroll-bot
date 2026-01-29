@@ -35,11 +35,27 @@ module.exports = {
       const targetUser = interaction.options.getUser('user');
       const amount = interaction.options.getNumber('amount');
       const currency = interaction.options.getString('currency');
+      const guildId = interaction.guildId;
+
+      // Verify this is a guild command
+      if (!guildId) {
+        return interaction.editReply({
+          content: '❌ This command can only be used in a Discord server.'
+        });
+      }
 
       // Check if target user is a bot
       if (targetUser.bot) {
         return interaction.editReply({
           content: '❌ Cannot pay bots. Please select a real Discord user.'
+        });
+      }
+
+      // Check if target user is a member of this guild
+      const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+      if (!targetMember) {
+        return interaction.editReply({
+          content: `❌ ${targetUser.username} is not a member of this Discord server. You can only pay members of this server.`
         });
       }
 
@@ -56,19 +72,19 @@ module.exports = {
         solAmount = amount / solPrice;
       }
 
-      // Get bot's wallet
-      const botWallet = crypto.getWallet();
-      if (!botWallet) {
+      // Get guild's treasury wallet
+      const guildWallet = await db.getGuildWallet(guildId);
+      if (!guildWallet) {
         return interaction.editReply({
-          content: '❌ Bot wallet not configured.'
+          content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Admin:** Use `/wallet connect` to set up the treasury wallet.'
         });
       }
 
-      // Check bot's balance
-      const botBalance = await crypto.getBalance(botWallet.publicKey.toString());
-      if (botBalance < solAmount) {
+      // Check guild treasury balance
+      const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
+      if (treasuryBalance < solAmount) {
         return interaction.editReply({
-          content: `❌ Insufficient bot balance. Current: ${botBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL`
+          content: `❌ Insufficient treasury balance. Current: ${treasuryBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL`
         });
       }
 
@@ -81,7 +97,7 @@ module.exports = {
           .setTitle('❌ Wallet Not Connected')
           .setDescription(`${targetUser.username} has not connected their Solana wallet yet.`)
           .addFields(
-            { name: 'What they need to do:', value: `1. Use the \`/wallet connect\` command\n2. Provide their Solana wallet address\n3. Once connected, you can pay them` },
+            { name: 'What they need to do:', value: `1. Use the \`/user-wallet connect\` command\n2. Provide their Solana wallet address\n3. Once connected, you can pay them` },
             { name: 'Waiting for:', value: targetUser.toString() }
           )
           .setTimestamp();
@@ -98,15 +114,24 @@ module.exports = {
         });
       }
 
-      // Execute the payment
+      // Get the bot's wallet which will sign the transaction
+      // (the bot sends on behalf of the guild treasury)
+      const botWallet = crypto.getWallet();
+      if (!botWallet) {
+        return interaction.editReply({
+          content: '❌ Bot wallet not configured.'
+        });
+      }
+
+      // Execute the payment from guild treasury to user
       const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
       const recipientPubkey = new PublicKey(targetUserData.solana_address);
-      const senderPubkey = botWallet.publicKey;
+      const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
 
       // Create transfer instruction (convert SOL to lamports)
       const lamports = Math.floor(solAmount * 1e9);
       const instruction = SystemProgram.transfer({
-        fromPubkey: senderPubkey,
+        fromPubkey: treasuryPubkey,
         toPubkey: recipientPubkey,
         lamports: lamports
       });
@@ -116,7 +141,53 @@ module.exports = {
       const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
 
       // Log transaction to database
-      await db.recordTransaction(interaction.guildId, senderPubkey.toString(), targetUserData.solana_address, solAmount, signature);
+      await db.recordTransaction(guildId, guildWallet.wallet_address, targetUserData.solana_address, solAmount, signature);
+
+      // Send success embed
+      const successEmbed = new EmbedBuilder()
+        .setColor('#14F195')
+        .setTitle('✅ Payment Sent Successfully')
+        .addFields(
+          { name: 'From', value: `Server Treasury\n\`${guildWallet.wallet_address}\`` },
+          { name: 'To', value: `${targetUser.username}\n\`${targetUserData.solana_address}\`` },
+          { name: 'Amount', value: `${solAmount.toFixed(4)} SOL${currency === 'USD' ? ` (~$${amount.toFixed(2)} USD)` : ''}` },
+          { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${signature})` },
+          { name: 'Sent By', value: interaction.user.username },
+          { name: 'Server', value: interaction.guild.name }
+        )
+        .setTimestamp();
+
+      return interaction.editReply({
+        embeds: [successEmbed]
+      });
+
+    } catch (error) {
+      console.error('Error processing payment:', error);
+      return interaction.editReply({
+        content: `❌ Error: ${error.message}`
+      });
+    }
+
+
+      // Execute the payment from guild treasury to user
+      const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+      const recipientPubkey = new PublicKey(targetUserData.solana_address);
+      const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
+
+      // Create transfer instruction (convert SOL to lamports)
+      const lamports = Math.floor(solAmount * 1e9);
+      const instruction = SystemProgram.transfer({
+        fromPubkey: treasuryPubkey,
+        toPubkey: recipientPubkey,
+        lamports: lamports
+      });
+
+      // Create and sign transaction
+      const transaction = new Transaction().add(instruction);
+      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+
+      // Log transaction to database
+      await db.recordTransaction(guildId, guildWallet.wallet_address, targetUserData.solana_address, solAmount, signature);
 
       // Send success embed
       const successEmbed = new EmbedBuilder()
