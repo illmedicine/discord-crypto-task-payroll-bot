@@ -26,8 +26,9 @@ const loadCommands = () => {
   const commandsPath = path.join(__dirname, 'commands');
   const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
   
-  console.log('🔄 Loading commands...');
+  console.log('\n🔄 Loading commands...');
   let loadedCount = 0;
+  const loadedNames = [];
   
   for (const file of commandFiles) {
     try {
@@ -40,13 +41,22 @@ const loadCommands = () => {
         client.commands.set(command.data.name, command);
         console.log(`✅ Command loaded: ${command.data.name}`);
         loadedCount++;
+        loadedNames.push(command.data.name);
+        
+        // Special logging for user-wallet
+        if (command.data.name === 'user-wallet') {
+          console.log(`   ⭐ IMPORTANT: /user-wallet command successfully loaded!`);
+        }
+      } else {
+        console.log(`⚠️  ${file}: Missing data or execute property`);
       }
     } catch (error) {
       console.error(`❌ Error loading command ${file}:`, error.message);
     }
   }
   
-  console.log(`✅ Successfully loaded ${loadedCount} commands`);
+  console.log(`\n✅ Successfully loaded ${loadedCount} commands`);
+  console.log(`📋 Loaded: ${loadedNames.join(', ')}\n`);
   return loadedCount;
 };
 
@@ -63,33 +73,48 @@ const registerCommands = async () => {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
   try {
-    console.log(`\n🔄 COMMAND REGISTRATION PROCESS`);
-    console.log(`${'='.repeat(50)}`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🔄 COMMAND REGISTRATION PROCESS`);
+    console.log(`${'='.repeat(60)}`);
     console.log(`📦 Total commands to register: ${commands.length}`);
     
-    // Step 1: Register globally
+    // Step 0: Get current commands to verify update
+    console.log(`\n0️⃣ Checking current registered commands...`);
+    const currentCommands = await rest.get(
+      Routes.applicationCommands(process.env.DISCORD_CLIENT_ID)
+    );
+    console.log(`   Current commands in Discord: ${currentCommands.length}`);
+    
+    // Step 1: Register globally (this will replace all commands)
     console.log(`\n1️⃣ Registering ${commands.length} commands GLOBALLY...`);
     const globalResult = await rest.put(
       Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
       { body: commands }
     );
-    console.log(`✅ Global registration complete: ${globalResult.length} commands`);
+    console.log(`✅ Global registration complete: ${globalResult.length} commands registered`);
     
-    // List registered commands
+    // List each registered command with full details
     console.log(`\n📋 Registered Commands:`);
-    commands.forEach((cmd, idx) => {
+    globalResult.forEach((cmd, idx) => {
       console.log(`   ${idx + 1}. /${cmd.name} - ${cmd.description}`);
     });
     
-    // Step 2: Register to all guild contexts
-    console.log(`\n2️⃣ Registering to guild contexts...`);
-    setTimeout(() => {
-      console.log(`⚠️  Guilds will sync commands from global registry.`);
-      console.log(`⏱️  May take 5-15 minutes to appear in Discord.`);
-    }, 1000);
+    // Verify user-wallet command is registered
+    const userWalletCmd = globalResult.find(cmd => cmd.name === 'user-wallet');
+    if (userWalletCmd) {
+      console.log(`\n✨ ✅ /user-wallet command successfully registered!`);
+      console.log(`   - Name: ${userWalletCmd.name}`);
+      console.log(`   - Description: ${userWalletCmd.description}`);
+      console.log(`   - Subcommands: ${userWalletCmd.options?.filter(o => o.type === 1).length || 0}`);
+    } else {
+      console.log(`\n⚠️  ⚠️  /user-wallet command NOT found in registration!`);
+    }
 
-    console.log(`${'='.repeat(50)}`);
-    console.log(`✅ Command registration finished!\n`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`✅ Command registration completed!`);
+    console.log(`⏱️  Commands may take 5-15 minutes to appear in Discord.`);
+    console.log(`💡 If not visible: Try /refresh-commands or restart Discord`);
+    console.log(`${'='.repeat(60)}\n`);
     
   } catch (error) {
     console.error('❌ Error registering commands:', error);
