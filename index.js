@@ -129,7 +129,7 @@ const registerCommands = async () => {
 registerCommands();
 
 // Bot ready event
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`✅ BOT ONLINE - ${client.user.tag}`);
   console.log(`${'='.repeat(60)}`);
