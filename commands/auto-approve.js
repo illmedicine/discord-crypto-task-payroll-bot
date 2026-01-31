@@ -12,7 +12,12 @@ module.exports = {
         .addIntegerOption(option =>
           option.setName('bulk_task_id')
             .setDescription('Bulk task ID to enable auto-approve for')
-            .setRequired(true)
+            .setRequired(false)
+        )
+        .addIntegerOption(option =>
+          option.setName('proof_id')
+            .setDescription('Proof ID (will enable for the associated bulk task)')
+            .setRequired(false)
         )
         .addBooleanOption(option =>
           option.setName('require_screenshot')
@@ -32,7 +37,12 @@ module.exports = {
         .addIntegerOption(option =>
           option.setName('bulk_task_id')
             .setDescription('Bulk task ID to disable auto-approve for')
-            .setRequired(true)
+            .setRequired(false)
+        )
+        .addIntegerOption(option =>
+          option.setName('proof_id')
+            .setDescription('Proof ID (will disable for the associated bulk task)')
+            .setRequired(false)
         )
     )
     .addSubcommand(subcommand =>
@@ -42,7 +52,12 @@ module.exports = {
         .addIntegerOption(option =>
           option.setName('bulk_task_id')
             .setDescription('Bulk task ID to check')
-            .setRequired(true)
+            .setRequired(false)
+        )
+        .addIntegerOption(option =>
+          option.setName('proof_id')
+            .setDescription('Proof ID (will check the associated bulk task)')
+            .setRequired(false)
         )
     ),
 
@@ -74,7 +89,35 @@ module.exports = {
       });
     }
 
-    const bulkTaskId = interaction.options.getInteger('bulk_task_id');
+    // Get bulk_task_id either directly or from proof_id
+    let bulkTaskId = interaction.options.getInteger('bulk_task_id');
+    const proofId = interaction.options.getInteger('proof_id');
+
+    // Validate that at least one ID is provided
+    if (!bulkTaskId && !proofId) {
+      return interaction.editReply({
+        content: '❌ Please provide either `bulk_task_id` or `proof_id`.'
+      });
+    }
+
+    // If proof_id is provided, lookup the bulk_task_id
+    if (proofId && !bulkTaskId) {
+      const proof = await db.getProofSubmission(proofId);
+      if (!proof) {
+        return interaction.editReply({
+          content: `❌ Proof #${proofId} not found.`
+        });
+      }
+      
+      if (proof.guild_id !== guildId) {
+        return interaction.editReply({
+          content: '❌ This proof does not belong to this server.'
+        });
+      }
+      
+      bulkTaskId = proof.bulk_task_id;
+      console.log(`[auto-approve] Resolved proof #${proofId} to bulk task #${bulkTaskId}`);
+    }
 
     // Verify the bulk task exists and belongs to this guild
     const bulkTask = await db.getBulkTask(bulkTaskId);
