@@ -1,36 +1,44 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
 // Determine database path based on environment
-// In production (Railway), use /data directory for persistence
-// Use DB_PATH environment variable to override (useful for connecting local to Railway)
 const getDbPath = () => {
-  // If DB_PATH is set, use it (for connecting local dev to Railway)
+  // If DB_PATH is set, use it (for advanced configuration)
   if (process.env.DB_PATH) {
     console.log(`[DB] Using custom database path: ${process.env.DB_PATH}`);
     return process.env.DB_PATH;
   }
   
-  // If in production (Railway), use persistent volume
-  if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') {
-    const prodPath = '/data/payroll.db';
-    console.log(`[DB] Production mode - Using persistent storage: ${prodPath}`);
+  // For Railway or production, use app directory (Railway provides persistent storage automatically)
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    const prodPath = path.join(__dirname, '../railway-payroll.db');
+    console.log(`[DB] Railway mode - Using: ${prodPath}`);
     return prodPath;
   }
   
   // Local development
   const localPath = path.join(__dirname, '../payroll.db');
-  console.log(`[DB] Development mode - Using local database: ${localPath}`);
+  console.log(`[DB] Development mode - Using: ${localPath}`);
   return localPath;
 };
 
 const dbPath = getDbPath();
+
+// Ensure directory exists
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  console.log(`[DB] Creating directory: ${dbDir}`);
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error('[DB] Error opening database:', err);
+    console.error('[DB] Database path:', dbPath);
   } else {
-    console.log('[DB] Database connection established');
-    console.log('[DB] Database file location:', dbPath);
+    console.log('[DB] ✅ Database connection established');
+    console.log('[DB] 📁 Database file location:', dbPath);
   }
 });
 

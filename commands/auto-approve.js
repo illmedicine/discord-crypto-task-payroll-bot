@@ -47,30 +47,30 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // Defer reply immediately to prevent timeout
+    await interaction.deferReply({ ephemeral: true });
+
     const subcommand = interaction.options.getSubcommand();
     const guildId = interaction.guildId;
 
     // Verify this is a guild command
     if (!guildId) {
-      return interaction.reply({
-        content: '❌ This command can only be used in a Discord server.',
-        ephemeral: true
+      return interaction.editReply({
+        content: '❌ This command can only be used in a Discord server.'
       });
     }
 
     // Check if user is the treasury owner (wallet configured by)
     const guildWallet = await db.getGuildWallet(guildId);
     if (!guildWallet) {
-      return interaction.reply({
-        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Admin:** Use `/wallet connect` to set up the treasury wallet.',
-        ephemeral: true
+      return interaction.editReply({
+        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Admin:** Use `/wallet connect` to set up the treasury wallet.'
       });
     }
 
     if (guildWallet.configured_by !== interaction.user.id) {
-      return interaction.reply({
-        content: '❌ Only the treasury owner (the person who connected the wallet) can configure auto-approve settings.',
-        ephemeral: true
+      return interaction.editReply({
+        content: '❌ Only the treasury owner (the person who connected the wallet) can configure auto-approve settings.'
       });
     }
 
@@ -94,16 +94,14 @@ module.exports = {
         taskListMsg = '\n\n**No tasks found in database for this server.**\n\n💡 **Tip:** You need to create a bulk task first using `/bulk-tasks create`';
       }
       
-      return interaction.reply({
-        content: `❌ Bulk task #${bulkTaskId} not found in database.${taskListMsg}`,
-        ephemeral: true
+      return interaction.editReply({
+        content: `❌ Bulk task #${bulkTaskId} not found in database.${taskListMsg}`
       });
     }
 
     if (bulkTask.guild_id !== guildId) {
-      return interaction.reply({
-        content: `❌ This bulk task does not belong to this server. (Task is from guild: ${bulkTask.guild_id}, Current guild: ${guildId})`,
-        ephemeral: true
+      return interaction.editReply({
+        content: `❌ This bulk task does not belong to this server. (Task is from guild: ${bulkTask.guild_id}, Current guild: ${guildId})`
       });
     }
 
@@ -126,7 +124,7 @@ module.exports = {
         .setFooter({ text: 'Configured by ' + interaction.user.username })
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
 
     if (subcommand === 'disable') {
@@ -143,7 +141,7 @@ module.exports = {
         .setFooter({ text: 'Configured by ' + interaction.user.username })
         .setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
 
     if (subcommand === 'status') {
@@ -173,7 +171,7 @@ module.exports = {
 
       embed.setTimestamp();
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
   }
 };

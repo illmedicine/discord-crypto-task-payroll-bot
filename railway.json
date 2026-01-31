@@ -6,12 +6,6 @@
   "deploy": {
     "startCommand": "node index.js",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10,
-    "volumeMounts": [
-      {
-        "mountPath": "/data",
-        "name": "database-volume"
-      }
-    ]
+    "restartPolicyMaxRetries": 10
   }
 }
