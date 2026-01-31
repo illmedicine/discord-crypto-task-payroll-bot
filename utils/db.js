@@ -526,6 +526,77 @@ const isAutoApproveEnabled = (bulkTaskId) => {
   });
 };
 
+// Delete bulk task and cascade to related records
+const deleteBulkTask = (bulkTaskId) => {
+  return new Promise((resolve, reject) => {
+    console.log(`[DB] Deleting bulk task #${bulkTaskId} with cascade...`);
+    
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      
+      // Delete auto-approve settings for this task
+      db.run(
+        `DELETE FROM auto_approve_settings WHERE bulk_task_id = ?`,
+        [bulkTaskId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+        }
+      );
+      
+      // Delete proof submissions for assignments related to this task
+      db.run(
+        `DELETE FROM proof_submissions WHERE task_assignment_id IN (
+          SELECT id FROM task_assignments WHERE bulk_task_id = ?
+        )`,
+        [bulkTaskId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+        }
+      );
+      
+      // Delete task assignments
+      db.run(
+        `DELETE FROM task_assignments WHERE bulk_task_id = ?`,
+        [bulkTaskId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+        }
+      );
+      
+      // Delete the bulk task itself
+      db.run(
+        `DELETE FROM bulk_tasks WHERE id = ?`,
+        [bulkTaskId],
+        function(err) {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+          
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) {
+              db.run('ROLLBACK');
+              return reject(commitErr);
+            }
+            
+            console.log(`[DB] ✅ Successfully deleted bulk task #${bulkTaskId} (affected ${this.changes} rows)`);
+            resolve({ success: true, deletedRows: this.changes });
+          });
+        }
+      );
+    });
+  });
+};
+
 // User operations
 const addUser = (discordId, username, solanaAddress) => {
   return new Promise((resolve, reject) => {
@@ -658,6 +729,7 @@ module.exports = {
   setAutoApprove,
   getAutoApproveSettings,
   isAutoApproveEnabled,
+  deleteBulkTask,
   addUser,
   getUser,
   createTask,
