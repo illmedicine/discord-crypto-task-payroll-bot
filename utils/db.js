@@ -215,13 +215,19 @@ const getApprovedRoles = (guildId) => {
 // Bulk Task operations
 const createBulkTask = (guildId, title, description, payoutAmount, payoutCurrency, totalSlots, createdBy) => {
   return new Promise((resolve, reject) => {
+    console.log(`[db.createBulkTask] Creating task for guild ${guildId}: ${title}`);
     db.run(
       `INSERT INTO bulk_tasks (guild_id, title, description, payout_amount, payout_currency, total_slots, created_by) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [guildId, title, description, payoutAmount, payoutCurrency, totalSlots, createdBy],
       function (err) {
-        if (err) reject(err);
-        else resolve(this.lastID);
+        if (err) {
+          console.error(`[db.createBulkTask] Error:`, err);
+          reject(err);
+        } else {
+          console.log(`[db.createBulkTask] Created task with ID: ${this.lastID}`);
+          resolve(this.lastID);
+        }
       }
     );
   });
@@ -229,12 +235,37 @@ const createBulkTask = (guildId, title, description, payoutAmount, payoutCurrenc
 
 const getActiveBulkTasks = (guildId) => {
   return new Promise((resolve, reject) => {
+    console.log(`[db.getActiveBulkTasks] Querying for guild: ${guildId}`);
     db.all(
       `SELECT * FROM bulk_tasks WHERE guild_id = ? AND status = 'active' ORDER BY created_at DESC`,
       [guildId],
       (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
+        if (err) {
+          console.error(`[db.getActiveBulkTasks] Error:`, err);
+          reject(err);
+        } else {
+          console.log(`[db.getActiveBulkTasks] Found ${rows?.length || 0} tasks:`, rows);
+          resolve(rows || []);
+        }
+      }
+    );
+  });
+};
+
+const getAllBulkTasks = (guildId) => {
+  return new Promise((resolve, reject) => {
+    console.log(`[db.getAllBulkTasks] Querying ALL tasks for guild: ${guildId}`);
+    db.all(
+      `SELECT * FROM bulk_tasks WHERE guild_id = ? ORDER BY created_at DESC`,
+      [guildId],
+      (err, rows) => {
+        if (err) {
+          console.error(`[db.getAllBulkTasks] Error:`, err);
+          reject(err);
+        } else {
+          console.log(`[db.getAllBulkTasks] Found ${rows?.length || 0} total tasks:`, rows);
+          resolve(rows || []);
+        }
       }
     );
   });
@@ -575,6 +606,7 @@ module.exports = {
   getApprovedRoles,
   createBulkTask,
   getActiveBulkTasks,
+  getAllBulkTasks,
   getBulkTask,
   assignTaskToUser,
   getUserAssignment,

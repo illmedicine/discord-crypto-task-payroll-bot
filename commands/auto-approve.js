@@ -83,12 +83,19 @@ module.exports = {
     console.log(`[auto-approve] Found bulk task:`, bulkTask);
     
     if (!bulkTask) {
-      // Let's also get all bulk tasks to help debug
-      const allTasks = await db.getActiveBulkTasks(guildId);
-      console.log(`[auto-approve] Available bulk tasks for guild ${guildId}:`, allTasks);
+      // Let's get ALL bulk tasks (not just active) to help debug
+      const allTasks = await db.getAllBulkTasks(guildId);
+      console.log(`[auto-approve] All bulk tasks for guild ${guildId}:`, allTasks);
+      
+      let taskListMsg = '';
+      if (allTasks.length > 0) {
+        taskListMsg = '\n\n**All tasks in database:**\n' + allTasks.map(t => `#${t.id} - ${t.title} (${t.status})`).join('\n');
+      } else {
+        taskListMsg = '\n\n**No tasks found in database for this server.**\n\n💡 **Tip:** You need to create a bulk task first using `/bulk-tasks create`';
+      }
       
       return interaction.reply({
-        content: `❌ Bulk task #${bulkTaskId} not found.\n\n**Available tasks:** ${allTasks.length > 0 ? allTasks.map(t => `#${t.id} - ${t.title}`).join(', ') : 'None'}`,
+        content: `❌ Bulk task #${bulkTaskId} not found in database.${taskListMsg}`,
         ephemeral: true
       });
     }
