@@ -124,75 +124,68 @@ module.exports = {
       // Handle payment if requested
       if (shouldPay) {
         try {
-          // Get task assignment to find the bulk task
-          const assignment = await db.getAssignment(proof.task_assignment_id);
-          if (!assignment) {
-            paymentError = 'Task assignment not found';
+          // Proof now includes bulk_task_id, payout_amount, and payout_currency from JOIN
+          if (!proof.bulk_task_id) {
+            paymentError = 'Task details not found';
           } else {
-            // Get bulk task to find payment amount
-            const bulkTask = await db.getBulkTask(assignment.bulk_task_id);
-            if (!bulkTask) {
-              paymentError = 'Task details not found';
+            // Get user data for wallet address
+            const userData = await db.getUser(proof.user_id);
+            if (!userData || !userData.solana_address) {
+              paymentError = 'User has not connected their Solana wallet';
+            } else if (!crypto.isValidSolanaAddress(userData.solana_address)) {
+              paymentError = 'User wallet address is invalid';
             } else {
-              // Get user data for wallet address
-              const userData = await db.getUser(proof.user_id);
-              if (!userData || !userData.solana_address) {
-                paymentError = 'User has not connected their Solana wallet';
-              } else if (!crypto.isValidSolanaAddress(userData.solana_address)) {
-                paymentError = 'User wallet address is invalid';
+              // Get guild wallet
+              const guildWallet = await db.getGuildWallet(guildId);
+              if (!guildWallet) {
+                paymentError = 'Server treasury wallet not configured';
               } else {
-                // Get guild wallet
-                const guildWallet = await db.getGuildWallet(guildId);
-                if (!guildWallet) {
-                  paymentError = 'Server treasury wallet not configured';
-                } else {
-                  // Calculate SOL amount
-                  let solAmount = bulkTask.payout_amount;
-                  if (bulkTask.payout_currency === 'USD') {
-                    const solPrice = await crypto.getSolanaPrice();
-                    if (!solPrice) {
-                      paymentError = 'Unable to fetch SOL price';
-                    } else {
-                      solAmount = bulkTask.payout_amount / solPrice;
-                    }
+                // Calculate SOL amount
+                let solAmount = proof.payout_amount;
+                if (proof.payout_currency === 'USD') {
+                  const solPrice = await crypto.getSolanaPrice();
+                  if (!solPrice) {
+                    paymentError = 'Unable to fetch SOL price';
+                  } else {
+                    solAmount = proof.payout_amount / solPrice;
                   }
+                }
 
-                  if (!paymentError) {
-                    // Check treasury balance
-                    const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
-                    if (treasuryBalance < solAmount) {
-                      paymentError = `Insufficient treasury balance (${treasuryBalance.toFixed(4)} SOL)`;
+                if (!paymentError) {
+                  // Check treasury balance
+                  const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
+                  if (treasuryBalance < solAmount) {
+                    paymentError = `Insufficient treasury balance (${treasuryBalance.toFixed(4)} SOL)`;
+                  } else {
+                    // Execute payment
+                    const botWallet = crypto.getWallet();
+                    if (!botWallet) {
+                      paymentError = 'Bot wallet not configured';
                     } else {
-                      // Execute payment
-                      const botWallet = crypto.getWallet();
-                      if (!botWallet) {
-                        paymentError = 'Bot wallet not configured';
-                      } else {
-                        const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
-                        const recipientPubkey = new PublicKey(userData.solana_address);
-                        const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
+                      const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+                      const recipientPubkey = new PublicKey(userData.solana_address);
+                      const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
 
-                        const lamports = Math.floor(solAmount * 1e9);
-                        const instruction = SystemProgram.transfer({
-                          fromPubkey: treasuryPubkey,
-                          toPubkey: recipientPubkey,
-                          lamports: lamports
-                        });
+                      const lamports = Math.floor(solAmount * 1e9);
+                      const instruction = SystemProgram.transfer({
+                        fromPubkey: treasuryPubkey,
+                        toPubkey: recipientPubkey,
+                        lamports: lamports
+                      });
 
-                        const transaction = new Transaction().add(instruction);
-                        const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+                      const transaction = new Transaction().add(instruction);
+                      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
 
-                        // Log transaction
-                        await db.recordTransaction(guildId, guildWallet.wallet_address, userData.solana_address, solAmount, signature);
+                      // Log transaction
+                      await db.recordTransaction(guildId, guildWallet.wallet_address, userData.solana_address, solAmount, signature);
 
-                        paymentInfo = {
-                          amount: solAmount,
-                          currency: bulkTask.payout_currency,
-                          usdAmount: bulkTask.payout_currency === 'USD' ? bulkTask.payout_amount : null,
-                          signature: signature,
-                          recipientAddress: userData.solana_address
-                        };
-                      }
+                      paymentInfo = {
+                        amount: solAmount,
+                        currency: proof.payout_currency,
+                        usdAmount: proof.payout_currency === 'USD' ? proof.payout_amount : null,
+                        signature: signature,
+                        recipientAddress: userData.solana_address
+                      };
                     }
                   }
                 }

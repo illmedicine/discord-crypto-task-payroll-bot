@@ -200,7 +200,7 @@ module.exports = {
     }
 
     try {
-      // Get assignment to find bulk task ID
+      // Get assignment which now includes bulk task details via JOIN
       const assignment = await db.getAssignment(assignmentId);
       if (!assignment) {
         return interaction.reply({
@@ -209,11 +209,10 @@ module.exports = {
         });
       }
 
-      // Get bulk task for auto-approve settings and payment info
-      const bulkTask = await db.getBulkTask(assignment.bulk_task_id);
-      if (!bulkTask) {
+      // Check if bulk task is active
+      if (assignment.task_status !== 'active') {
         return interaction.reply({
-          content: '❌ Task not found.',
+          content: '❌ This task is no longer active.',
           ephemeral: true
         });
       }
@@ -270,13 +269,13 @@ module.exports = {
                   autoApproveError = 'Treasury wallet not configured';
                 } else {
                   // Calculate SOL amount
-                  let solAmount = bulkTask.payout_amount;
-                  if (bulkTask.payout_currency === 'USD') {
+                  let solAmount = assignment.payout_amount;
+                  if (assignment.payout_currency === 'USD') {
                     const solPrice = await crypto.getSolanaPrice();
                     if (!solPrice) {
                       autoApproveError = 'Unable to fetch SOL price';
                     } else {
-                      solAmount = bulkTask.payout_amount / solPrice;
+                      solAmount = assignment.payout_amount / solPrice;
                     }
                   }
 
@@ -307,8 +306,8 @@ module.exports = {
 
                         paymentInfo = {
                           amount: solAmount,
-                          currency: bulkTask.payout_currency,
-                          usdAmount: bulkTask.payout_currency === 'USD' ? bulkTask.payout_amount : null,
+                          currency: assignment.payout_currency,
+                          usdAmount: assignment.payout_currency === 'USD' ? assignment.payout_amount : null,
                           signature: signature
                         };
                       }
@@ -342,7 +341,7 @@ module.exports = {
         .addFields(
           { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
           { name: 'Proof ID', value: `#${proofId}`, inline: true },
-          { name: 'Task', value: bulkTask.title },
+          { name: 'Task', value: assignment.title },
           { name: 'Screenshot', value: `[View](${screenshotUrl})` },
           { name: 'Verification URL', value: `[View](${verificationUrl})` },
           ...(notes ? [{ name: 'Notes', value: notes }] : [])
@@ -400,7 +399,7 @@ module.exports = {
                   { name: 'Proof ID', value: `#${proofId}`, inline: true },
                   { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
                   { name: 'Submitted By', value: `<@${userId}>` },
-                  { name: 'Task', value: bulkTask.title },
+                  { name: 'Task', value: assignment.title },
                   { name: 'Screenshot', value: `[View](${screenshotUrl})` },
                   { name: 'Verification', value: `[View](${verificationUrl})` },
                   ...(notes ? [{ name: 'Notes', value: notes }] : [])

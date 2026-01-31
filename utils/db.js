@@ -302,7 +302,10 @@ const getUserAssignments = (userId, guildId) => {
 const getAssignment = (assignmentId) => {
   return new Promise((resolve, reject) => {
     db.get(
-      `SELECT * FROM task_assignments WHERE id = ?`,
+      `SELECT ta.*, bt.title, bt.payout_amount, bt.payout_currency, bt.description, bt.status as task_status
+       FROM task_assignments ta
+       JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+       WHERE ta.id = ?`,
       [assignmentId],
       (err, row) => {
         if (err) reject(err);
@@ -350,7 +353,11 @@ const getPendingProofs = (guildId) => {
 const getProofSubmission = (proofId) => {
   return new Promise((resolve, reject) => {
     db.get(
-      `SELECT * FROM proof_submissions WHERE id = ?`,
+      `SELECT ps.*, ta.bulk_task_id, ta.assigned_user_id, bt.title, bt.payout_amount, bt.payout_currency 
+       FROM proof_submissions ps
+       JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+       JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+       WHERE ps.id = ?`,
       [proofId],
       (err, row) => {
         if (err) reject(err);
