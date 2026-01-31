@@ -374,6 +374,19 @@ const getUserAssignments = (userId, guildId) => {
   });
 };
 
+const getUserAssignmentsForTask = (bulkTaskId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM task_assignments WHERE bulk_task_id = ? AND assigned_user_id = ?`,
+      [bulkTaskId, userId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
 const getAssignment = (assignmentId) => {
   return new Promise((resolve, reject) => {
     db.get(
@@ -720,6 +733,7 @@ module.exports = {
   assignTaskToUser,
   getUserAssignment,
   getUserAssignments,
+  getUserAssignmentsForTask,
   getAssignment,
   submitProof,
   getPendingProofs,

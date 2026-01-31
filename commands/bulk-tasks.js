@@ -128,10 +128,18 @@ module.exports = {
       let taskList = '';
       for (const task of tasks) {
         const availableSlots = task.total_slots - task.filled_slots;
+        
+        // Get user's claimed slots for this task
+        const userAssignments = await db.getUserAssignmentsForTask(task.id, interaction.user.id);
+        const userSlots = userAssignments.length;
+        
         taskList += `**#${task.id}** - ${task.title}\n`;
-        taskList += `💰 Payout: ${task.payout_amount} ${task.payout_currency}\n`;
-        taskList += `📍 Available Slots: ${availableSlots}/${task.total_slots}\n`;
-        taskList += `${task.description}\n\n`;
+        taskList += `💰 Payout: ${task.payout_amount} ${task.payout_currency} per slot\n`;
+        taskList += `📍 Available Slots: ${availableSlots}/${task.total_slots}`;
+        if (userSlots > 0) {
+          taskList += ` | 🎯 You claimed: ${userSlots} slot${userSlots > 1 ? 's' : ''}`;
+        }
+        taskList += `\n${task.description}\n\n`;
       }
 
       const embed = new EmbedBuilder()
@@ -178,29 +186,29 @@ module.exports = {
         });
       }
 
-      // Check if user already claimed this task
-      const existingAssignment = await db.getUserAssignment(taskId, interaction.user.id);
-      if (existingAssignment) {
-        return interaction.reply({
-          content: `❌ You have already claimed this task. Submit proof with your assigned ID.`,
-          ephemeral: true
-        });
-      }
+      // Get user's current claims for this task
+      const userAssignments = await db.getUserAssignmentsForTask(taskId, interaction.user.id);
+      const userClaimedSlots = userAssignments.length;
 
-      // Assign task to user
+      // Assign task to user (each assignment = 1 slot)
       const assignmentId = await db.assignTaskToUser(taskId, guildId, interaction.user.id);
+      const newSlotNumber = userClaimedSlots + 1;
+      const remainingSlots = task.total_slots - task.filled_slots - 1;
 
       const embed = new EmbedBuilder()
         .setColor('#00FF00')
-        .setTitle('✅ Task Claimed!')
-        .setDescription(`You have successfully claimed task #${taskId}`)
+        .setTitle('✅ Slot Claimed!')
+        .setDescription(`You have successfully claimed 1 slot from task #${taskId}`)
         .addFields(
           { name: 'Task', value: task.title },
           { name: 'Description', value: task.description },
-          { name: 'Payout', value: `${task.payout_amount} ${task.payout_currency}` },
-          { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
-          { name: 'Next Step', value: 'Use `/submit-proof assignment_id: ' + assignmentId + '` to submit your proof' }
+          { name: 'Payout Per Slot', value: `${task.payout_amount} ${task.payout_currency}`, inline: true },
+          { name: 'Your Slots for This Task', value: `${newSlotNumber}`, inline: true },
+          { name: 'Remaining Slots', value: `${remainingSlots}/${task.total_slots}`, inline: true },
+          { name: 'Slot Assignment ID', value: `#${assignmentId}` },
+          { name: 'Next Steps', value: '1. Use `/submit-proof assignment_id: ' + assignmentId + '` to submit proof for this slot\n2. You can claim more slots with `/bulk-tasks claim` if available' }
         )
+        .setFooter({ text: 'Each slot requires separate proof submission' })
         .setTimestamp();
 
       return interaction.reply({ embeds: [embed], ephemeral: false });
