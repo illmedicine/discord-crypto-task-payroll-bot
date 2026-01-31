@@ -137,6 +137,23 @@ const initDb = () => {
         FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
       )
     `);
+
+    // Auto-approve settings per bulk task
+    db.run(`
+      CREATE TABLE IF NOT EXISTS auto_approve_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bulk_task_id INTEGER NOT NULL UNIQUE,
+        guild_id TEXT NOT NULL,
+        auto_approve_enabled INTEGER DEFAULT 0,
+        require_screenshot INTEGER DEFAULT 1,
+        require_verification_url INTEGER DEFAULT 0,
+        enabled_by TEXT NOT NULL,
+        enabled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(bulk_task_id) REFERENCES bulk_tasks(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(enabled_by) REFERENCES users(discord_id)
+      )
+    `);
   });
 };
 
@@ -282,6 +299,19 @@ const getUserAssignments = (userId, guildId) => {
   });
 };
 
+const getAssignment = (assignmentId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM task_assignments WHERE id = ?`,
+      [assignmentId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
 // Proof Submission operations
 const submitProof = (taskAssignmentId, guildId, userId, screenshotUrl, verificationUrl, notes) => {
   return new Promise((resolve, reject) => {
@@ -367,6 +397,48 @@ const rejectProof = (proofId, rejectionReason, rejectedBy) => {
           });
           resolve();
         }
+      }
+    );
+  });
+};
+
+// Auto-approve operations
+const setAutoApprove = (bulkTaskId, guildId, enabled, requireScreenshot, requireVerificationUrl, enabledBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT OR REPLACE INTO auto_approve_settings 
+       (bulk_task_id, guild_id, auto_approve_enabled, require_screenshot, require_verification_url, enabled_by, enabled_at) 
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      [bulkTaskId, guildId, enabled ? 1 : 0, requireScreenshot ? 1 : 0, requireVerificationUrl ? 1 : 0, enabledBy],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const getAutoApproveSettings = (bulkTaskId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM auto_approve_settings WHERE bulk_task_id = ?`,
+      [bulkTaskId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const isAutoApproveEnabled = (bulkTaskId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT auto_approve_enabled FROM auto_approve_settings WHERE bulk_task_id = ?`,
+      [bulkTaskId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row ? row.auto_approve_enabled === 1 : false);
       }
     );
   });
@@ -494,11 +566,15 @@ module.exports = {
   assignTaskToUser,
   getUserAssignment,
   getUserAssignments,
+  getAssignment,
   submitProof,
   getPendingProofs,
   getProofSubmission,
   approveProof,
   rejectProof,
+  setAutoApprove,
+  getAutoApproveSettings,
+  isAutoApproveEnabled,
   addUser,
   getUser,
   createTask,

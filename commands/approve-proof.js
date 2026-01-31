@@ -1,5 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const db = require('../utils/db');
+const crypto = require('../utils/crypto');
+const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -18,6 +20,11 @@ module.exports = {
           option.setName('proof_id')
             .setDescription('Proof submission ID')
             .setRequired(true)
+        )
+        .addBooleanOption(option =>
+          option.setName('pay')
+            .setDescription('Automatically pay the user after approval')
+            .setRequired(false)
         )
     )
     .addSubcommand(subcommand =>
@@ -83,63 +90,179 @@ module.exports = {
     }
 
     if (subcommand === 'approve') {
+      await interaction.deferReply();
+
       const proofId = interaction.options.getInteger('proof_id');
+      const shouldPay = interaction.options.getBoolean('pay') || false;
 
       const proof = await db.getProofSubmission(proofId);
 
       if (!proof) {
-        return interaction.reply({
-          content: `❌ Proof #${proofId} not found.`,
-          ephemeral: true
+        return interaction.editReply({
+          content: `❌ Proof #${proofId} not found.`
         });
       }
 
       if (proof.guild_id !== guildId) {
-        return interaction.reply({
-          content: '❌ This proof is not from this server.',
-          ephemeral: true
+        return interaction.editReply({
+          content: '❌ This proof is not from this server.'
         });
       }
 
       if (proof.status !== 'pending') {
-        return interaction.reply({
-          content: `❌ Proof #${proofId} has already been ${proof.status}.`,
-          ephemeral: true
+        return interaction.editReply({
+          content: `❌ Proof #${proofId} has already been ${proof.status}.`
         });
       }
 
       // Approve the proof
       await db.approveProof(proofId, interaction.user.id);
 
+      let paymentInfo = null;
+      let paymentError = null;
+
+      // Handle payment if requested
+      if (shouldPay) {
+        try {
+          // Get task assignment to find the bulk task
+          const assignment = await db.getAssignment(proof.task_assignment_id);
+          if (!assignment) {
+            paymentError = 'Task assignment not found';
+          } else {
+            // Get bulk task to find payment amount
+            const bulkTask = await db.getBulkTask(assignment.bulk_task_id);
+            if (!bulkTask) {
+              paymentError = 'Task details not found';
+            } else {
+              // Get user data for wallet address
+              const userData = await db.getUser(proof.user_id);
+              if (!userData || !userData.solana_address) {
+                paymentError = 'User has not connected their Solana wallet';
+              } else if (!crypto.isValidSolanaAddress(userData.solana_address)) {
+                paymentError = 'User wallet address is invalid';
+              } else {
+                // Get guild wallet
+                const guildWallet = await db.getGuildWallet(guildId);
+                if (!guildWallet) {
+                  paymentError = 'Server treasury wallet not configured';
+                } else {
+                  // Calculate SOL amount
+                  let solAmount = bulkTask.payout_amount;
+                  if (bulkTask.payout_currency === 'USD') {
+                    const solPrice = await crypto.getSolanaPrice();
+                    if (!solPrice) {
+                      paymentError = 'Unable to fetch SOL price';
+                    } else {
+                      solAmount = bulkTask.payout_amount / solPrice;
+                    }
+                  }
+
+                  if (!paymentError) {
+                    // Check treasury balance
+                    const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
+                    if (treasuryBalance < solAmount) {
+                      paymentError = `Insufficient treasury balance (${treasuryBalance.toFixed(4)} SOL)`;
+                    } else {
+                      // Execute payment
+                      const botWallet = crypto.getWallet();
+                      if (!botWallet) {
+                        paymentError = 'Bot wallet not configured';
+                      } else {
+                        const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+                        const recipientPubkey = new PublicKey(userData.solana_address);
+                        const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
+
+                        const lamports = Math.floor(solAmount * 1e9);
+                        const instruction = SystemProgram.transfer({
+                          fromPubkey: treasuryPubkey,
+                          toPubkey: recipientPubkey,
+                          lamports: lamports
+                        });
+
+                        const transaction = new Transaction().add(instruction);
+                        const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+
+                        // Log transaction
+                        await db.recordTransaction(guildId, guildWallet.wallet_address, userData.solana_address, solAmount, signature);
+
+                        paymentInfo = {
+                          amount: solAmount,
+                          currency: bulkTask.payout_currency,
+                          usdAmount: bulkTask.payout_currency === 'USD' ? bulkTask.payout_amount : null,
+                          signature: signature,
+                          recipientAddress: userData.solana_address
+                        };
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Payment error:', error);
+          paymentError = error.message;
+        }
+      }
+
       const embed = new EmbedBuilder()
-        .setColor('#00FF00')
-        .setTitle('✅ Proof Approved!')
+        .setColor(paymentError && shouldPay ? '#FFA500' : '#00FF00')
+        .setTitle(paymentError && shouldPay ? '⚠️ Proof Approved (Payment Failed)' : '✅ Proof Approved!')
         .addFields(
           { name: 'Proof ID', value: `#${proofId}`, inline: true },
           { name: 'Status', value: 'Approved ✓', inline: true },
-          { name: 'Approved By', value: interaction.user.username },
-          { name: 'Next Step', value: 'Notify the user and process payment' }
-        )
-        .setTimestamp();
+          { name: 'Approved By', value: interaction.user.username }
+        );
+
+      if (shouldPay) {
+        if (paymentInfo) {
+          embed.addFields(
+            { name: '💰 Payment Status', value: '✅ Sent Successfully' },
+            { name: 'Amount', value: `${paymentInfo.amount.toFixed(4)} SOL${paymentInfo.usdAmount ? ` (~$${paymentInfo.usdAmount.toFixed(2)} USD)` : ''}` },
+            { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${paymentInfo.signature})` }
+          );
+        } else if (paymentError) {
+          embed.addFields(
+            { name: '⚠️ Payment Status', value: `❌ Failed: ${paymentError}` },
+            { name: 'Action Required', value: 'Please process payment manually using `/pay`' }
+          );
+        }
+      } else {
+        embed.addFields(
+          { name: 'Next Step', value: 'Use `/pay` command to send payment to the user' }
+        );
+      }
+
+      embed.setTimestamp();
 
       // Notify the submitter
       try {
         const user = await interaction.client.users.fetch(proof.user_id);
         const notifyEmbed = new EmbedBuilder()
-          .setColor('#00FF00')
+          .setColor(paymentInfo ? '#00FF00' : '#FFA500')
           .setTitle('✅ Your Proof Was Approved!')
           .addFields(
             { name: 'Proof ID', value: `#${proofId}` },
-            { name: 'Approved By', value: interaction.user.username },
-            { name: 'Status', value: '✅ Payment Processing' }
+            { name: 'Approved By', value: interaction.user.username }
           );
+
+        if (paymentInfo) {
+          notifyEmbed.addFields(
+            { name: '💰 Payment Sent', value: `${paymentInfo.amount.toFixed(4)} SOL${paymentInfo.usdAmount ? ` (~$${paymentInfo.usdAmount.toFixed(2)} USD)` : ''}` },
+            { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${paymentInfo.signature})` }
+          );
+        } else {
+          notifyEmbed.addFields(
+            { name: 'Status', value: paymentError ? '⚠️ Payment pending' : '✅ Awaiting payment' }
+          );
+        }
 
         await user.send({ embeds: [notifyEmbed] });
       } catch (e) {
         console.log('Could not notify user');
       }
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
 
     if (subcommand === 'reject') {

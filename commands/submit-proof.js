@@ -1,5 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/db');
+const crypto = require('../utils/crypto');
+const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -198,6 +200,30 @@ module.exports = {
     }
 
     try {
+      // Get assignment to find bulk task ID
+      const assignment = await db.getAssignment(assignmentId);
+      if (!assignment) {
+        return interaction.reply({
+          content: '❌ Assignment not found.',
+          ephemeral: true
+        });
+      }
+
+      // Get bulk task for auto-approve settings and payment info
+      const bulkTask = await db.getBulkTask(assignment.bulk_task_id);
+      if (!bulkTask) {
+        return interaction.reply({
+          content: '❌ Task not found.',
+          ephemeral: true
+        });
+      }
+
+      // Check auto-approve settings
+      const autoApproveSettings = await db.getAutoApproveSettings(assignment.bulk_task_id);
+      let autoApproved = false;
+      let autoApproveError = null;
+      let paymentInfo = null;
+
       // Submit proof to database
       const proofId = await db.submitProof(
         assignmentId,
@@ -208,64 +234,202 @@ module.exports = {
         notes
       );
 
+      // Check if auto-approve is enabled and requirements are met
+      if (autoApproveSettings && autoApproveSettings.auto_approve_enabled) {
+        let requirementsMet = true;
+        const missingRequirements = [];
+
+        // Check screenshot requirement
+        if (autoApproveSettings.require_screenshot && !screenshotUrl) {
+          requirementsMet = false;
+          missingRequirements.push('Screenshot');
+        }
+
+        // Check verification URL requirement
+        if (autoApproveSettings.require_verification_url && (!verificationUrl || verificationUrl.trim().length < 10)) {
+          requirementsMet = false;
+          missingRequirements.push('Verification URL');
+        }
+
+        if (requirementsMet) {
+          // Automatically approve the proof
+          try {
+            await db.approveProof(proofId, 'auto-system');
+            autoApproved = true;
+
+            // Try to process payment
+            try {
+              const userData = await db.getUser(userId);
+              if (!userData || !userData.solana_address) {
+                autoApproveError = 'User wallet not connected';
+              } else if (!crypto.isValidSolanaAddress(userData.solana_address)) {
+                autoApproveError = 'Invalid wallet address';
+              } else {
+                const guildWallet = await db.getGuildWallet(guildId);
+                if (!guildWallet) {
+                  autoApproveError = 'Treasury wallet not configured';
+                } else {
+                  // Calculate SOL amount
+                  let solAmount = bulkTask.payout_amount;
+                  if (bulkTask.payout_currency === 'USD') {
+                    const solPrice = await crypto.getSolanaPrice();
+                    if (!solPrice) {
+                      autoApproveError = 'Unable to fetch SOL price';
+                    } else {
+                      solAmount = bulkTask.payout_amount / solPrice;
+                    }
+                  }
+
+                  if (!autoApproveError) {
+                    const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
+                    if (treasuryBalance < solAmount) {
+                      autoApproveError = `Insufficient treasury balance (${treasuryBalance.toFixed(4)} SOL)`;
+                    } else {
+                      const botWallet = crypto.getWallet();
+                      if (!botWallet) {
+                        autoApproveError = 'Bot wallet not configured';
+                      } else {
+                        const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+                        const recipientPubkey = new PublicKey(userData.solana_address);
+                        const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
+
+                        const lamports = Math.floor(solAmount * 1e9);
+                        const instruction = SystemProgram.transfer({
+                          fromPubkey: treasuryPubkey,
+                          toPubkey: recipientPubkey,
+                          lamports: lamports
+                        });
+
+                        const transaction = new Transaction().add(instruction);
+                        const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+
+                        await db.recordTransaction(guildId, guildWallet.wallet_address, userData.solana_address, solAmount, signature);
+
+                        paymentInfo = {
+                          amount: solAmount,
+                          currency: bulkTask.payout_currency,
+                          usdAmount: bulkTask.payout_currency === 'USD' ? bulkTask.payout_amount : null,
+                          signature: signature
+                        };
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (paymentError) {
+              console.error('Auto-payment error:', paymentError);
+              autoApproveError = paymentError.message;
+            }
+          } catch (approvalError) {
+            console.error('Auto-approval error:', approvalError);
+            autoApproveError = approvalError.message;
+          }
+        } else {
+          autoApproveError = `Missing required: ${missingRequirements.join(', ')}`;
+        }
+      }
+
       const embed = new EmbedBuilder()
-        .setColor('#00FF00')
-        .setTitle('✅ Proof Submitted Successfully!')
-        .setDescription('Your task proof has been submitted for review by the approval team.')
+        .setColor(autoApproved && paymentInfo ? '#00FF00' : autoApproved ? '#FFA500' : '#FFD700')
+        .setTitle(autoApproved && paymentInfo ? '✅ Proof Auto-Approved & Paid!' : autoApproved ? '✅ Proof Auto-Approved!' : '📋 Proof Submitted Successfully!')
+        .setDescription(
+          autoApproved && paymentInfo 
+            ? 'Your task proof met all requirements and has been automatically approved and paid!' 
+            : autoApproved 
+            ? 'Your task proof met all requirements and has been automatically approved!'
+            : 'Your task proof has been submitted for review by the approval team.'
+        )
         .addFields(
           { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
           { name: 'Proof ID', value: `#${proofId}`, inline: true },
+          { name: 'Task', value: bulkTask.title },
           { name: 'Screenshot', value: `[View](${screenshotUrl})` },
           { name: 'Verification URL', value: `[View](${verificationUrl})` },
-          ...(notes ? [{ name: 'Notes', value: notes }] : []),
+          ...(notes ? [{ name: 'Notes', value: notes }] : [])
+        );
+
+      if (autoApproved) {
+        if (paymentInfo) {
+          embed.addFields(
+            { name: 'Status', value: '✅ **APPROVED & PAID**' },
+            { name: '💰 Payment', value: `${paymentInfo.amount.toFixed(4)} SOL${paymentInfo.usdAmount ? ` (~$${paymentInfo.usdAmount.toFixed(2)} USD)` : ''}` },
+            { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${paymentInfo.signature})` }
+          );
+        } else {
+          embed.addFields(
+            { name: 'Status', value: '✅ **APPROVED**' },
+            { name: '⚠️ Payment', value: `Payment pending: ${autoApproveError || 'Processing'}` }
+          );
+        }
+      } else if (autoApproveSettings && autoApproveSettings.auto_approve_enabled && autoApproveError) {
+        embed.addFields(
+          { name: 'Status', value: '⏳ **Awaiting Manual Approval**' },
+          { name: 'Auto-Approve Failed', value: autoApproveError }
+        );
+      } else {
+        embed.addFields(
           { name: 'Status', value: '⏳ Awaiting Approval' },
           { name: 'Next Step', value: 'An approver will review your submission soon and notify you of the result.' }
-        )
-        .setFooter({ text: 'Do not modify your proof after submission' })
-        .setTimestamp();
+        );
+      }
+
+      embed.setFooter({ text: 'Do not modify your proof after submission' }).setTimestamp();
 
       await interaction.reply({ embeds: [embed], ephemeral: false });
 
       // Clean up temporary data
       delete global.proofData?.[`${assignmentId}_${userId}`];
 
-      // Notify approvers
-      const approverRoles = await db.getApprovedRoles(guildId);
-      if (approverRoles.length > 0) {
-        try {
-          const guild = await interaction.guild.fetch();
-          const members = await guild.members.fetch();
-          
-          const approvers = members.filter(m => {
-            return m.roles.cache.some(r => approverRoles.includes(r.id));
-          });
+      // Notify approvers only if not auto-approved with payment
+      if (!autoApproved || !paymentInfo) {
+        const approverRoles = await db.getApprovedRoles(guildId);
+        if (approverRoles.length > 0) {
+          try {
+            const guild = await interaction.guild.fetch();
+            const members = await guild.members.fetch();
+            
+            const approvers = members.filter(m => {
+              return m.roles.cache.some(r => approverRoles.includes(r.id));
+            });
 
-          if (approvers.size > 0) {
-            const notificationEmbed = new EmbedBuilder()
-              .setColor('#FFD700')
-              .setTitle('📋 New Proof Submission to Review')
-              .addFields(
-                { name: 'Proof ID', value: `#${proofId}`, inline: true },
-                { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
-                { name: 'Submitted By', value: `<@${userId}>` },
-                { name: 'Screenshot', value: `[View](${screenshotUrl})` },
-                { name: 'Verification', value: `[View](${verificationUrl})` },
-                ...(notes ? [{ name: 'Notes', value: notes }] : []),
-                { name: 'Action', value: 'Use `/approve-proof` to review this submission' }
-              )
-              .setImage(screenshotUrl)
-              .setTimestamp();
+            if (approvers.size > 0) {
+              const notificationEmbed = new EmbedBuilder()
+                .setColor(autoApproved ? '#FFA500' : '#FFD700')
+                .setTitle(autoApproved ? '⚠️ Auto-Approved (Payment Failed)' : '📋 New Proof Submission to Review')
+                .addFields(
+                  { name: 'Proof ID', value: `#${proofId}`, inline: true },
+                  { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
+                  { name: 'Submitted By', value: `<@${userId}>` },
+                  { name: 'Task', value: bulkTask.title },
+                  { name: 'Screenshot', value: `[View](${screenshotUrl})` },
+                  { name: 'Verification', value: `[View](${verificationUrl})` },
+                  ...(notes ? [{ name: 'Notes', value: notes }] : [])
+                );
 
-            // Send to first approver (in production, use notification channel)
-            const firstApprover = approvers.first();
-            try {
-              await firstApprover.send({ embeds: [notificationEmbed] });
-            } catch (e) {
-              console.log('Could not DM approver');
+              if (autoApproved && autoApproveError) {
+                notificationEmbed.addFields(
+                  { name: 'Payment Issue', value: autoApproveError },
+                  { name: 'Action', value: 'Use `/pay` or `/approve-proof approve` with payment to complete' }
+                );
+              } else {
+                notificationEmbed.addFields(
+                  { name: 'Action', value: 'Use `/approve-proof` to review this submission' }
+                );
+              }
+
+              notificationEmbed.setImage(screenshotUrl).setTimestamp();
+
+              // Send to first approver (in production, use notification channel)
+              const firstApprover = approvers.first();
+              try {
+                await firstApprover.send({ embeds: [notificationEmbed] });
+              } catch (e) {
+                console.log('Could not DM approver');
+              }
             }
+          } catch (e) {
+            console.log('Error notifying approvers:', e.message);
           }
-        } catch (e) {
-          console.log('Error notifying approvers:', e.message);
         }
       }
 
