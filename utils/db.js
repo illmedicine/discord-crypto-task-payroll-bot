@@ -2,7 +2,8 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
-// Determine database path based on environment
+// Use the same database file for both local and Railway
+// This allows committing the database to git for deployment
 const getDbPath = () => {
   // If DB_PATH is set, use it (for advanced configuration)
   if (process.env.DB_PATH) {
@@ -10,17 +11,16 @@ const getDbPath = () => {
     return process.env.DB_PATH;
   }
   
-  // For Railway or production, use app directory (Railway provides persistent storage automatically)
+  // Use payroll.db in app directory for both local and Railway
+  const dbPath = path.join(__dirname, '../payroll.db');
+  
   if (process.env.RAILWAY_ENVIRONMENT) {
-    const prodPath = path.join(__dirname, '../railway-payroll.db');
-    console.log(`[DB] Railway mode - Using: ${prodPath}`);
-    return prodPath;
+    console.log(`[DB] Railway mode - Using: ${dbPath}`);
+  } else {
+    console.log(`[DB] Development mode - Using: ${dbPath}`);
   }
   
-  // Local development
-  const localPath = path.join(__dirname, '../payroll.db');
-  console.log(`[DB] Development mode - Using: ${localPath}`);
-  return localPath;
+  return dbPath;
 };
 
 const dbPath = getDbPath();
