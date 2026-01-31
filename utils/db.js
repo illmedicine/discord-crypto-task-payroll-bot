@@ -1,8 +1,38 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
-const dbPath = path.join(__dirname, '../payroll.db');
-const db = new sqlite3.Database(dbPath);
+// Determine database path based on environment
+// In production (Railway), use /data directory for persistence
+// Use DB_PATH environment variable to override (useful for connecting local to Railway)
+const getDbPath = () => {
+  // If DB_PATH is set, use it (for connecting local dev to Railway)
+  if (process.env.DB_PATH) {
+    console.log(`[DB] Using custom database path: ${process.env.DB_PATH}`);
+    return process.env.DB_PATH;
+  }
+  
+  // If in production (Railway), use persistent volume
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') {
+    const prodPath = '/data/payroll.db';
+    console.log(`[DB] Production mode - Using persistent storage: ${prodPath}`);
+    return prodPath;
+  }
+  
+  // Local development
+  const localPath = path.join(__dirname, '../payroll.db');
+  console.log(`[DB] Development mode - Using local database: ${localPath}`);
+  return localPath;
+};
+
+const dbPath = getDbPath();
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('[DB] Error opening database:', err);
+  } else {
+    console.log('[DB] Database connection established');
+    console.log('[DB] Database file location:', dbPath);
+  }
+});
 
 // Initialize database tables
 const initDb = () => {
