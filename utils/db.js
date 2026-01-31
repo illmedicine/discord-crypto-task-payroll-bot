@@ -242,12 +242,18 @@ const getActiveBulkTasks = (guildId) => {
 
 const getBulkTask = (taskId) => {
   return new Promise((resolve, reject) => {
+    console.log(`[db.getBulkTask] Querying for task ID: ${taskId} (type: ${typeof taskId})`);
     db.get(
       `SELECT * FROM bulk_tasks WHERE id = ?`,
       [taskId],
       (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
+        if (err) {
+          console.error(`[db.getBulkTask] Error:`, err);
+          reject(err);
+        } else {
+          console.log(`[db.getBulkTask] Result:`, row);
+          resolve(row);
+        }
       }
     );
   });

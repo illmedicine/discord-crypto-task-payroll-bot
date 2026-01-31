@@ -78,16 +78,24 @@ module.exports = {
 
     // Verify the bulk task exists and belongs to this guild
     const bulkTask = await db.getBulkTask(bulkTaskId);
+    
+    console.log(`[auto-approve] Looking for bulk task #${bulkTaskId} in guild ${guildId}`);
+    console.log(`[auto-approve] Found bulk task:`, bulkTask);
+    
     if (!bulkTask) {
+      // Let's also get all bulk tasks to help debug
+      const allTasks = await db.getActiveBulkTasks(guildId);
+      console.log(`[auto-approve] Available bulk tasks for guild ${guildId}:`, allTasks);
+      
       return interaction.reply({
-        content: `❌ Bulk task #${bulkTaskId} not found.`,
+        content: `❌ Bulk task #${bulkTaskId} not found.\n\n**Available tasks:** ${allTasks.length > 0 ? allTasks.map(t => `#${t.id} - ${t.title}`).join(', ') : 'None'}`,
         ephemeral: true
       });
     }
 
     if (bulkTask.guild_id !== guildId) {
       return interaction.reply({
-        content: '❌ This bulk task does not belong to this server.',
+        content: `❌ This bulk task does not belong to this server. (Task is from guild: ${bulkTask.guild_id}, Current guild: ${guildId})`,
         ephemeral: true
       });
     }
