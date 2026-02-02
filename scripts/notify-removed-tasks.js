@@ -11,16 +11,25 @@ require('dotenv').config();
 // Configure the removed tasks here
 const REMOVED_TASKS = [
   {
-    taskId: 1,
-    title: 'Task Title Here',
+    taskId: 3,
+    title: 'Add Discrypto Bot',
     payoutAmount: 1,
     payoutCurrency: 'USD',
-    reason: 'Reason for removal',
-    guildId: '1459252801464041554', // Your guild ID
-    channelId: '1234567890', // Channel to post notification in
-    affectedUsers: ['userId1', 'userId2'] // User IDs who claimed this task (optional)
+    reason: 'Jacob deleted by accident',
+    guildId: '1459252801464041554',
+    channelId: '1454144204082249789',
+    affectedUsers: ['1317437712139292684']
   },
-  // Add more tasks as needed
+  {
+    taskId: 4,
+    title: 'Bulk Task #4', // UPDATE: Replace with actual task #4 title if known
+    payoutAmount: 1, // UPDATE: Replace with actual payout amount if different
+    payoutCurrency: 'USD', // UPDATE: Replace with actual currency if different (SOL or USD)
+    reason: 'Jacob deleted by accident',
+    guildId: '1459252801464041554',
+    channelId: '1454144204082249789',
+    affectedUsers: ['1317437712139292684']
+  }
 ];
 
 const client = new Client({

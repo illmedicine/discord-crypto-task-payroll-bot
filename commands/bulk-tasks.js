@@ -64,7 +64,8 @@ module.exports = {
     const guildId = interaction.guildId;
 
     if (subcommand === 'create') {
-      await interaction.deferReply();
+      // Public reply - visible to all users in the channel
+      await interaction.deferReply({ ephemeral: false });
       try {
         // Check if user has permission (must have manage_guild or be approved role)
         if (!interaction.member.permissions.has('ManageGuild')) {
@@ -115,8 +116,10 @@ module.exports = {
     }
 
     if (subcommand === 'list') {
-      await interaction.deferReply();
+      // Public reply - visible to all users in the channel
+      await interaction.deferReply({ ephemeral: false });
       try {
+        // Get all active tasks for this guild (server)
         const tasks = await db.getActiveBulkTasks(guildId);
 
       if (!tasks || tasks.length === 0) {
