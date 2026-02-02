@@ -388,6 +388,19 @@ const getUserAssignmentsForTask = (bulkTaskId, userId) => {
   });
 };
 
+const getTaskAssignments = (bulkTaskId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM task_assignments WHERE bulk_task_id = ?`,
+      [bulkTaskId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
 const getAssignment = (assignmentId) => {
   return new Promise((resolve, reject) => {
     db.get(
@@ -735,6 +748,7 @@ module.exports = {
   getUserAssignment,
   getUserAssignments,
   getUserAssignmentsForTask,
+  getTaskAssignments,
   getAssignment,
   submitProof,
   getPendingProofs,

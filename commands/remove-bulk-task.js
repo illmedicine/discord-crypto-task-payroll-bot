@@ -14,6 +14,11 @@ module.exports = {
       option.setName('proof_id')
         .setDescription('Proof ID (will remove the associated bulk task)')
         .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('reason')
+        .setDescription('Reason for removing the task (will be shown to affected members)')
+        .setRequired(false)
     ),
 
   async execute(interaction) {
@@ -116,6 +121,17 @@ module.exports = {
       });
     }
 
+    // Get reason for removal
+    const reason = interaction.options.getString('reason') || 'No reason provided';
+
+    // Get all assignments for this task to notify affected users
+    let assignments = [];
+    try {
+      assignments = await db.getTaskAssignments(bulkTaskId);
+    } catch (error) {
+      console.error('[REMOVE-BULK-TASK] Error fetching assignments:', error);
+    }
+
     // Delete the bulk task
     try {
       const result = await db.deleteBulkTask(bulkTaskId);
@@ -128,10 +144,57 @@ module.exports = {
           { name: '📋 Task', value: bulkTask.title, inline: false },
           { name: '💰 Payout', value: `${bulkTask.payout_amount} ${bulkTask.payout_currency}`, inline: true },
           { name: '📊 Slots', value: `${bulkTask.total_slots}`, inline: true },
-          { name: '⚙️ Status', value: bulkTask.status || 'active', inline: true }
+          { name: '⚙️ Status', value: bulkTask.status || 'active', inline: true },
+          { name: '📝 Reason', value: reason, inline: false },
+          { name: '👥 Affected Members', value: `${assignments.length} member(s) notified`, inline: true },
+          { name: '📍 Channel', value: interaction.channel.name, inline: true }
         )
         .setFooter({ text: 'All related assignments, proofs, and auto-approve settings have been removed.' })
         .setTimestamp();
+
+      // Notify affected members in their claim channels
+      if (assignments.length > 0) {
+        const notifiedChannels = new Set();
+        
+        for (const assignment of assignments) {
+          try {
+            const channelId = assignment.claimed_channel_id || interaction.channelId;
+            
+            // Only notify once per channel to avoid spam
+            if (!notifiedChannels.has(channelId)) {
+              const channel = await interaction.client.channels.fetch(channelId);
+              if (channel && channel.isTextBased()) {
+                const notificationEmbed = new EmbedBuilder()
+                  .setColor('#FF0000')
+                  .setTitle('⚠️ Bulk Task Removed')
+                  .setDescription(`Bulk task #${bulkTaskId} has been removed by the treasury owner.`)
+                  .addFields(
+                    { name: '📋 Task', value: bulkTask.title },
+                    { name: '💰 Payout', value: `${bulkTask.payout_amount} ${bulkTask.payout_currency}`, inline: true },
+                    { name: '📝 Reason', value: reason },
+                    { name: 'Impact', value: 'All claims and pending proofs for this task have been removed.' }
+                  )
+                  .setTimestamp();
+
+                // Find all users affected in this channel
+                const affectedUsers = assignments
+                  .filter(a => (a.claimed_channel_id || interaction.channelId) === channelId)
+                  .map(a => `<@${a.assigned_user_id}>`)
+                  .join(', ');
+
+                await channel.send({ 
+                  content: affectedUsers || 'Affected members',
+                  embeds: [notificationEmbed] 
+                });
+                
+                notifiedChannels.add(channelId);
+              }
+            }
+          } catch (error) {
+            console.error(`[REMOVE-BULK-TASK] Error notifying user ${assignment.assigned_user_id}:`, error);
+          }
+        }
+      }
 
       return interaction.editReply({
         embeds: [embed]
