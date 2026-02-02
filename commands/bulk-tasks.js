@@ -191,7 +191,7 @@ module.exports = {
       const userClaimedSlots = userAssignments.length;
 
       // Assign task to user (each assignment = 1 slot)
-      const assignmentId = await db.assignTaskToUser(taskId, guildId, interaction.user.id);
+      const assignmentId = await db.assignTaskToUser(taskId, guildId, interaction.user.id, interaction.channelId);
       const newSlotNumber = userClaimedSlots + 1;
       const remainingSlots = task.total_slots - task.filled_slots - 1;
 

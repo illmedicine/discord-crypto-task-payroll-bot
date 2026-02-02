@@ -381,54 +381,43 @@ module.exports = {
 
       // Notify approvers only if not auto-approved with payment
       if (!autoApproved || !paymentInfo) {
-        const approverRoles = await db.getApprovedRoles(guildId);
-        if (approverRoles.length > 0) {
-          try {
-            const guild = await interaction.guild.fetch();
-            const members = await guild.members.fetch();
-            
-            const approvers = members.filter(m => {
-              return m.roles.cache.some(r => approverRoles.includes(r.id));
-            });
+        // Post notification to the channel where task was claimed, or fallback to current channel
+        const targetChannelId = assignment.claimed_channel_id || interaction.channelId;
+        
+        try {
+          const targetChannel = await interaction.client.channels.fetch(targetChannelId);
+          if (targetChannel && targetChannel.isTextBased()) {
+            const notificationEmbed = new EmbedBuilder()
+              .setColor(autoApproved ? '#FFA500' : '#FFD700')
+              .setTitle(autoApproved ? '⚠️ Auto-Approved (Payment Failed)' : '📋 New Proof Submission to Review')
+              .addFields(
+                { name: 'Proof ID', value: `#${proofId}`, inline: true },
+                { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
+                { name: 'Submitted By', value: `<@${userId}>` },
+                { name: 'Task', value: assignment.title },
+                { name: 'Screenshot', value: `[View](${screenshotUrl})` },
+                { name: 'Verification', value: `[View](${verificationUrl})` },
+                ...(notes ? [{ name: 'Notes', value: notes }] : [])
+              );
 
-            if (approvers.size > 0) {
-              const notificationEmbed = new EmbedBuilder()
-                .setColor(autoApproved ? '#FFA500' : '#FFD700')
-                .setTitle(autoApproved ? '⚠️ Auto-Approved (Payment Failed)' : '📋 New Proof Submission to Review')
-                .addFields(
-                  { name: 'Proof ID', value: `#${proofId}`, inline: true },
-                  { name: 'Assignment ID', value: `#${assignmentId}`, inline: true },
-                  { name: 'Submitted By', value: `<@${userId}>` },
-                  { name: 'Task', value: assignment.title },
-                  { name: 'Screenshot', value: `[View](${screenshotUrl})` },
-                  { name: 'Verification', value: `[View](${verificationUrl})` },
-                  ...(notes ? [{ name: 'Notes', value: notes }] : [])
-                );
-
-              if (autoApproved && autoApproveError) {
-                notificationEmbed.addFields(
-                  { name: 'Payment Issue', value: autoApproveError },
-                  { name: 'Action', value: 'Use `/pay` or `/approve-proof approve` with payment to complete' }
-                );
-              } else {
-                notificationEmbed.addFields(
-                  { name: 'Action', value: 'Use `/approve-proof` to review this submission' }
-                );
-              }
-
-              notificationEmbed.setImage(screenshotUrl).setTimestamp();
-
-              // Send to first approver (in production, use notification channel)
-              const firstApprover = approvers.first();
-              try {
-                await firstApprover.send({ embeds: [notificationEmbed] });
-              } catch (e) {
-                console.log('Could not DM approver');
-              }
+            if (autoApproved && autoApproveError) {
+              notificationEmbed.addFields(
+                { name: 'Payment Issue', value: autoApproveError },
+                { name: 'Action', value: 'Use `/pay` or `/approve-proof approve` with payment to complete' }
+              );
+            } else {
+              notificationEmbed.addFields(
+                { name: 'Action', value: 'Use `/approve-proof` to review this submission' }
+              );
             }
-          } catch (e) {
-            console.log('Error notifying approvers:', e.message);
+
+            notificationEmbed.setImage(screenshotUrl).setTimestamp();
+
+            // Post to the channel where task was claimed (or current channel as fallback)
+            await targetChannel.send({ embeds: [notificationEmbed] });
           }
+        } catch (e) {
+          console.log('Error posting notification:', e.message);
         }
       }
 

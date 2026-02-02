@@ -101,6 +101,7 @@ const initDb = () => {
         bulk_task_id INTEGER NOT NULL,
         guild_id TEXT NOT NULL,
         assigned_user_id TEXT NOT NULL,
+        claimed_channel_id TEXT,
         status TEXT DEFAULT 'assigned',
         assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(bulk_task_id) REFERENCES bulk_tasks(id),
@@ -329,11 +330,11 @@ const getBulkTask = (taskId) => {
 };
 
 // Task Assignment operations
-const assignTaskToUser = (bulkTaskId, guildId, userId) => {
+const assignTaskToUser = (bulkTaskId, guildId, userId, channelId = null) => {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO task_assignments (bulk_task_id, guild_id, assigned_user_id) VALUES (?, ?, ?)`,
-      [bulkTaskId, guildId, userId],
+      `INSERT INTO task_assignments (bulk_task_id, guild_id, assigned_user_id, claimed_channel_id) VALUES (?, ?, ?, ?)`,
+      [bulkTaskId, guildId, userId, channelId],
       function (err) {
         if (err) reject(err);
         else {
