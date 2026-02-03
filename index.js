@@ -6,15 +6,16 @@ require('dotenv').config();
 
 const crypto = require('./utils/crypto');
 const db = require('./utils/db');
+const { ANCHOR_GUILD_ID, prefixLine, getTrustRisk } = require('./utils/trustRisk');
 
 // Version and build info
 const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
 const BUILD_DATE = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 const LATEST_FEATURES = [
+  'NEW: Trust & Risk Scoring!',
   'NEW: /contest giveaways!',
   'Auto wallet lookup on /pay',
   '/user-wallet command',
-  'USD to SOL conversion',
   'Solana transactions'
 ];
 
@@ -403,7 +404,52 @@ client.on('interactionCreate', async interaction => {
     }
 
     try {
-      console.log(`⚡ About to execute: ${interaction.commandName}`);
+      // ---- DCB Trust/Risk prefix injection (ALL commands) ----
+      let anchorMember = false;
+      try {
+        const g = client.guilds.cache.get(ANCHOR_GUILD_ID) || await client.guilds.fetch(ANCHOR_GUILD_ID).catch(() => null);
+        if (g) {
+          const m = await g.members.fetch(interaction.user.id).catch(() => null);
+          anchorMember = !!m;
+        }
+      } catch (_) {
+        anchorMember = false;
+      }
+
+      const score = await getTrustRisk({
+        db,
+        user: interaction.user,
+        guildId: interaction.guildId,
+        guildAnchorMember: anchorMember
+      });
+
+      const prefix = prefixLine(score.trust, score.risk);
+
+      // Log command audit
+      await db.logCommandAudit(interaction.user.id, interaction.guildId, interaction.commandName).catch(() => {});
+
+      // Wrap reply/edit/followUp so every command automatically includes prefix
+      const injectPrefix = (payload) => {
+        if (payload == null) return { content: prefix };
+        if (typeof payload === 'string') return { content: `${prefix}\n${payload}` };
+        const out = { ...payload };
+        out.content = out.content ? `${prefix}\n${out.content}` : prefix;
+        return out;
+      };
+
+      const _reply = interaction.reply.bind(interaction);
+      const _followUp = interaction.followUp.bind(interaction);
+      const _editReply = interaction.editReply.bind(interaction);
+
+      interaction.reply = (p) => _reply(injectPrefix(p));
+      interaction.followUp = (p) => _followUp(injectPrefix(p));
+      interaction.editReply = (p) => _editReply(injectPrefix(p));
+
+      // Expose score to commands that want it
+      interaction.dcbTrustRisk = score;
+      // --------------------------------------------------------
+
+      console.log(`⚡ About to execute: ${interaction.commandName} (Trust: ${score.trust}, Risk: ${score.risk})`);
       await command.execute(interaction);
       console.log(`✅ Command executed successfully: ${interaction.commandName}`);
     } catch (error) {

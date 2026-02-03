@@ -240,6 +240,29 @@ const initDb = () => {
         FOREIGN KEY(user_id) REFERENCES users(discord_id)
       )
     `);
+
+    // User stats table (fast counters for trust/risk scoring)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_stats (
+        discord_id TEXT PRIMARY KEY,
+        commands_total INTEGER DEFAULT 0,
+        commands_last_24h INTEGER DEFAULT 0,
+        last_command_at DATETIME,
+        first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Command audit table (detailed command history)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS command_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        discord_id TEXT NOT NULL,
+        guild_id TEXT,
+        command_name TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   });
 };
 
@@ -1002,6 +1025,94 @@ const deleteContest = (contestId) => {
   });
 };
 
+// ==================== TRUST/RISK STAT OPERATIONS ====================
+
+const touchUserStats = (discordId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO user_stats (discord_id, commands_total, last_command_at, first_seen_at, last_seen_at)
+       VALUES (?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(discord_id) DO UPDATE SET
+         commands_total = commands_total + 1,
+         last_command_at = CURRENT_TIMESTAMP,
+         last_seen_at = CURRENT_TIMESTAMP`,
+      [discordId],
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+};
+
+const getUserStats = (discordId) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM user_stats WHERE discord_id = ?`, [discordId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row || null);
+    });
+  });
+};
+
+const countOwnerConnectedGuilds = (discordId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT COUNT(*) as cnt FROM guild_wallets WHERE configured_by = ?`,
+      [discordId],
+      (err, row) => (err ? reject(err) : resolve(row?.cnt || 0))
+    );
+  });
+};
+
+const countUserActiveGuilds = (discordId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `
+      SELECT COUNT(*) as cnt FROM (
+        SELECT guild_id FROM task_assignments WHERE assigned_user_id = ?
+        UNION
+        SELECT guild_id FROM proof_submissions WHERE user_id = ?
+        UNION
+        SELECT guild_id FROM contest_entries WHERE user_id = ?
+      ) t
+      `,
+      [discordId, discordId, discordId],
+      (err, row) => (err ? reject(err) : resolve(row?.cnt || 0))
+    );
+  });
+};
+
+const getProofOutcomeStats = (discordId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `
+      SELECT
+        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
+        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
+        COUNT(*) as total
+      FROM proof_submissions
+      WHERE user_id = ?
+      `,
+      [discordId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve({
+          approved: row?.approved || 0,
+          rejected: row?.rejected || 0,
+          total: row?.total || 0
+        });
+      }
+    );
+  });
+};
+
+const logCommandAudit = (discordId, guildId, commandName) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO command_audit (discord_id, guild_id, command_name) VALUES (?, ?, ?)`,
+      [discordId, guildId, commandName],
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+};
+
 // Initialize database on module load
 initDb();
 
@@ -1050,5 +1161,12 @@ module.exports = {
   getContestEntries,
   removeContestEntry,
   setContestWinners,
-  deleteContest
+  deleteContest,
+  // Trust/Risk functions
+  touchUserStats,
+  getUserStats,
+  countOwnerConnectedGuilds,
+  countUserActiveGuilds,
+  getProofOutcomeStats,
+  logCommandAudit
 };
