@@ -184,7 +184,8 @@ module.exports = {
           current_entries: 0,
           reference_url: referenceUrl,
           ends_at: endsAt.toISOString(),
-          created_by: interaction.user.id
+          created_by: interaction.user.id,
+          status: 'active'
         });
 
         // Create Enter Contest button
