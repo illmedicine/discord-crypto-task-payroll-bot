@@ -227,14 +227,14 @@ module.exports = {
 
         let contestList = '';
         for (const contest of contests) {
-          const timeLeft = getTimeRemaining(contest.ends_at);
+          const endTimestamp = Math.floor(new Date(contest.ends_at).getTime() / 1000);
           const spotsLeft = contest.max_entries - contest.current_entries;
           const prizePerWinner = (contest.prize_amount / contest.num_winners).toFixed(2);
 
           contestList += `**#${contest.id}** - ${contest.title}\n`;
           contestList += `🎁 Prize: ${contest.prize_amount} ${contest.currency} (${prizePerWinner} per winner)\n`;
           contestList += `👥 Entries: ${contest.current_entries}/${contest.max_entries} | 🏆 Winners: ${contest.num_winners}\n`;
-          contestList += `⏰ Time Left: ${timeLeft}\n`;
+          contestList += `⏱️ **Ends: <t:${endTimestamp}:R>** (at <t:${endTimestamp}:t>)\n`;
           contestList += `📎 [Reference URL](${contest.reference_url})\n\n`;
         }
 
@@ -242,7 +242,7 @@ module.exports = {
           .setColor('#FFD700')
           .setTitle('🎉 Active Contests')
           .setDescription(contestList)
-          .setFooter({ text: 'Use /contest info <id> for more details' })
+          .setFooter({ text: 'Use /contest info <id> for more details • Countdowns update live!' })
           .setTimestamp();
 
         return interaction.editReply({ embeds: [embed] });
@@ -710,29 +710,51 @@ module.exports = {
 
 // Helper function to create contest embed
 function createContestEmbed(contest) {
-  const timeLeft = getTimeRemaining(contest.ends_at);
   const spotsLeft = contest.max_entries - (contest.current_entries || 0);
   const prizePerWinner = (contest.prize_amount / contest.num_winners).toFixed(2);
   const endTimestamp = Math.floor(new Date(contest.ends_at).getTime() / 1000);
+  const now = Math.floor(Date.now() / 1000);
+  const isExpired = endTimestamp <= now;
 
   const statusEmoji = contest.status === 'active' ? '🟢' : contest.status === 'ended' ? '🔴' : '⚪';
+  const status = contest.status || 'active';
+
+  // Calculate time remaining for display
+  const timeRemaining = endTimestamp - now;
+  let countdownDisplay;
+  if (isExpired || timeRemaining <= 0) {
+    countdownDisplay = '🔴 **ENDED**';
+  } else {
+    const days = Math.floor(timeRemaining / 86400);
+    const hours = Math.floor((timeRemaining % 86400) / 3600);
+    const minutes = Math.floor((timeRemaining % 3600) / 60);
+    const seconds = timeRemaining % 60;
+    
+    if (days > 0) {
+      countdownDisplay = `⏱️ **${days}d ${hours}h ${minutes}m**`;
+    } else if (hours > 0) {
+      countdownDisplay = `⏱️ **${hours}h ${minutes}m ${seconds}s**`;
+    } else {
+      countdownDisplay = `⏱️ **${minutes}m ${seconds}s**`;
+    }
+  }
 
   const embed = new EmbedBuilder()
-    .setColor(contest.status === 'active' ? '#FFD700' : '#808080')
+    .setColor(status === 'active' && !isExpired ? '#FFD700' : '#808080')
     .setTitle(`🎉 Contest #${contest.id}: ${contest.title}`)
-    .setDescription(contest.description)
+    .setDescription(`${contest.description}\n\n**⏰ TIME REMAINING: ${countdownDisplay}**\n*(Live countdown: <t:${endTimestamp}:R>)*`)
     .addFields(
       { name: '🎁 Total Prize', value: `${contest.prize_amount} ${contest.currency}`, inline: true },
       { name: '🏆 Winners', value: `${contest.num_winners}`, inline: true },
       { name: '💰 Per Winner', value: `${prizePerWinner} ${contest.currency}`, inline: true },
       { name: '👥 Entries', value: `${contest.current_entries || 0}/${contest.max_entries}`, inline: true },
       { name: '📍 Spots Left', value: `${spotsLeft}`, inline: true },
-      { name: `${statusEmoji} Status`, value: contest.status.toUpperCase(), inline: true },
+      { name: `${statusEmoji} Status`, value: status.toUpperCase(), inline: true },
       { name: '📎 Reference URL', value: `[Click to Visit](${contest.reference_url})` },
-      { name: '⏰ Ends', value: `<t:${endTimestamp}:F> (<t:${endTimestamp}:R>)` },
+      { name: '🗓️ Ends At', value: `<t:${endTimestamp}:F>` },
       { name: '👤 Created By', value: `<@${contest.created_by}>` }
     )
-    .setFooter({ text: 'Click "Enter Contest" to participate!' })
+    .setFooter({ text: 'Click "Enter Contest" to participate! • Countdown updates live ↑' })
     .setTimestamp();
 
   return embed;
