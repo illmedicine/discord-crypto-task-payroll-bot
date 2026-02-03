@@ -224,6 +224,11 @@ const initDb = () => {
       // Ignore error if column already exists
     });
 
+    // Add claimed_channel_id column if it doesn't exist (migration for existing tables)
+    db.run(`ALTER TABLE task_assignments ADD COLUMN claimed_channel_id TEXT`, (err) => {
+      // Ignore error if column already exists
+    });
+
     // Contest entries table
     db.run(`
       CREATE TABLE IF NOT EXISTS contest_entries (

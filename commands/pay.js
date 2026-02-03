@@ -167,49 +167,5 @@ module.exports = {
         content: `❌ Error: ${error.message}`
       });
     }
-
-
-      // Execute the payment from guild treasury to user
-      const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
-      const recipientPubkey = new PublicKey(targetUserData.solana_address);
-      const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
-
-      // Create transfer instruction (convert SOL to lamports)
-      const lamports = Math.floor(solAmount * 1e9);
-      const instruction = SystemProgram.transfer({
-        fromPubkey: treasuryPubkey,
-        toPubkey: recipientPubkey,
-        lamports: lamports
-      });
-
-      // Create and sign transaction
-      const transaction = new Transaction().add(instruction);
-      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
-
-      // Log transaction to database
-      await db.recordTransaction(guildId, guildWallet.wallet_address, targetUserData.solana_address, solAmount, signature);
-
-      // Send success embed
-      const successEmbed = new EmbedBuilder()
-        .setColor('#14F195')
-        .setTitle('✅ Payment Sent Successfully')
-        .addFields(
-          { name: 'Recipient', value: `${targetUser.username}\n\`${targetUserData.solana_address}\`` },
-          { name: 'Amount', value: `${solAmount.toFixed(4)} SOL${currency === 'USD' ? ` (~$${amount.toFixed(2)} USD)` : ''}` },
-          { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${signature})` },
-          { name: 'Sent By', value: interaction.user.username }
-        )
-        .setTimestamp();
-
-      return interaction.editReply({
-        embeds: [successEmbed]
-      });
-
-    } catch (error) {
-      console.error('Error processing payment:', error);
-      return interaction.editReply({
-        content: `❌ Error: ${error.message}`
-      });
-    }
   }
 };
