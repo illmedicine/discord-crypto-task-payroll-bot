@@ -1,4 +1,5 @@
 const { Client, GatewayIntentBits, Collection, REST, Routes, ActivityType, EmbedBuilder } = require('discord.js');
+const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
@@ -234,20 +235,84 @@ client.once('clientReady', async () => {
         // Calculate prize per winner
         const prizePerWinner = contest.prize_amount / numWinners;
         
-        // Distribute prizes
+        // Get the guild's treasury wallet for payouts
+        const guildWallet = await db.getGuildWallet(contest.guild_id);
+        if (!guildWallet) {
+          console.log(`[Contest] No treasury wallet configured for guild ${contest.guild_id}, skipping payments`);
+          // Still announce winners but note payment issue
+          try {
+            const channel = await client.channels.fetch(contest.channel_id);
+            if (channel) {
+              const winnerMentions = winnerIds.map(id => `<@${id}>`).join(', ');
+              const noTreasuryEmbed = new EmbedBuilder()
+                .setColor('#FFA500')
+                .setTitle(`🎉🏆 Contest #${contest.id} Winners! 🏆🎉`)
+                .setDescription(`**${contest.title}** has ended!\n\n⚠️ **Payment Issue:** No treasury wallet configured for this server. Winners have been selected but prizes could not be distributed automatically.`)
+                .addFields(
+                  { name: '🎊 Winners', value: winnerMentions || 'None' },
+                  { name: '🎁 Prize Owed', value: `${prizePerWinner.toFixed(4)} ${contest.currency} each` },
+                  { name: '⚠️ Action Required', value: 'Server admin must configure treasury with `/wallet connect` and manually pay winners.' }
+                )
+                .setTimestamp();
+              
+              await channel.send({
+                content: `🎉 **CONTEST WINNERS!** 🎉\n\nCongratulations ${winnerMentions}!`,
+                embeds: [noTreasuryEmbed]
+              });
+            }
+          } catch (e) {
+            console.log(`[Contest] Could not announce winners for contest #${contest.id}:`, e.message);
+          }
+          await db.updateContestStatus(contest.id, 'completed');
+          continue;
+        }
+        
+        // Check treasury balance
+        const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
+        const totalPrizeNeeded = prizePerWinner * numWinners;
+        
+        // Distribute prizes from GUILD TREASURY (not bot wallet)
         const paymentResults = [];
+        const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+        const botWallet = crypto.getWallet(); // Bot wallet signs, but funds come from treasury
+        const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
+        
         for (const winner of winners) {
           try {
             const userData = await db.getUser(winner.user_id);
             if (userData && userData.solana_address) {
-              // Pay winner
-              const result = await crypto.sendSol(userData.solana_address, prizePerWinner);
+              // Check if treasury has enough balance
+              if (treasuryBalance < prizePerWinner) {
+                paymentResults.push({
+                  userId: winner.user_id,
+                  success: false,
+                  reason: 'Insufficient treasury balance'
+                });
+                continue;
+              }
+              
+              // Pay winner FROM GUILD TREASURY
+              const recipientPubkey = new PublicKey(userData.solana_address);
+              const lamports = Math.floor(prizePerWinner * 1e9);
+              
+              const instruction = SystemProgram.transfer({
+                fromPubkey: treasuryPubkey,
+                toPubkey: recipientPubkey,
+                lamports: lamports
+              });
+              
+              const transaction = new Transaction().add(instruction);
+              const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+              
+              // Record transaction
+              await db.recordTransaction(contest.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, signature);
+              
               paymentResults.push({
                 userId: winner.user_id,
                 address: userData.solana_address,
                 amount: prizePerWinner,
                 success: true,
-                txHash: result.txHash
+                signature: signature
               });
             } else {
               paymentResults.push({
@@ -275,7 +340,7 @@ client.once('clientReady', async () => {
             let paymentSummary = '';
             for (const result of paymentResults) {
               if (result.success) {
-                paymentSummary += `✅ <@${result.userId}>: ${prizePerWinner.toFixed(4)} ${contest.currency} sent\n`;
+                paymentSummary += `✅ <@${result.userId}>: ${prizePerWinner.toFixed(4)} ${contest.currency} - [View TX](https://solscan.io/tx/${result.signature})\n`;
               } else {
                 paymentSummary += `❌ <@${result.userId}>: Payment failed - ${result.reason}\n`;
               }
@@ -290,6 +355,7 @@ client.once('clientReady', async () => {
                 { name: '🏆 Winners', value: `${numWinners}`, inline: true },
                 { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${contest.currency}`, inline: true },
                 { name: '📊 Total Entries', value: `${entries.length}`, inline: true },
+                { name: '🏦 Paid From', value: `Guild Treasury\n\`${guildWallet.wallet_address.slice(0, 8)}...${guildWallet.wallet_address.slice(-6)}\``, inline: true },
                 { name: '🎊 Winners', value: winnerMentions || 'None' },
                 { name: '💸 Prize Distribution', value: paymentSummary || 'Processing...' }
               )
