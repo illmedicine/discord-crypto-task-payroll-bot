@@ -193,6 +193,47 @@ const initDb = () => {
         FOREIGN KEY(enabled_by) REFERENCES users(discord_id)
       )
     `);
+
+    // Contests/Giveaways table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS contests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        prize_amount REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        num_winners INTEGER DEFAULT 1,
+        max_entries INTEGER NOT NULL,
+        current_entries INTEGER DEFAULT 0,
+        duration_hours INTEGER NOT NULL,
+        reference_url TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        ends_at DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(created_by) REFERENCES users(discord_id)
+      )
+    `);
+
+    // Contest entries table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS contest_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contest_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        screenshot_url TEXT,
+        is_winner INTEGER DEFAULT 0,
+        entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(contest_id, user_id),
+        FOREIGN KEY(contest_id) REFERENCES contests(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(user_id) REFERENCES users(discord_id)
+      )
+    `);
   });
 };
 
@@ -731,6 +772,217 @@ const getTransactionHistory = (guildId, address, limit = 50) => {
   });
 };
 
+// ==================== CONTEST OPERATIONS ====================
+
+const createContest = (guildId, channelId, title, description, prizeAmount, currency, numWinners, maxEntries, durationHours, referenceUrl, createdBy) => {
+  return new Promise((resolve, reject) => {
+    const endsAt = new Date(Date.now() + (durationHours * 60 * 60 * 1000)).toISOString();
+    console.log(`[db.createContest] Creating contest for guild ${guildId}: ${title}`);
+    db.run(
+      `INSERT INTO contests (guild_id, channel_id, title, description, prize_amount, currency, num_winners, max_entries, duration_hours, reference_url, created_by, ends_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, channelId, title, description, prizeAmount, currency, numWinners, maxEntries, durationHours, referenceUrl, createdBy, endsAt],
+      function (err) {
+        if (err) {
+          console.error(`[db.createContest] Error:`, err);
+          reject(err);
+        } else {
+          console.log(`[db.createContest] Created contest with ID: ${this.lastID}`);
+          resolve(this.lastID);
+        }
+      }
+    );
+  });
+};
+
+const getContest = (contestId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM contests WHERE id = ?`,
+      [contestId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const getActiveContests = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM contests WHERE guild_id = ? AND status = 'active' AND ends_at > datetime('now') ORDER BY ends_at ASC`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const getExpiredContests = () => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM contests WHERE status = 'active' AND ends_at <= datetime('now')`,
+      [],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const updateContestStatus = (contestId, status) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE contests SET status = ? WHERE id = ?`,
+      [status, contestId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const addContestEntry = (contestId, guildId, userId, screenshotUrl) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run(
+        `INSERT INTO contest_entries (contest_id, guild_id, user_id, screenshot_url) VALUES (?, ?, ?, ?)`,
+        [contestId, guildId, userId, screenshotUrl],
+        function (err) {
+          if (err) {
+            reject(err);
+            return;
+          }
+          const entryId = this.lastID;
+          
+          // Update current_entries count
+          db.run(
+            `UPDATE contests SET current_entries = current_entries + 1 WHERE id = ?`,
+            [contestId],
+            (updateErr) => {
+              if (updateErr) reject(updateErr);
+              else resolve(entryId);
+            }
+          );
+        }
+      );
+    });
+  });
+};
+
+const getContestEntry = (contestId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM contest_entries WHERE contest_id = ? AND user_id = ?`,
+      [contestId, userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const getContestEntries = (contestId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM contest_entries WHERE contest_id = ? ORDER BY entered_at ASC`,
+      [contestId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const removeContestEntry = (contestId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run(
+        `DELETE FROM contest_entries WHERE contest_id = ? AND user_id = ?`,
+        [contestId, userId],
+        function (err) {
+          if (err) {
+            reject(err);
+            return;
+          }
+          
+          if (this.changes > 0) {
+            // Update current_entries count
+            db.run(
+              `UPDATE contests SET current_entries = current_entries - 1 WHERE id = ?`,
+              [contestId],
+              (updateErr) => {
+                if (updateErr) reject(updateErr);
+                else resolve(true);
+              }
+            );
+          } else {
+            resolve(false);
+          }
+        }
+      );
+    });
+  });
+};
+
+const setContestWinners = (contestId, winnerUserIds) => {
+  return new Promise((resolve, reject) => {
+    const placeholders = winnerUserIds.map(() => '?').join(',');
+    db.run(
+      `UPDATE contest_entries SET is_winner = 1 WHERE contest_id = ? AND user_id IN (${placeholders})`,
+      [contestId, ...winnerUserIds],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const deleteContest = (contestId) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      
+      // Delete entries first
+      db.run(
+        `DELETE FROM contest_entries WHERE contest_id = ?`,
+        [contestId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+        }
+      );
+      
+      // Delete contest
+      db.run(
+        `DELETE FROM contests WHERE id = ?`,
+        [contestId],
+        function (err) {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+          
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) reject(commitErr);
+            else resolve(this.changes);
+          });
+        }
+      );
+    });
+  });
+};
+
 // Initialize database on module load
 initDb();
 
@@ -766,5 +1018,17 @@ module.exports = {
   getPendingTasks,
   updateTaskStatus,
   recordTransaction,
-  getTransactionHistory
+  getTransactionHistory,
+  // Contest functions
+  createContest,
+  getContest,
+  getActiveContests,
+  getExpiredContests,
+  updateContestStatus,
+  addContestEntry,
+  getContestEntry,
+  getContestEntries,
+  removeContestEntry,
+  setContestWinners,
+  deleteContest
 };

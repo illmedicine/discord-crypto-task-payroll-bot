@@ -1,14 +1,16 @@
-const { Client, GatewayIntentBits, Collection, REST, Routes, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, REST, Routes, ActivityType, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
 const crypto = require('./utils/crypto');
+const db = require('./utils/db');
 
 // Version and build info
 const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
 const BUILD_DATE = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 const LATEST_FEATURES = [
+  'NEW: /contest giveaways!',
   'Auto wallet lookup on /pay',
   '/user-wallet command',
   'USD to SOL conversion',
@@ -181,6 +183,135 @@ client.once('clientReady', async () => {
       status: 'online'
     });
   }, 30000);
+
+  // Contest end checker - runs every 30 seconds
+  console.log('🎉 Starting contest end checker...');
+  setInterval(async () => {
+    try {
+      const expiredContests = await db.getExpiredContests();
+      
+      for (const contest of expiredContests) {
+        console.log(`[Contest] Processing ended contest #${contest.id}: ${contest.title}`);
+        
+        // Mark as ended
+        await db.updateContestStatus(contest.id, 'ended');
+        
+        // Get all entries
+        const entries = await db.getContestEntries(contest.id);
+        
+        if (entries.length === 0) {
+          // No entries, just announce
+          try {
+            const channel = await client.channels.fetch(contest.channel_id);
+            if (channel) {
+              const noWinnersEmbed = new EmbedBuilder()
+                .setColor('#FF6600')
+                .setTitle(`🎉 Contest #${contest.id} Ended - No Winners`)
+                .setDescription(`**${contest.title}** has ended, but no one entered.`)
+                .addFields(
+                  { name: '🎁 Prize', value: `${contest.prize_amount} ${contest.currency}` },
+                  { name: '📊 Entries', value: '0' }
+                )
+                .setTimestamp();
+              
+              await channel.send({ embeds: [noWinnersEmbed] });
+            }
+          } catch (e) {
+            console.log(`[Contest] Could not announce no-winner result for contest #${contest.id}`);
+          }
+          continue;
+        }
+        
+        // Select random winners
+        const numWinners = Math.min(contest.num_winners, entries.length);
+        const shuffled = [...entries].sort(() => Math.random() - 0.5);
+        const winners = shuffled.slice(0, numWinners);
+        const winnerIds = winners.map(w => w.user_id);
+        
+        // Mark winners in database
+        await db.setContestWinners(contest.id, winnerIds);
+        
+        // Calculate prize per winner
+        const prizePerWinner = contest.prize_amount / numWinners;
+        
+        // Distribute prizes
+        const paymentResults = [];
+        for (const winner of winners) {
+          try {
+            const userData = await db.getUser(winner.user_id);
+            if (userData && userData.solana_address) {
+              // Pay winner
+              const result = await crypto.sendSol(userData.solana_address, prizePerWinner);
+              paymentResults.push({
+                userId: winner.user_id,
+                address: userData.solana_address,
+                amount: prizePerWinner,
+                success: true,
+                txHash: result.txHash
+              });
+            } else {
+              paymentResults.push({
+                userId: winner.user_id,
+                success: false,
+                reason: 'No wallet connected'
+              });
+            }
+          } catch (payError) {
+            console.error(`[Contest] Payment error for winner ${winner.user_id}:`, payError);
+            paymentResults.push({
+              userId: winner.user_id,
+              success: false,
+              reason: payError.message
+            });
+          }
+        }
+        
+        // Announce winners
+        try {
+          const channel = await client.channels.fetch(contest.channel_id);
+          if (channel) {
+            const winnerMentions = winnerIds.map(id => `<@${id}>`).join(', ');
+            
+            let paymentSummary = '';
+            for (const result of paymentResults) {
+              if (result.success) {
+                paymentSummary += `✅ <@${result.userId}>: ${prizePerWinner.toFixed(4)} ${contest.currency} sent\n`;
+              } else {
+                paymentSummary += `❌ <@${result.userId}>: Payment failed - ${result.reason}\n`;
+              }
+            }
+            
+            const winnersEmbed = new EmbedBuilder()
+              .setColor('#FFD700')
+              .setTitle(`🎉🏆 Contest #${contest.id} Winners Announced! 🏆🎉`)
+              .setDescription(`**${contest.title}** has ended!`)
+              .addFields(
+                { name: '🎁 Total Prize', value: `${contest.prize_amount} ${contest.currency}`, inline: true },
+                { name: '🏆 Winners', value: `${numWinners}`, inline: true },
+                { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${contest.currency}`, inline: true },
+                { name: '📊 Total Entries', value: `${entries.length}`, inline: true },
+                { name: '🎊 Winners', value: winnerMentions || 'None' },
+                { name: '💸 Prize Distribution', value: paymentSummary || 'Processing...' }
+              )
+              .setTimestamp();
+            
+            await channel.send({
+              content: `🎉 **CONTEST WINNERS!** 🎉\n\nCongratulations ${winnerMentions}!`,
+              embeds: [winnersEmbed]
+            });
+          }
+        } catch (e) {
+          console.log(`[Contest] Could not announce winners for contest #${contest.id}:`, e.message);
+        }
+        
+        // Mark as completed
+        await db.updateContestStatus(contest.id, 'completed');
+        console.log(`[Contest] Contest #${contest.id} completed with ${numWinners} winner(s)`);
+      }
+    } catch (error) {
+      console.error('[Contest] Error in contest end checker:', error);
+    }
+  }, 30000); // Check every 30 seconds
 });
 
 // Interaction handler
@@ -237,6 +368,25 @@ client.on('interactionCreate', async interaction => {
           }
         }
       }
+      return;
+    }
+    
+    // Handle contest entry button
+    if (interaction.customId.startsWith('contest_enter_')) {
+      const contestCommand = client.commands.get('contest');
+      if (contestCommand && contestCommand.handleEntryButton) {
+        try {
+          await contestCommand.handleEntryButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling contest entry button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
     }
     return;
   }
@@ -257,6 +407,25 @@ client.on('interactionCreate', async interaction => {
           }
         }
       }
+      return;
+    }
+    
+    // Handle contest entry modal
+    if (interaction.customId.startsWith('contest_entry_modal_')) {
+      const contestCommand = client.commands.get('contest');
+      if (contestCommand && contestCommand.handleEntryModal) {
+        try {
+          await contestCommand.handleEntryModal(interaction);
+        } catch (error) {
+          console.error('❌ Error handling contest entry modal:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
     }
     return;
   }
