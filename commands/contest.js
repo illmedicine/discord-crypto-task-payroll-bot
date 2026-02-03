@@ -116,6 +116,16 @@ module.exports = {
       subcommand
         .setName('rules')
         .setDescription('View contest rules and entry instructions')
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('refresh')
+        .setDescription('Refresh a contest message with updated info')
+        .addIntegerOption(option =>
+          option.setName('contest_id')
+            .setDescription('Contest ID to refresh')
+            .setRequired(true)
+        )
     ),
 
   async execute(interaction) {
@@ -196,13 +206,16 @@ module.exports = {
 
         const buttonRow = new ActionRowBuilder().addComponents(enterButton);
 
-        await interaction.editReply({
+        const reply = await interaction.editReply({
           embeds: [embed],
           components: [buttonRow]
         });
 
+        // Store the message ID for future updates/refresh
+        await db.updateContestMessageId(contestId, reply.id);
+
         // Schedule contest end (will be handled by a checker interval)
-        console.log(`[Contest] Created contest #${contestId}, ends at ${endsAt.toISOString()}`);
+        console.log(`[Contest] Created contest #${contestId}, message ${reply.id}, ends at ${endsAt.toISOString()}`);
 
       } catch (error) {
         console.error('Contest create error:', error);
@@ -500,6 +513,80 @@ module.exports = {
         .setTimestamp();
 
       return interaction.reply({ embeds: [rulesEmbed], ephemeral: false });
+    }
+
+    // ==================== REFRESH ====================
+    if (subcommand === 'refresh') {
+      await interaction.deferReply({ ephemeral: true });
+
+      try {
+        const contestId = interaction.options.getInteger('contest_id');
+        const contest = await db.getContest(contestId);
+
+        if (!contest) {
+          return interaction.editReply({
+            content: `❌ Contest #${contestId} not found.`
+          });
+        }
+
+        if (contest.guild_id !== guildId) {
+          return interaction.editReply({
+            content: '❌ This contest is not from this server.'
+          });
+        }
+
+        // Create updated embed
+        const embed = createContestEmbed(contest);
+
+        // Create Enter Contest button (only if still active)
+        let components = [];
+        if (contest.status === 'active') {
+          const enterButton = new ButtonBuilder()
+            .setCustomId(`contest_enter_${contestId}`)
+            .setLabel('🎉 Enter Contest')
+            .setStyle(ButtonStyle.Success);
+          components = [new ActionRowBuilder().addComponents(enterButton)];
+        }
+
+        // Try to edit the original message if we have the message ID
+        if (contest.message_id) {
+          try {
+            const channel = await interaction.client.channels.fetch(contest.channel_id);
+            if (channel) {
+              const message = await channel.messages.fetch(contest.message_id);
+              await message.edit({
+                embeds: [embed],
+                components: components
+              });
+              return interaction.editReply({
+                content: `✅ Contest #${contestId} message has been refreshed with updated countdown and entry count!`
+              });
+            }
+          } catch (e) {
+            console.log(`[Contest] Could not edit original message for contest #${contestId}:`, e.message);
+          }
+        }
+
+        // If we couldn't edit original, post a new one and update the stored message ID
+        const reply = await interaction.followUp({
+          embeds: [embed],
+          components: components,
+          ephemeral: false
+        });
+
+        // Update the message ID in database
+        await db.updateContestMessageId(contestId, reply.id);
+
+        return interaction.editReply({
+          content: `✅ Contest #${contestId} refreshed! (Posted as new message since original couldn't be found)`
+        });
+
+      } catch (error) {
+        console.error('Contest refresh error:', error);
+        return interaction.editReply({
+          content: `❌ Error: ${error.message}`
+        });
+      }
     }
   },
 

@@ -200,6 +200,7 @@ const initDb = () => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id TEXT NOT NULL,
         channel_id TEXT NOT NULL,
+        message_id TEXT,
         title TEXT NOT NULL,
         description TEXT,
         prize_amount REAL NOT NULL,
@@ -217,6 +218,11 @@ const initDb = () => {
         FOREIGN KEY(created_by) REFERENCES users(discord_id)
       )
     `);
+
+    // Add message_id column if it doesn't exist (migration for existing tables)
+    db.run(`ALTER TABLE contests ADD COLUMN message_id TEXT`, (err) => {
+      // Ignore error if column already exists
+    });
 
     // Contest entries table
     db.run(`
@@ -847,6 +853,19 @@ const updateContestStatus = (contestId, status) => {
   });
 };
 
+const updateContestMessageId = (contestId, messageId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE contests SET message_id = ? WHERE id = ?`,
+      [messageId, contestId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
 const addContestEntry = (contestId, guildId, userId, screenshotUrl) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
@@ -1025,6 +1044,7 @@ module.exports = {
   getActiveContests,
   getExpiredContests,
   updateContestStatus,
+  updateContestMessageId,
   addContestEntry,
   getContestEntry,
   getContestEntries,
