@@ -251,36 +251,42 @@ module.exports = {
       await interaction.deferReply({ ephemeral: true });
 
       try {
-        // Get various stats
-        const stats = await new Promise((resolve, reject) => {
-          const result = {};
-          
-          db.db.get(`SELECT COUNT(*) as count FROM guild_wallets`, [], (err, row) => {
-            result.totalGuilds = row?.count || 0;
-            
-            db.db.get(`SELECT COUNT(*) as count FROM users`, [], (err, row) => {
-              result.totalUsers = row?.count || 0;
-              
-              db.db.get(`SELECT COUNT(*) as count, SUM(amount) as total FROM transactions`, [], (err, row) => {
-                result.totalTransactions = row?.count || 0;
-                result.totalVolume = row?.total || 0;
-                
-                db.db.get(`SELECT COUNT(*) as count FROM bulk_tasks WHERE status = 'active'`, [], (err, row) => {
-                  result.activeTasks = row?.count || 0;
-                  
-                  db.db.get(`SELECT COUNT(*) as count FROM contests WHERE status = 'active'`, [], (err, row) => {
-                    result.activeContests = row?.count || 0;
-                    
-                    db.db.get(`SELECT COUNT(*) as count FROM proof_submissions WHERE status = 'pending'`, [], (err, row) => {
-                      result.pendingProofs = row?.count || 0;
-                      resolve(result);
-                    });
-                  });
-                });
-              });
+        // Helper function to run a single query as a promise
+        const getCount = (sql) => {
+          return new Promise((resolve, reject) => {
+            db.db.get(sql, [], (err, row) => {
+              if (err) reject(err);
+              else resolve(row);
             });
           });
-        });
+        };
+
+        // Get various stats in parallel
+        const [
+          guildsResult,
+          usersResult,
+          transactionsResult,
+          tasksResult,
+          contestsResult,
+          proofsResult
+        ] = await Promise.all([
+          getCount(`SELECT COUNT(*) as count FROM guild_wallets`),
+          getCount(`SELECT COUNT(*) as count FROM users`),
+          getCount(`SELECT COUNT(*) as count, SUM(amount) as total FROM transactions`),
+          getCount(`SELECT COUNT(*) as count FROM bulk_tasks WHERE status = 'active'`),
+          getCount(`SELECT COUNT(*) as count FROM contests WHERE status = 'active'`),
+          getCount(`SELECT COUNT(*) as count FROM proof_submissions WHERE status = 'pending'`)
+        ]);
+
+        const stats = {
+          totalGuilds: guildsResult?.count || 0,
+          totalUsers: usersResult?.count || 0,
+          totalTransactions: transactionsResult?.count || 0,
+          totalVolume: transactionsResult?.total || 0,
+          activeTasks: tasksResult?.count || 0,
+          activeContests: contestsResult?.count || 0,
+          pendingProofs: proofsResult?.count || 0
+        };
 
         const botWallet = crypto.getWallet();
         let botBalance = 0;
