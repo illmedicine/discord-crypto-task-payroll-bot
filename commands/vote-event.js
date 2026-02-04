@@ -176,10 +176,11 @@ module.exports = {
           });
         }
 
-        // Generate image IDs
+        // Generate image IDs with timestamp and random component to avoid duplicates
+        const timestamp = Date.now();
         const imageIds = [];
         for (let i = 0; i < images.length; i++) {
-          const imageId = `IMG-${Date.now()}-${i + 1}`;
+          const imageId = `IMG-${timestamp}-${Math.random().toString(36).substr(2, 9)}-${i + 1}`;
           imageIds.push(imageId);
           images[i].id = imageId;
         }
@@ -446,6 +447,7 @@ module.exports = {
           .setTimestamp();
 
         // Notify affected users
+        let notificationSent = false;
         if (participants.length > 0) {
           const mentions = participants.map(p => `<@${p.user_id}>`).join(', ');
           try {
@@ -455,14 +457,19 @@ module.exports = {
                 content: mentions,
                 embeds: [notificationEmbed]
               });
+              notificationSent = true;
             }
           } catch (e) {
             console.log('Could not send vote event cancellation notification:', e.message);
           }
         }
 
+        const responseMessage = notificationSent 
+          ? `✅ Vote event #${eventId} has been removed. ${participants.length} participant(s) were notified.`
+          : `✅ Vote event #${eventId} has been removed. ⚠️ Could not notify ${participants.length} participant(s) - please announce manually.`;
+        
         return interaction.editReply({
-          content: `✅ Vote event #${eventId} has been removed. ${participants.length} participant(s) were notified.`
+          content: responseMessage
         });
 
       } catch (error) {

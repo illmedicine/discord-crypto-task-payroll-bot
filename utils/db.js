@@ -1202,24 +1202,38 @@ const updateVoteEventMessageId = (voteEventId, messageId) => {
 
 const joinVoteEvent = (voteEventId, guildId, userId) => {
   return new Promise((resolve, reject) => {
-    // Increment current_participants
-    db.run(
-      `UPDATE vote_events SET current_participants = current_participants + 1 WHERE id = ?`,
-      [voteEventId],
-      (err) => {
-        if (err) return reject(err);
-        
-        // Add participant
-        db.run(
-          `INSERT INTO vote_event_participants (vote_event_id, guild_id, user_id) VALUES (?, ?, ?)`,
-          [voteEventId, guildId, userId],
-          function (err) {
-            if (err) reject(err);
-            else resolve(this.lastID);
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      
+      // Increment current_participants
+      db.run(
+        `UPDATE vote_events SET current_participants = current_participants + 1 WHERE id = ?`,
+        [voteEventId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
           }
-        );
-      }
-    );
+        }
+      );
+      
+      // Add participant
+      db.run(
+        `INSERT INTO vote_event_participants (vote_event_id, guild_id, user_id) VALUES (?, ?, ?)`,
+        [voteEventId, guildId, userId],
+        function (err) {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+          
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) reject(commitErr);
+            else resolve(this.lastID);
+          });
+        }
+      );
+    });
   });
 };
 

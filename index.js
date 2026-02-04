@@ -737,7 +737,6 @@ client.on('interactionCreate', async interaction => {
       }
       return;
     }
-    return;
   }
   
   // Handle select menu interactions
