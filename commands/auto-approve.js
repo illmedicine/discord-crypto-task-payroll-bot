@@ -79,13 +79,13 @@ module.exports = {
     const guildWallet = await db.getGuildWallet(guildId);
     if (!guildWallet) {
       return interaction.editReply({
-        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Admin:** Use `/wallet connect` to set up the treasury wallet.'
+        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` to set up the treasury wallet.'
       });
     }
 
     if (guildWallet.configured_by !== interaction.user.id) {
       return interaction.editReply({
-        content: '❌ Only the treasury owner (the person who connected the wallet) can configure auto-approve settings.'
+        content: '❌ Only the treasury owner (the Server Owner who connected the wallet) can configure auto-approve settings.'
       });
     }
 

@@ -9,7 +9,7 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('connect')
-        .setDescription('Connect server treasury wallet (only once per server)')
+        .setDescription('Connect server treasury wallet (Server Owner only, once per server)')
         .addStringOption(option =>
           option.setName('address')
             .setDescription('Server treasury Solana wallet address')
@@ -35,6 +35,14 @@ module.exports = {
     if (subcommand === 'connect') {
       await interaction.deferReply();
       try {
+        // Check if user is the server owner
+        const guild = interaction.guild;
+        if (interaction.user.id !== guild.ownerId) {
+          return interaction.editReply({
+            content: '❌ Only the **Server Owner** can connect the treasury wallet for this server.'
+          });
+        }
+
         console.error(`[WALLET] Connect: Getting existing wallet...`);
         // Check if wallet is already configured for this server
         const existingWallet = await db.getGuildWallet(guildId);
@@ -105,7 +113,7 @@ module.exports = {
         
         if (!guildWallet) {
           return interaction.editReply({
-            content: '❌ No treasury wallet configured for this server. Ask a server admin to configure one with `/wallet connect`.'
+            content: '❌ No treasury wallet configured for this server. Ask the **Server Owner** to configure one with `/wallet connect`.'
           });
         }
 

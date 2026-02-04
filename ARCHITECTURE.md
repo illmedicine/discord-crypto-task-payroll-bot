@@ -2,60 +2,95 @@
 
 ## 🏗️ System Overview
 
-DisCryptoBank operates as a **dual-wallet system** where each Discord server can have its own treasury, while users maintain personal wallets that work across all servers.
+DisCryptoBank operates as a **three-tier wallet system**:
+1. **Bot Wallet** - Centralized funding source and transaction ledger (Owner only)
+2. **Guild Treasury Wallets** - Server-specific wallets for each Discord server (Server Owner only)
+3. **User Personal Wallets** - Global wallets tied to Discord ID for receiving payments (All users)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│           DISCORD SERVER #1                              │
-├─────────────────────────────────────────────────────────┤
-│  Treasury Wallet: EYmq...                                │
-│  (Set once by admin, immutable)                         │
-│                                                          │
-│  Members:                                                │
-│  ├─ User A: Personal Wallet XYZ (on ALL servers)        │
-│  ├─ User B: Personal Wallet ABC (on ALL servers)        │
-│  └─ User C: Personal Wallet DEF (on ALL servers)        │
-└─────────────────────────────────────────────────────────┘
-         │
-         │ /pay @User A sends from Server Treasury
-         │ to User A's Personal Wallet
-         ↓
-
-┌─────────────────────────────────────────────────────────┐
-│           DISCORD SERVER #2                              │
-├─────────────────────────────────────────────────────────┤
-│  Treasury Wallet: AAAA...                                │
-│  (Different wallet for this server)                     │
-│                                                          │
-│  Members:                                                │
-│  ├─ User A: Same Personal Wallet XYZ (same everywhere)  │
-│  ├─ User D: Personal Wallet GHI (on ALL servers)        │
-│  └─ User E: Personal Wallet JKL (on ALL servers)        │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                      🤖 BOT WALLET (Central Ledger)                  │
+│  ────────────────────────────────────────────────────────────────── │
+│  • Configured via SOLANA_PRIVATE_KEY environment variable           │
+│  • Signs all transactions on behalf of guild treasuries             │
+│  • Tracks all Discord users, commands, payments, guild assignments  │
+│  • Cannot be connected to any guild - acts in background            │
+│  • Commands restricted to Bot Owner only (/bot-wallet)              │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ↓                     ↓                     ↓
+┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
+│  GUILD TREASURY 1 │ │  GUILD TREASURY 2 │ │  GUILD TREASURY 3 │
+│  (/wallet connect)│ │  (/wallet connect)│ │  (/wallet connect)│
+│  Server Owner Only│ │  Server Owner Only│ │  Server Owner Only│
+│  Immutable once   │ │  Immutable once   │ │  Immutable once   │
+│  set              │ │  set              │ │  set              │
+└───────────────────┘ └───────────────────┘ └───────────────────┘
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    👥 USER PERSONAL WALLETS                         │
+│  ────────────────────────────────────────────────────────────────── │
+│  • Connected via /user-wallet connect (once, works everywhere)      │
+│  • Tied to Discord ID - NOT per-server                              │
+│  • Used ONLY for receiving payments from tasks/contests/payouts     │
+│  • Same wallet receives payments across ALL DisCryptoBank servers   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🔐 Two-Level Wallet System
+## 🔐 Three-Level Wallet System
+
+### **Level 0: Bot Wallet** (Central Ledger)
+
+**Scope:** Global across all DisCryptoBank instances
+**Mutability:** Configured via environment variable
+**Authority:** Bot Owner only (Discord ID restricted)
+**Use Case:** Transaction signing, global ledger, audit trail
+
+```
+/bot-wallet info       # View bot wallet info
+/bot-wallet stats      # View global statistics
+/bot-wallet guilds     # View all connected guilds
+/bot-wallet users      # View all registered users
+/bot-wallet transactions # View global transaction ledger
+```
+
+**How it works:**
+1. Bot wallet is configured via `SOLANA_PRIVATE_KEY` environment variable
+2. Signs all transactions on behalf of guild treasuries
+3. Maintains complete audit trail of all DisCryptoBank activity
+4. Cannot be connected to any guild - operates globally in background
+5. Commands restricted to Bot Owner Discord ID only
+
+**Security:** Only accessible by Discord ID `1075818871149305966`
+
+---
 
 ### **Level 1: Server Treasury Wallet** (`/wallet connect`)
 
 **Scope:** Server-specific (guild)
-**Mutability:** Immutable (set once, cannot change)
-**Authority:** Server Admin only
-**Use Case:** Pool of funds for server payroll
+**Mutability:** Immutable (set once by Server Owner, cannot change)
+**Authority:** Server Owner ONLY (not just any admin)
+**Use Case:** Pool of funds for server tasks, contests, and payouts
 
 ```
 /wallet connect address:TREASURY_ADDRESS
 ```
 
 **How it works:**
-1. Server admin runs `/wallet connect` with treasury address
+1. **Server Owner** runs `/wallet connect` with treasury address
 2. System stores it permanently for that guild
 3. Any future attempt returns: "Already configured, cannot change"
 4. This wallet is the SOURCE for all `/pay` commands in that server
+5. Only the Server Owner can initially configure this wallet
 
 **Database:** Stored in `guild_wallets` table with guild_id as key
+
+**Note:** If a Server Owner has multiple guilds, they must run `/wallet connect` separately for each server.
 
 ---
 
@@ -64,7 +99,7 @@ DisCryptoBank operates as a **dual-wallet system** where each Discord server can
 **Scope:** User-global (works on ALL servers)
 **Mutability:** Mutable (can change anytime)
 **Authority:** User only
-**Use Case:** Individual receiving address for payments
+**Use Case:** Individual receiving address for payments from tasks, contests, and payouts
 
 ```
 /user-wallet connect address:PERSONAL_WALLET
@@ -72,11 +107,14 @@ DisCryptoBank operates as a **dual-wallet system** where each Discord server can
 
 **How it works:**
 1. User runs `/user-wallet connect` on ANY server with DisCryptoBank
-2. System stores their Discord ID → Solana address mapping
-3. This wallet address is the DESTINATION for all `/pay` commands
+2. System stores their Discord ID → Solana address mapping (GLOBAL)
+3. This wallet address is the DESTINATION for all payments to that user
 4. User can update with `/user-wallet update` anytime
+5. **No need to reconnect when joining new servers** - wallet follows Discord ID
 
-**Database:** Stored in `users` table with discord_id as key
+**Database:** Stored in `users` table with discord_id as key (global, not per-server)
+
+**Important:** User wallets are for RECEIVING payments only, not for issuing payments.
 
 ---
 
@@ -115,19 +153,28 @@ User A runs: /pay user:@User B amount:50 currency:USD
 
 ## 🎯 Key Rules
 
+### Bot Wallet (`/bot-wallet` command)
+- ✅ Configured via SOLANA_PRIVATE_KEY environment variable
+- ✅ Acts as centralized funding source and transaction ledger
+- ✅ Signs all transactions on behalf of guild treasuries
+- ✅ Cannot be connected to any guild - global background operation
+- ✅ Commands restricted to Bot Owner Discord ID only
+- ✅ Provides global visibility into all users, payments, guilds
+
 ### Server Treasury (`/wallet` command)
-- ✅ Set ONCE per server by admin
+- ✅ Set ONCE per server by **Server Owner only**
 - ✅ Cannot be changed after initial setup
 - ✅ Each server has its own treasury (independent)
-- ✅ Used as SOURCE for all payments in that server
-- ✅ Multiple servers = Multiple treasuries
+- ✅ Used as SOURCE for all payments in that server (tasks, contests, /pay)
+- ✅ Multiple servers = Multiple treasuries (Server Owner must connect each separately)
 
 ### User Personal Wallet (`/user-wallet` command)
 - ✅ Can be set/changed ANYTIME
-- ✅ SAME wallet on ALL servers
+- ✅ SAME wallet on ALL servers (tied to Discord ID, not per-server)
 - ✅ Used as DESTINATION for all payments to that user
 - ✅ User data is global, not per-server
-- ✅ Independent of any treasury wallet
+- ✅ No need to reconnect when joining new DisCryptoBank servers
+- ✅ For RECEIVING payments only, not issuing
 
 ### Payments (`/pay` command)
 - ✅ GUILD-SPECIFIC (only works with server members)
@@ -141,7 +188,36 @@ User A runs: /pay user:@User B amount:50 currency:USD
 
 ## 📋 Command Reference
 
-### 1. Server Treasury Setup (Admin Only)
+### 0. Bot Wallet Management (Bot Owner Only)
+
+**View bot wallet info:**
+```
+/bot-wallet info
+```
+
+**View global statistics:**
+```
+/bot-wallet stats
+```
+
+**View all connected guild treasuries:**
+```
+/bot-wallet guilds
+```
+
+**View all registered users:**
+```
+/bot-wallet users
+```
+
+**View global transaction ledger:**
+```
+/bot-wallet transactions
+```
+
+---
+
+### 1. Server Treasury Setup (Server Owner Only)
 
 **Configure treasury wallet for server (one-time):**
 ```
@@ -195,27 +271,38 @@ User A runs: /pay user:@User B amount:50 currency:USD
 
 ## 🔄 Data Model
 
+### Bot Wallet Configuration
+```
+Environment Variable: SOLANA_PRIVATE_KEY
+- Used to derive bot's public key and sign transactions
+- Single centralized wallet for all DisCryptoBank operations
+- Not stored in database (environment-based)
+```
+**Key:** Global bot wallet, configurable only via environment
+
 ### Users Table
 ```sql
 users {
-  discord_id: "123456789",      -- User's Discord ID
+  discord_id: "123456789",      -- User's Discord ID (GLOBAL KEY)
   username: "username",          -- Discord username
-  solana_address: "9B5X6E...",   -- Personal wallet (GLOBAL)
+  solana_address: "9B5X6E...",   -- Personal wallet (GLOBAL across all servers)
   created_at: timestamp
 }
 ```
-**Key:** Global per user, independent of servers
+**Key:** Global per user, independent of servers - wallet follows Discord ID everywhere
 
 ### Guild Wallets Table
 ```sql
 guild_wallets {
   guild_id: "987654321",         -- Discord Server ID
-  wallet_address: "EYmq...",     -- Treasury wallet (IMMUTABLE)
+  wallet_address: "EYmq...",     -- Treasury wallet (IMMUTABLE after setup)
   configured_at: timestamp,
-  configured_by: "admin_user_id"
+  configured_by: "owner_user_id" -- Server Owner who configured it
 }
 ```
-**Key:** One per server, never changes
+**Key:** One per server, set by Server Owner only, never changes after initial configuration
+
+**Note:** Guild treasury wallets remain in database for organizational tracking but the Bot Wallet (via SOLANA_PRIVATE_KEY) is the centralized funding source that signs all transactions.
 
 ### Transactions Table
 ```sql
@@ -253,21 +340,26 @@ transactions {
 | "Can only use in Discord server" | Command in DM | Use in a server |
 | "Not a member of this server" | User not in guild | Add user to server |
 | "Cannot pay bots" | Target is a bot | Select real user |
-| "Treasury not configured" | Admin hasn't run /wallet connect | Admin runs /wallet connect |
+| "Treasury not configured" | Server Owner hasn't run /wallet connect | Server Owner runs /wallet connect |
 | "Insufficient treasury balance" | Not enough SOL in treasury | Fund the treasury |
-| "Wallet Not Connected" | User hasn't run /user-wallet connect | User runs /user-wallet connect |
+| "Wallet Not Connected" | User hasn't run /user-wallet connect | User runs /user-wallet connect (once, works everywhere) |
 | "Invalid wallet address" | Address format error | User runs /user-wallet connect with valid address |
+| "Only Server Owner can connect" | Non-owner tried /wallet connect | Server Owner must configure treasury |
+| "Bot wallet commands restricted" | Non-owner tried /bot-wallet | Only Bot Owner can use these commands |
 
 ---
 
 ## 🔐 Security Features
 
+- ✅ **Bot Wallet commands** restricted to Bot Owner Discord ID only
+- ✅ **Treasury wallet** can only be configured by **Server Owner** (not just any admin)
 - ✅ Treasury wallet is **immutable** (cannot be changed after setup)
 - ✅ Users can only update their **own** personal wallet
 - ✅ Payments only work within the **same server**
-- ✅ Bot signs transactions but doesn't control funds
+- ✅ Bot signs transactions but provides audit trail
 - ✅ All transactions logged to database with signatures
-- ✅ Treasury and personal wallets are **completely separate**
+- ✅ User wallets are **global** (no need to reconnect per server)
+- ✅ Three-tier separation: Bot Wallet ↔ Guild Treasury ↔ User Wallet
 
 ---
 
@@ -276,11 +368,13 @@ transactions {
 ### Setup Phase
 ```
 Server: "Tech Community"
-Admin Alice: /wallet connect address:EYmq... ✅
+Server Owner Alice: /wallet connect address:EYmq... ✅
   → Treasury: EYmq... (locked forever on Tech Community)
+  → Only Alice (Server Owner) could run this command
 
 User Bob: /user-wallet connect address:9B5X6E... ✅
   → Bob's wallet: 9B5X6E... (works on ALL servers)
+  → Bob never needs to run this command again on any server
 
 User Carol: /user-wallet connect address:XYZ123... ✅
   → Carol's wallet: XYZ123... (works on ALL servers)
@@ -292,6 +386,7 @@ Alice runs: /pay user:@Bob amount:100 currency:USD ✅
   → Sends from EYmq... (Tech Community Treasury)
   → Sends to 9B5X6E... (Bob's Personal Wallet)
   → Recorded to database with TX signature
+  → Bot wallet signs the transaction
 
 Bob runs: /pay user:@Carol amount:50 currency:SOL ✅
   → Sends from EYmq... (Tech Community Treasury)
@@ -302,15 +397,17 @@ Bob runs: /pay user:@Carol amount:50 currency:SOL ✅
 ### Multi-Server Scenario
 ```
 User Bob joins "Gaming Guild" server
-Admin Dave: /wallet connect address:AAAA... ✅
+Server Owner Dave: /wallet connect address:AAAA... ✅
   → Treasury: AAAA... (locked on Gaming Guild)
+  → Dave must configure this separately (one per server)
 
 Dave runs: /pay user:@Bob amount:25 currency:SOL ✅
   → Sends from AAAA... (Gaming Guild Treasury)
   → Sends to 9B5X6E... (Bob's SAME Personal Wallet)
   
 Note: Bob's wallet address (9B5X6E...) is the SAME
-even though treasuries are different!
+because user wallets are tied to Discord ID, not servers!
+Bob did NOT need to run /user-wallet connect again.
 ```
 
 ---
@@ -328,6 +425,13 @@ All changes auto-deploy on `git push`:
 
 ---
 
-**Version:** 2.1.0
-**Last Updated:** Jan 29, 2026
+**Version:** 3.0.0
+**Last Updated:** Feb 04, 2026
 **Status:** ✅ Production Ready
+
+## Changelog v3.0.0
+- Added three-tier wallet system (Bot Wallet, Guild Treasury, User Wallet)
+- Bot Wallet commands restricted to Bot Owner Discord ID only
+- Guild Treasury wallet connection restricted to Server Owner only
+- User wallets are now explicitly documented as global (tied to Discord ID)
+- Added `/bot-wallet` command with info, stats, guilds, users, transactions subcommands
