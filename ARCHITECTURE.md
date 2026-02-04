@@ -2,13 +2,13 @@
 
 ## 🏗️ System Overview
 
-DisCryptoBank operates as a **dual-wallet system** where each Discord server can have its own treasury, while users maintain personal wallets that work across all servers.
+DisCryptoBank operates as a **bot-wallet-funded system** where the bot's wallet funds all transactions. Each Discord server can register a treasury wallet for tracking purposes, but all actual payments are funded and signed by the bot's central wallet.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │           DISCORD SERVER #1                              │
 ├─────────────────────────────────────────────────────────┤
-│  Treasury Wallet: EYmq...                                │
+│  Treasury Wallet: EYmq... (tracking only)               │
 │  (Set once by admin, immutable)                         │
 │                                                          │
 │  Members:                                                │
@@ -17,14 +17,19 @@ DisCryptoBank operates as a **dual-wallet system** where each Discord server can
 │  └─ User C: Personal Wallet DEF (on ALL servers)        │
 └─────────────────────────────────────────────────────────┘
          │
-         │ /pay @User A sends from Server Treasury
+         │ /pay @User A sends from Bot Wallet
          │ to User A's Personal Wallet
          ↓
+         
+┌─────────────────────────────────────────────────────────┐
+│              BOT CENTRAL WALLET                          │
+│  (Funds and signs all transactions)                     │
+└─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
 │           DISCORD SERVER #2                              │
 ├─────────────────────────────────────────────────────────┤
-│  Treasury Wallet: AAAA...                                │
+│  Treasury Wallet: AAAA... (tracking only)               │
 │  (Different wallet for this server)                     │
 │                                                          │
 │  Members:                                                │
@@ -36,14 +41,26 @@ DisCryptoBank operates as a **dual-wallet system** where each Discord server can
 
 ---
 
-## 🔐 Two-Level Wallet System
+## 🔐 Wallet System
+
+### **Bot Wallet** (Central Funding Source)
+
+**Scope:** System-wide
+**Purpose:** Funds and signs ALL transactions
+**Configuration:** Set via SOLANA_PRIVATE_KEY environment variable
+**Use Case:** Centralized funding for all server payments
+
+The bot wallet is the actual source and signer for all Solana transactions. It must have sufficient SOL balance to cover:
+- Payment amounts
+- Transaction fees (~0.000005 SOL per transaction)
+- Rent-exempt minimums for account creation
 
 ### **Level 1: Server Treasury Wallet** (`/wallet connect`)
 
 **Scope:** Server-specific (guild)
 **Mutability:** Immutable (set once, cannot change)
 **Authority:** Server Admin only
-**Use Case:** Pool of funds for server payroll
+**Use Case:** Tracking and organizational purposes (not used for actual transactions)
 
 ```
 /wallet connect address:TREASURY_ADDRESS
@@ -53,7 +70,8 @@ DisCryptoBank operates as a **dual-wallet system** where each Discord server can
 1. Server admin runs `/wallet connect` with treasury address
 2. System stores it permanently for that guild
 3. Any future attempt returns: "Already configured, cannot change"
-4. This wallet is the SOURCE for all `/pay` commands in that server
+4. This wallet is used for TRACKING purposes only in database records
+5. Actual payments are funded by the bot wallet
 
 **Database:** Stored in `guild_wallets` table with guild_id as key
 
@@ -91,22 +109,27 @@ User A runs: /pay user:@User B amount:50 currency:USD
    - Is this a Discord server? (not DM)
    - Is @User B a member of THIS server?
 
-2. ✅ Check Treasury Wallet
+2. ✅ Check Treasury Configuration
    - Does this server have treasury configured?
-   - Does treasury have enough SOL?
+   - (Treasury is for tracking only)
 
-3. ✅ Check Personal Wallet
+3. ✅ Check Bot Wallet Balance
+   - Does bot wallet have enough SOL?
+   - Including transaction fees
+
+4. ✅ Check Personal Wallet
    - Has User B connected personal wallet?
    - Is wallet address valid?
 
-4. ✅ Execute Transaction
-   - FROM: Server Treasury (guild wallet)
+5. ✅ Execute Transaction
+   - FROM: Bot Wallet (signs and funds)
    - TO: User B's Personal Wallet
    - AMOUNT: Converted to SOL
+   - FEES: Paid by bot wallet
    - SIGNATURE: Logged to database
 
-5. ✅ Send Confirmation
-   - Shows source (treasury)
+6. ✅ Send Confirmation
+   - Shows source (bot wallet via server)
    - Shows destination (user)
    - Shows amount and explorer link
 ```
@@ -119,8 +142,16 @@ User A runs: /pay user:@User B amount:50 currency:USD
 - ✅ Set ONCE per server by admin
 - ✅ Cannot be changed after initial setup
 - ✅ Each server has its own treasury (independent)
-- ✅ Used as SOURCE for all payments in that server
-- ✅ Multiple servers = Multiple treasuries
+- ✅ Used for TRACKING purposes in database records
+- ⚠️  NOT used as actual funding source (bot wallet funds all transactions)
+- ✅ Multiple servers = Multiple treasury records
+
+### Bot Wallet (System Configuration)
+- ✅ Configured via SOLANA_PRIVATE_KEY environment variable
+- ✅ Funds ALL transactions across ALL servers
+- ✅ Must maintain sufficient SOL balance
+- ✅ Signs all transaction instructions
+- ⚠️  Critical: Keep private key secure
 
 ### User Personal Wallet (`/user-wallet` command)
 - ✅ Can be set/changed ANYTIME
@@ -131,11 +162,11 @@ User A runs: /pay user:@User B amount:50 currency:USD
 
 ### Payments (`/pay` command)
 - ✅ GUILD-SPECIFIC (only works with server members)
-- ✅ Sends FROM server treasury, TO user personal wallet
+- ✅ Funded by bot wallet, attributed to server
 - ✅ User must be server member
 - ✅ Cannot pay users outside the server
 - ✅ Cannot pay bots
-- ✅ Treasury must have sufficient balance
+- ✅ Bot wallet must have sufficient balance
 
 ---
 
@@ -222,14 +253,14 @@ guild_wallets {
 transactions {
   id: auto,
   guild_id: "987654321",         -- Which server
-  from_address: "EYmq...",       -- Treasury
+  from_address: "Bot_Wallet...", -- Bot wallet (actual source)
   to_address: "9B5X6E...",       -- User wallet
   amount: 1.5,                   -- SOL amount
   signature: "abc123...",        -- Tx signature
   created_at: timestamp
 }
 ```
-**Key:** Records all transactions per server
+**Key:** Records all transactions per server, from_address is bot wallet
 
 ---
 
@@ -240,13 +271,22 @@ transactions {
 - [ ] Command run in a Discord server (not DM)
 - [ ] Target @mention is a member of current server
 - [ ] Target user is not a bot
-- [ ] Server has treasury wallet configured
-- [ ] Treasury wallet has sufficient SOL balance
+- [ ] Server has treasury wallet configured (for tracking)
+- [ ] Bot wallet has sufficient SOL balance
 - [ ] Target user has personal wallet connected
 - [ ] Target user's wallet address is valid
-- [ ] Bot has authority to sign transactions
+- [ ] Bot has authority to sign transactions (private key configured)
 
 ### Error Messages
+
+**Enhanced error handling includes:**
+- ✅ Signature verification errors caught and explained
+- ✅ Insufficient funds errors provide clear guidance
+- ✅ Transaction simulation failures logged with details
+- ✅ Transaction logs captured for debugging (SendTransactionError.getLogs())
+- ✅ User-friendly error messages for common issues
+- ✅ Proper transaction retry logic (maxRetries: 3)
+- ✅ Transaction blockhash and fee payer properly configured
 
 | Error | Cause | Solution |
 |-------|-------|----------|

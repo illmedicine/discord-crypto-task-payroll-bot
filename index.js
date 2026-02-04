@@ -268,45 +268,63 @@ client.once('clientReady', async () => {
           continue;
         }
         
-        // Check treasury balance
-        const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
+        // Check bot wallet balance
+        const botWallet = crypto.getWallet();
+        if (!botWallet) {
+          console.error(`[Contest] Bot wallet not configured for contest ${contestId}`);
+          return;
+        }
+        
+        const botBalance = await crypto.getBalance(botWallet.publicKey.toString());
         const totalPrizeNeeded = prizePerWinner * numWinners;
         
-        // Distribute prizes from GUILD TREASURY (not bot wallet)
+        if (botBalance < totalPrizeNeeded) {
+          console.error(`[Contest] Insufficient bot wallet balance. Need ${totalPrizeNeeded} SOL, have ${botBalance} SOL`);
+        }
+        
+        // Distribute prizes from BOT WALLET
         const paymentResults = [];
         const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
-        const botWallet = crypto.getWallet(); // Bot wallet signs, but funds come from treasury
-        const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
         
         for (const winner of winners) {
           try {
             const userData = await db.getUser(winner.user_id);
             if (userData && userData.solana_address) {
-              // Check if treasury has enough balance
-              if (treasuryBalance < prizePerWinner) {
+              // Check if bot wallet has enough balance
+              const currentBotBalance = await crypto.getBalance(botWallet.publicKey.toString());
+              if (currentBotBalance < prizePerWinner) {
                 paymentResults.push({
                   userId: winner.user_id,
                   success: false,
-                  reason: 'Insufficient treasury balance'
+                  reason: 'Insufficient bot wallet balance'
                 });
                 continue;
               }
               
-              // Pay winner FROM GUILD TREASURY
+              // Pay winner FROM BOT WALLET
               const recipientPubkey = new PublicKey(userData.solana_address);
               const lamports = Math.floor(prizePerWinner * 1e9);
               
               const instruction = SystemProgram.transfer({
-                fromPubkey: treasuryPubkey,
+                fromPubkey: botWallet.publicKey,
                 toPubkey: recipientPubkey,
                 lamports: lamports
               });
               
               const transaction = new Transaction().add(instruction);
-              const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+              
+              // Get latest blockhash
+              const { blockhash } = await connection.getLatestBlockhash('confirmed');
+              transaction.recentBlockhash = blockhash;
+              transaction.feePayer = botWallet.publicKey;
+              
+              const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet], {
+                commitment: 'confirmed',
+                maxRetries: 3
+              });
               
               // Record transaction
-              await db.recordTransaction(contest.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, signature);
+              await db.recordTransaction(contest.guild_id, botWallet.publicKey.toString(), userData.solana_address, prizePerWinner, signature);
               
               paymentResults.push({
                 userId: winner.user_id,
@@ -324,10 +342,23 @@ client.once('clientReady', async () => {
             }
           } catch (payError) {
             console.error(`[Contest] Payment error for winner ${winner.user_id}:`, payError);
+            
+            // Enhanced error logging
+            if (payError.logs && Array.isArray(payError.logs)) {
+              console.error(`[Contest] Transaction logs:`, payError.logs);
+            }
+            
+            let errorReason = payError.message;
+            if (errorReason.includes('insufficient funds')) {
+              errorReason = 'Insufficient funds for payment and fees';
+            } else if (errorReason.toLowerCase().includes('signature verification')) {
+              errorReason = 'Signature verification error';
+            }
+            
             paymentResults.push({
               userId: winner.user_id,
               success: false,
-              reason: payError.message
+              reason: errorReason
             });
           }
         }
