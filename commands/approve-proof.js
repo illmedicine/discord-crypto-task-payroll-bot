@@ -152,32 +152,40 @@ module.exports = {
                 }
 
                 if (!paymentError) {
-                  // Check treasury balance
-                  const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
-                  if (treasuryBalance < solAmount) {
-                    paymentError = `Insufficient treasury balance (${treasuryBalance.toFixed(4)} SOL)`;
+                  // Execute payment
+                  const botWallet = crypto.getWallet();
+                  if (!botWallet) {
+                    paymentError = 'Bot wallet not configured';
                   } else {
-                    // Execute payment
-                    const botWallet = crypto.getWallet();
-                    if (!botWallet) {
-                      paymentError = 'Bot wallet not configured';
+                    // Check bot wallet balance
+                    const botBalance = await crypto.getBalance(botWallet.publicKey.toString());
+                    if (botBalance < solAmount) {
+                      paymentError = `Insufficient bot wallet balance (${botBalance.toFixed(4)} SOL)`;
                     } else {
                       const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
                       const recipientPubkey = new PublicKey(userData.solana_address);
-                      const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
 
                       const lamports = Math.floor(solAmount * 1e9);
                       const instruction = SystemProgram.transfer({
-                        fromPubkey: treasuryPubkey,
+                        fromPubkey: botWallet.publicKey,
                         toPubkey: recipientPubkey,
                         lamports: lamports
                       });
 
                       const transaction = new Transaction().add(instruction);
-                      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+                      
+                      // Get latest blockhash for the transaction
+                      const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                      transaction.recentBlockhash = blockhash;
+                      transaction.feePayer = botWallet.publicKey;
+                      
+                      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet], {
+                        commitment: 'confirmed',
+                        maxRetries: 3
+                      });
 
                       // Log transaction
-                      await db.recordTransaction(guildId, guildWallet.wallet_address, userData.solana_address, solAmount, signature);
+                      await db.recordTransaction(guildId, botWallet.publicKey.toString(), userData.solana_address, solAmount, signature);
 
                       paymentInfo = {
                         amount: solAmount,
@@ -194,7 +202,22 @@ module.exports = {
           }
         } catch (error) {
           console.error('Payment error:', error);
-          paymentError = error.message;
+          
+          // Enhanced error handling
+          let errorMsg = error.message;
+          if (error.logs && Array.isArray(error.logs)) {
+            console.error('Transaction logs:', error.logs);
+          }
+          
+          if (errorMsg.includes('insufficient funds') || errorMsg.includes('Insufficient funds')) {
+            paymentError = 'Insufficient bot wallet funds for payment and fees';
+          } else if (errorMsg.includes('signature verification failed')) {
+            paymentError = 'Signature verification error';
+          } else if (errorMsg.includes('simulation failed')) {
+            paymentError = `Transaction simulation failed: ${errorMsg}`;
+          } else {
+            paymentError = errorMsg;
+          }
         }
       }
 

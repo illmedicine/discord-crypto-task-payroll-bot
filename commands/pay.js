@@ -72,19 +72,11 @@ module.exports = {
         solAmount = amount / solPrice;
       }
 
-      // Get guild's treasury wallet
+      // Get guild's treasury wallet (for display purposes)
       const guildWallet = await db.getGuildWallet(guildId);
       if (!guildWallet) {
         return interaction.editReply({
           content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Admin:** Use `/wallet connect` to set up the treasury wallet.'
-        });
-      }
-
-      // Check guild treasury balance
-      const treasuryBalance = await crypto.getBalance(guildWallet.wallet_address);
-      if (treasuryBalance < solAmount) {
-        return interaction.editReply({
-          content: `❌ Insufficient treasury balance. Current: ${treasuryBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL`
         });
       }
 
@@ -114,8 +106,7 @@ module.exports = {
         });
       }
 
-      // Get the bot's wallet which will sign the transaction
-      // (the bot sends on behalf of the guild treasury)
+      // Get the bot's wallet which will sign and fund the transaction
       const botWallet = crypto.getWallet();
       if (!botWallet) {
         return interaction.editReply({
@@ -123,32 +114,48 @@ module.exports = {
         });
       }
 
-      // Execute the payment from guild treasury to user
+      // Check bot wallet has sufficient balance for the payment
+      const botBalance = await crypto.getBalance(botWallet.publicKey.toString());
+      if (botBalance < solAmount) {
+        return interaction.editReply({
+          content: `❌ Insufficient bot wallet balance. Current: ${botBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL`
+        });
+      }
+
+      // Execute the payment from bot wallet to user
       const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
       const recipientPubkey = new PublicKey(targetUserData.solana_address);
-      const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
 
       // Create transfer instruction (convert SOL to lamports)
       const lamports = Math.floor(solAmount * 1e9);
       const instruction = SystemProgram.transfer({
-        fromPubkey: treasuryPubkey,
+        fromPubkey: botWallet.publicKey,
         toPubkey: recipientPubkey,
         lamports: lamports
       });
 
       // Create and sign transaction
       const transaction = new Transaction().add(instruction);
-      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet]);
+      
+      // Get latest blockhash for the transaction
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = botWallet.publicKey;
+      
+      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet], {
+        commitment: 'confirmed',
+        maxRetries: 3
+      });
 
       // Log transaction to database
-      await db.recordTransaction(guildId, guildWallet.wallet_address, targetUserData.solana_address, solAmount, signature);
+      await db.recordTransaction(guildId, botWallet.publicKey.toString(), targetUserData.solana_address, solAmount, signature);
 
       // Send success embed
       const successEmbed = new EmbedBuilder()
         .setColor('#14F195')
         .setTitle('✅ Payment Sent Successfully')
         .addFields(
-          { name: 'From', value: `Server Treasury\n\`${guildWallet.wallet_address}\`` },
+          { name: 'From', value: `Bot Treasury (via Server)\n\`${botWallet.publicKey.toString()}\`` },
           { name: 'To', value: `${targetUser.username}\n\`${targetUserData.solana_address}\`` },
           { name: 'Amount', value: `${solAmount.toFixed(4)} SOL${currency === 'USD' ? ` (~$${amount.toFixed(2)} USD)` : ''}` },
           { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${signature})` },
@@ -163,8 +170,27 @@ module.exports = {
 
     } catch (error) {
       console.error('Error processing payment:', error);
+      
+      // Enhanced error handling for Solana-specific errors
+      let errorMessage = error.message;
+      
+      // Check if this is a SendTransactionError with logs
+      if (error.logs && Array.isArray(error.logs)) {
+        console.error('Transaction logs:', error.logs);
+        errorMessage += '\n\n**Transaction Logs:**\n' + error.logs.slice(0, 5).join('\n');
+      }
+      
+      // Handle specific error types
+      if (errorMessage.includes('insufficient funds') || errorMessage.includes('Insufficient funds')) {
+        errorMessage = '❌ Transaction failed: Insufficient funds. The bot wallet needs more SOL to process this payment and cover transaction fees.';
+      } else if (errorMessage.includes('signature verification failed') || errorMessage.includes('Signature verification')) {
+        errorMessage = '❌ Transaction failed: Signature verification error. Please try again or contact support.';
+      } else if (errorMessage.includes('simulation failed')) {
+        errorMessage = `❌ Transaction simulation failed: ${errorMessage}\n\nThis usually means there's an issue with the account state or insufficient rent. Please ensure the bot wallet has enough SOL.`;
+      }
+      
       return interaction.editReply({
-        content: `❌ Error: ${error.message}`
+        content: errorMessage
       });
     }
   }
