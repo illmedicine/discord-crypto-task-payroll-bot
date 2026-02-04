@@ -67,10 +67,11 @@ module.exports = {
       // Public reply - visible to all users in the channel
       await interaction.deferReply({ ephemeral: false });
       try {
-        // Check if user has permission (must have manage_guild or be approved role)
-        if (!interaction.member.permissions.has('ManageGuild')) {
+        // Check permissions - must be server owner
+        const guild = await interaction.guild.fetch();
+        if (interaction.user.id !== guild.ownerId) {
           return interaction.editReply({
-            content: '❌ Only server administrators can create bulk tasks.'
+            content: '❌ Only the server owner can create bulk tasks.'
           });
         }
 
