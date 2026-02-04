@@ -85,8 +85,7 @@ DisCryptoBank operates as a **three-tier wallet system**:
 1. **Server Owner** runs `/wallet connect` with treasury address
 2. System stores it permanently for that guild
 3. Any future attempt returns: "Already configured, cannot change"
-4. This wallet is the SOURCE for all `/pay` commands in that server
-5. Only the Server Owner can initially configure this wallet
+6. Actual payments are funded by this wallet
 
 **Database:** Stored in `guild_wallets` table with guild_id as key
 
@@ -129,22 +128,27 @@ User A runs: /pay user:@User B amount:50 currency:USD
    - Is this a Discord server? (not DM)
    - Is @User B a member of THIS server?
 
-2. ✅ Check Treasury Wallet
+2. ✅ Check Treasury Configuration
    - Does this server have treasury configured?
-   - Does treasury have enough SOL?
+   - (Treasury is for tracking only)
 
-3. ✅ Check Personal Wallet
+3. ✅ Check Bot Wallet Balance
+   - Does bot wallet have enough SOL?
+   - Including transaction fees
+
+4. ✅ Check Personal Wallet
    - Has User B connected personal wallet?
    - Is wallet address valid?
 
-4. ✅ Execute Transaction
-   - FROM: Server Treasury (guild wallet)
+5. ✅ Execute Transaction
+   - FROM: Bot Wallet (signs and funds)
    - TO: User B's Personal Wallet
    - AMOUNT: Converted to SOL
+   - FEES: Paid by bot wallet
    - SIGNATURE: Logged to database
 
-5. ✅ Send Confirmation
-   - Shows source (treasury)
+6. ✅ Send Confirmation
+   - Shows source (bot wallet via server)
    - Shows destination (user)
    - Shows amount and explorer link
 ```
@@ -165,8 +169,16 @@ User A runs: /pay user:@User B amount:50 currency:USD
 - ✅ Set ONCE per server by **Server Owner only**
 - ✅ Cannot be changed after initial setup
 - ✅ Each server has its own treasury (independent)
-- ✅ Used as SOURCE for all payments in that server (tasks, contests, /pay)
-- ✅ Multiple servers = Multiple treasuries (Server Owner must connect each separately)
+- ✅ Used for TRACKING purposes in database records
+- ⚠️  Guild treasury wallet is used as actual funding source (bot wallet funds all transactions)
+- ✅ Multiple servers = Multiple treasury records
+
+### Bot Wallet (System Configuration)
+- ✅ Configured via SOLANA_PRIVATE_KEY environment variable
+- ✅ Monitors ALL transactions across ALL servers
+- ✅  SOL balance is irrelevant for bot wallet because all payouts are done from Guild Treasury Wallet
+- ✅ Signs all transaction instructions
+- ⚠️  Critical: Keep private key secure
 
 ### User Personal Wallet (`/user-wallet` command)
 - ✅ Can be set/changed ANYTIME
@@ -178,11 +190,11 @@ User A runs: /pay user:@User B amount:50 currency:USD
 
 ### Payments (`/pay` command)
 - ✅ GUILD-SPECIFIC (only works with server members)
-- ✅ Sends FROM server treasury, TO user personal wallet
+- ✅ Funded by bot wallet, attributed to server
 - ✅ User must be server member
 - ✅ Cannot pay users outside the server
 - ✅ Cannot pay bots
-- ✅ Treasury must have sufficient balance
+- ✅ Guild Treasury Wallet must have sufficient balance
 
 ---
 
@@ -309,14 +321,14 @@ guild_wallets {
 transactions {
   id: auto,
   guild_id: "987654321",         -- Which server
-  from_address: "EYmq...",       -- Treasury
+  from_address: "Bot_Wallet...", -- Bot wallet (actual source)
   to_address: "9B5X6E...",       -- User wallet
   amount: 1.5,                   -- SOL amount
   signature: "abc123...",        -- Tx signature
   created_at: timestamp
 }
 ```
-**Key:** Records all transactions per server
+**Key:** Records all transactions per server, from_address is bot wallet
 
 ---
 
@@ -327,13 +339,22 @@ transactions {
 - [ ] Command run in a Discord server (not DM)
 - [ ] Target @mention is a member of current server
 - [ ] Target user is not a bot
-- [ ] Server has treasury wallet configured
-- [ ] Treasury wallet has sufficient SOL balance
+- [ ] Server has treasury wallet configured (for tracking)
+- [ ] Bot wallet has sufficient SOL balance
 - [ ] Target user has personal wallet connected
 - [ ] Target user's wallet address is valid
-- [ ] Bot has authority to sign transactions
+- [ ] Bot has authority to sign transactions (private key configured)
 
 ### Error Messages
+
+**Enhanced error handling includes:**
+- ✅ Signature verification errors caught and explained
+- ✅ Insufficient funds errors provide clear guidance
+- ✅ Transaction simulation failures logged with details
+- ✅ Transaction logs captured for debugging (SendTransactionError.getLogs())
+- ✅ User-friendly error messages for common issues
+- ✅ Proper transaction retry logic (maxRetries: 3)
+- ✅ Transaction blockhash and fee payer properly configured
 
 | Error | Cause | Solution |
 |-------|-------|----------|
