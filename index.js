@@ -351,7 +351,7 @@ client.once('clientReady', async () => {
             let errorReason = payError.message;
             if (errorReason.includes('insufficient funds')) {
               errorReason = 'Insufficient funds for payment and fees';
-            } else if (errorReason.includes('signature verification')) {
+            } else if (errorReason.toLowerCase().includes('signature verification')) {
               errorReason = 'Signature verification error';
             }
             

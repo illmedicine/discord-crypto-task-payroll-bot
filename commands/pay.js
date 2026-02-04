@@ -138,7 +138,7 @@ module.exports = {
       const transaction = new Transaction().add(instruction);
       
       // Get latest blockhash for the transaction
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      const { blockhash } = await connection.getLatestBlockhash('confirmed');
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = botWallet.publicKey;
       
@@ -155,7 +155,7 @@ module.exports = {
         .setColor('#14F195')
         .setTitle('✅ Payment Sent Successfully')
         .addFields(
-          { name: 'From', value: `Bot Treasury (via Server)\n\`${botWallet.publicKey.toString()}\`` },
+          { name: 'From', value: `Bot Wallet\n\`${botWallet.publicKey.toString()}\`` },
           { name: 'To', value: `${targetUser.username}\n\`${targetUserData.solana_address}\`` },
           { name: 'Amount', value: `${solAmount.toFixed(4)} SOL${currency === 'USD' ? ` (~$${amount.toFixed(2)} USD)` : ''}` },
           { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${signature})` },
@@ -183,7 +183,7 @@ module.exports = {
       // Handle specific error types
       if (errorMessage.includes('insufficient funds') || errorMessage.includes('Insufficient funds')) {
         errorMessage = '❌ Transaction failed: Insufficient funds. The bot wallet needs more SOL to process this payment and cover transaction fees.';
-      } else if (errorMessage.includes('signature verification failed') || errorMessage.includes('Signature verification')) {
+      } else if (errorMessage.toLowerCase().includes('signature verification')) {
         errorMessage = '❌ Transaction failed: Signature verification error. Please try again or contact support.';
       } else if (errorMessage.includes('simulation failed')) {
         errorMessage = `❌ Transaction simulation failed: ${errorMessage}\n\nThis usually means there's an issue with the account state or insufficient rent. Please ensure the bot wallet has enough SOL.`;

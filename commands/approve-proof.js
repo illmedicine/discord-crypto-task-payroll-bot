@@ -209,9 +209,9 @@ module.exports = {
             console.error('Transaction logs:', error.logs);
           }
           
-          if (errorMsg.includes('insufficient funds') || errorMsg.includes('Insufficient funds')) {
+          if (errorMsg.includes('insufficient funds')) {
             paymentError = 'Insufficient bot wallet funds for payment and fees';
-          } else if (errorMsg.includes('signature verification failed')) {
+          } else if (errorMsg.toLowerCase().includes('signature verification')) {
             paymentError = 'Signature verification error';
           } else if (errorMsg.includes('simulation failed')) {
             paymentError = `Transaction simulation failed: ${errorMsg}`;

@@ -334,7 +334,7 @@ module.exports = {
               let errorMsg = paymentError.message;
               if (errorMsg.includes('insufficient funds')) {
                 autoApproveError = 'Insufficient bot wallet funds for payment and fees';
-              } else if (errorMsg.includes('signature verification')) {
+              } else if (errorMsg.toLowerCase().includes('signature verification')) {
                 autoApproveError = 'Signature verification error';
               } else {
                 autoApproveError = errorMsg;
