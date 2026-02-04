@@ -246,6 +246,62 @@ const initDb = () => {
       )
     `);
 
+    // Vote Events table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS vote_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        prize_amount REAL DEFAULT 0,
+        currency TEXT DEFAULT 'USD',
+        min_participants INTEGER NOT NULL,
+        max_participants INTEGER NOT NULL,
+        current_participants INTEGER DEFAULT 0,
+        duration_minutes INTEGER,
+        owner_favorite_image_id TEXT,
+        created_by TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        ends_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(created_by) REFERENCES users(discord_id)
+      )
+    `);
+
+    // Vote Event Images table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS vote_event_images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vote_event_id INTEGER NOT NULL,
+        image_id TEXT NOT NULL UNIQUE,
+        image_url TEXT NOT NULL,
+        upload_order INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(vote_event_id) REFERENCES vote_events(id)
+      )
+    `);
+
+    // Vote Event Participants table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS vote_event_participants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vote_event_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        voted_image_id TEXT,
+        is_winner INTEGER DEFAULT 0,
+        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        voted_at DATETIME,
+        UNIQUE(vote_event_id, user_id),
+        FOREIGN KEY(vote_event_id) REFERENCES vote_events(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(user_id) REFERENCES users(discord_id)
+      )
+    `);
+
     // User stats table (fast counters for trust/risk scoring)
     db.run(`
       CREATE TABLE IF NOT EXISTS user_stats (
@@ -1030,6 +1086,265 @@ const deleteContest = (contestId) => {
   });
 };
 
+// ==================== VOTE EVENT OPERATIONS ====================
+
+const createVoteEvent = (guildId, channelId, title, description, prizeAmount, currency, minParticipants, maxParticipants, durationMinutes, ownerFavoriteImageId, createdBy) => {
+  return new Promise((resolve, reject) => {
+    const endsAt = durationMinutes ? new Date(Date.now() + (durationMinutes * 60 * 1000)).toISOString() : null;
+    console.log(`[db.createVoteEvent] Creating vote event for guild ${guildId}: ${title}`);
+    db.run(
+      `INSERT INTO vote_events (guild_id, channel_id, title, description, prize_amount, currency, min_participants, max_participants, duration_minutes, owner_favorite_image_id, created_by, ends_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, channelId, title, description, prizeAmount || 0, currency || 'USD', minParticipants, maxParticipants, durationMinutes, ownerFavoriteImageId, createdBy, endsAt],
+      function (err) {
+        if (err) {
+          console.error(`[db.createVoteEvent] Error:`, err);
+          reject(err);
+        } else {
+          console.log(`[db.createVoteEvent] Created vote event with ID: ${this.lastID}`);
+          resolve(this.lastID);
+        }
+      }
+    );
+  });
+};
+
+const addVoteEventImage = (voteEventId, imageId, imageUrl, uploadOrder) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO vote_event_images (vote_event_id, image_id, image_url, upload_order) VALUES (?, ?, ?, ?)`,
+      [voteEventId, imageId, imageUrl, uploadOrder],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getVoteEvent = (voteEventId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM vote_events WHERE id = ?`,
+      [voteEventId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const getVoteEventImages = (voteEventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM vote_event_images WHERE vote_event_id = ? ORDER BY upload_order ASC`,
+      [voteEventId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const getActiveVoteEvents = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM vote_events WHERE guild_id = ? AND status = 'active' ORDER BY created_at DESC`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const getExpiredVoteEvents = () => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM vote_events WHERE status = 'active' AND ends_at IS NOT NULL AND datetime(ends_at) <= datetime('now')`,
+      [],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const updateVoteEventStatus = (voteEventId, status) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE vote_events SET status = ? WHERE id = ?`,
+      [status, voteEventId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const updateVoteEventMessageId = (voteEventId, messageId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE vote_events SET message_id = ? WHERE id = ?`,
+      [messageId, voteEventId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const joinVoteEvent = (voteEventId, guildId, userId) => {
+  return new Promise((resolve, reject) => {
+    // Increment current_participants
+    db.run(
+      `UPDATE vote_events SET current_participants = current_participants + 1 WHERE id = ?`,
+      [voteEventId],
+      (err) => {
+        if (err) return reject(err);
+        
+        // Add participant
+        db.run(
+          `INSERT INTO vote_event_participants (vote_event_id, guild_id, user_id) VALUES (?, ?, ?)`,
+          [voteEventId, guildId, userId],
+          function (err) {
+            if (err) reject(err);
+            else resolve(this.lastID);
+          }
+        );
+      }
+    );
+  });
+};
+
+const getVoteEventParticipant = (voteEventId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM vote_event_participants WHERE vote_event_id = ? AND user_id = ?`,
+      [voteEventId, userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const getVoteEventParticipants = (voteEventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM vote_event_participants WHERE vote_event_id = ? ORDER BY joined_at ASC`,
+      [voteEventId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const submitVote = (voteEventId, userId, votedImageId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE vote_event_participants SET voted_image_id = ?, voted_at = CURRENT_TIMESTAMP WHERE vote_event_id = ? AND user_id = ?`,
+      [votedImageId, voteEventId, userId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const getVoteResults = (voteEventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT voted_image_id, COUNT(*) as vote_count 
+       FROM vote_event_participants 
+       WHERE vote_event_id = ? AND voted_image_id IS NOT NULL 
+       GROUP BY voted_image_id 
+       ORDER BY vote_count DESC`,
+      [voteEventId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const setVoteEventWinners = (voteEventId, winnerUserIds) => {
+  return new Promise((resolve, reject) => {
+    if (!winnerUserIds || winnerUserIds.length === 0) {
+      return resolve();
+    }
+    const placeholders = winnerUserIds.map(() => '?').join(',');
+    db.run(
+      `UPDATE vote_event_participants SET is_winner = 1 WHERE vote_event_id = ? AND user_id IN (${placeholders})`,
+      [voteEventId, ...winnerUserIds],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const deleteVoteEvent = (voteEventId) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      
+      // Delete participants first
+      db.run(
+        `DELETE FROM vote_event_participants WHERE vote_event_id = ?`,
+        [voteEventId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+        }
+      );
+      
+      // Delete images
+      db.run(
+        `DELETE FROM vote_event_images WHERE vote_event_id = ?`,
+        [voteEventId],
+        (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+        }
+      );
+      
+      // Delete vote event
+      db.run(
+        `DELETE FROM vote_events WHERE id = ?`,
+        [voteEventId],
+        function (err) {
+          if (err) {
+            db.run('ROLLBACK');
+            return reject(err);
+          }
+          
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) reject(commitErr);
+            else resolve(this.changes);
+          });
+        }
+      );
+    });
+  });
+};
+
 // ==================== TRUST/RISK STAT OPERATIONS ====================
 
 const touchUserStats = (discordId) => {
@@ -1167,6 +1482,22 @@ module.exports = {
   removeContestEntry,
   setContestWinners,
   deleteContest,
+  // Vote Event functions
+  createVoteEvent,
+  addVoteEventImage,
+  getVoteEvent,
+  getVoteEventImages,
+  getActiveVoteEvents,
+  getExpiredVoteEvents,
+  updateVoteEventStatus,
+  updateVoteEventMessageId,
+  joinVoteEvent,
+  getVoteEventParticipant,
+  getVoteEventParticipants,
+  submitVote,
+  getVoteResults,
+  setVoteEventWinners,
+  deleteVoteEvent,
   // Trust/Risk functions
   touchUserStats,
   getUserStats,

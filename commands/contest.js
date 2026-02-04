@@ -138,10 +138,11 @@ module.exports = {
       await interaction.deferReply({ ephemeral: false });
 
       try {
-        // Check permissions - must be server admin or manage guild
-        if (!interaction.member.permissions.has('ManageGuild')) {
+        // Check permissions - must be server owner
+        const guild = await interaction.guild.fetch();
+        if (interaction.user.id !== guild.ownerId) {
           return interaction.editReply({
-            content: '❌ Only server administrators can create contests.'
+            content: '❌ Only the server owner can create contests.'
           });
         }
 
