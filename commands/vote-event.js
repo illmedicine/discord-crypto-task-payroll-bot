@@ -155,6 +155,7 @@ module.exports = {
         }
 
         // Collect images
+
         const images = [];
         for (let i = 1; i <= 5; i++) {
           const attachment = interaction.options.getAttachment(`image${i}`);
@@ -171,7 +172,18 @@ module.exports = {
             });
           }
         }
-
+        // Add images selected via context menu (global.voteEventSelections)
+        let orderOffset = images.length;
+        if (global.voteEventSelections && global.voteEventSelections[interaction.user.id]) {
+          global.voteEventSelections[interaction.user.id].forEach((img, idx) => {
+            images.push({
+              url: img.url,
+              order: orderOffset + idx + 1
+            });
+          });
+          // Clear after use
+          delete global.voteEventSelections[interaction.user.id];
+        }
         if (images.length < 2) {
           return interaction.editReply({
             content: '❌ At least 2 images are required for a vote event.'
