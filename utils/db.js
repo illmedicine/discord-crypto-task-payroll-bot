@@ -898,6 +898,19 @@ const getContest = (contestId) => {
   });
 };
 
+const getAllContests = () => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM contests ORDER BY id DESC`,
+      [],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
 const getActiveContests = (guildId) => {
   return new Promise((resolve, reject) => {
     db.all(
@@ -1486,6 +1499,7 @@ module.exports = {
   // Contest functions
   createContest,
   getContest,
+  getAllContests,
   getActiveContests,
   getExpiredContests,
   updateContestStatus,
