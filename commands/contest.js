@@ -138,9 +138,27 @@ module.exports = {
     if (subcommand === 'create') {
       await interaction.deferReply({ ephemeral: false });
 
+      // Robust guild resolution (matches vote-event.js)
+      let guild = interaction.guild;
+      if (!guild && interaction.client && interaction.guildId) {
+        try {
+          guild = interaction.client.guilds.cache.get(interaction.guildId) || await interaction.client.guilds.fetch(interaction.guildId);
+        } catch (e) {
+          guild = null;
+        }
+      }
+      if (!guild) {
+        return interaction.editReply({
+          content: '❌ This command can only be used in a server (not in DMs).',
+          ephemeral: true
+        });
+      }
       try {
-        // Check permissions - must be server owner
-        const guild = await interaction.guild.fetch();
+        if (!guild.ownerId) {
+          return interaction.editReply({
+            content: '❌ Unable to determine server owner. Please try again later.'
+          });
+        }
         if (interaction.user.id !== guild.ownerId) {
           return interaction.editReply({
             content: '❌ Only the server owner can create contests.'
@@ -171,8 +189,8 @@ module.exports = {
 
         // Create contest in database
         const contestId = await db.createContest(
-          guildId,
-          channelId,
+          guild.id,
+          interaction.channel.id,
           title,
           description,
           prizeAmount,
