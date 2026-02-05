@@ -26,6 +26,31 @@ A powerful Discord bot for managing cryptocurrency payroll and payments using So
 - Secure transaction signing
 - Fast & low-cost transfers
 
+## Web UI & API
+
+A browser-based web UI has been added in `../web/` for server admins to create and manage Contests, Tasks, and Events and publish them to Discord channels. The bot now exposes a minimal HTTP API (`server/api.js`) which the web UI uses to:
+
+- Create contests and tasks
+- Publish messages to channels
+- Read contest/task state and status
+
+Endpoints (local development):
+
+- `GET /api/health` - health check
+- `GET /api/contests` - list contests
+- `POST /api/contests` - create contest
+- `POST /api/publish` - publish a message to a channel
+
+See `../WEB-SETUP.md` for details and deployment instructions.
+
+## Configuration
+
+### Environment Variables
+- Built on Solana blockchain
+- Uses Mainnet-Beta by default
+- Secure transaction signing
+- Fast & low-cost transfers
+
 ## Installation
 
 ### Prerequisites

@@ -188,84 +188,25 @@ client.once('clientReady', async () => {
 
   // Contest end checker - runs every 30 seconds
   console.log('🎉 Starting contest end checker...');
+
+  const { processContest } = require('../server/contestProcessor');
+
   setInterval(async () => {
     try {
       const expiredContests = await db.getExpiredContests();
       
       for (const contest of expiredContests) {
-        console.log(`[Contest] Processing ended contest #${contest.id}: ${contest.title}`);
-        
-        // Mark as ended
-        await db.updateContestStatus(contest.id, 'ended');
-        
-        // Get all entries
-        const entries = await db.getContestEntries(contest.id);
-        
-        if (entries.length === 0) {
-          // No entries, just announce
-          try {
-            const channel = await client.channels.fetch(contest.channel_id);
-            if (channel) {
-              const noWinnersEmbed = new EmbedBuilder()
-                .setColor('#FF6600')
-                .setTitle(`🎉 Contest #${contest.id} Ended - No Winners`)
-                .setDescription(`**${contest.title}** has ended, but no one entered.`)
-                .addFields(
-                  { name: '🎁 Prize', value: `${contest.prize_amount} ${contest.currency}` },
-                  { name: '📊 Entries', value: '0' }
-                )
-                .setTimestamp();
-              
-              await channel.send({ embeds: [noWinnersEmbed] });
-            }
-          } catch (e) {
-            console.log(`[Contest] Could not announce no-winner result for contest #${contest.id}`);
-          }
-          continue;
+        console.log(`[Contest Checker] Delegating processing for contest #${contest.id}`);
+        try {
+          await processContest(contest, client);
+        } catch (err) {
+          console.error(`[Contest Checker] Error processing contest ${contest.id}:`, err.message);
         }
-        
-        // Select random winners
-        const numWinners = Math.min(contest.num_winners, entries.length);
-        const shuffled = [...entries].sort(() => Math.random() - 0.5);
-        const winners = shuffled.slice(0, numWinners);
-        const winnerIds = winners.map(w => w.user_id);
-        
-        // Mark winners in database
-        await db.setContestWinners(contest.id, winnerIds);
-        
-        // Calculate prize per winner
-        const prizePerWinner = contest.prize_amount / numWinners;
-        
-        // Get the guild's treasury wallet for payouts
-        const guildWallet = await db.getGuildWallet(contest.guild_id);
-        if (!guildWallet) {
-          console.log(`[Contest] No treasury wallet configured for guild ${contest.guild_id}, skipping payments`);
-          // Still announce winners but note payment issue
-          try {
-            const channel = await client.channels.fetch(contest.channel_id);
-            if (channel) {
-              const winnerMentions = winnerIds.map(id => `<@${id}>`).join(', ');
-              const noTreasuryEmbed = new EmbedBuilder()
-                .setColor('#FFA500')
-                .setTitle(`🎉🏆 Contest #${contest.id} Winners! 🏆🎉`)
-                .setDescription(`**${contest.title}** has ended!\n\n⚠️ **Payment Issue:** No treasury wallet configured for this server. Winners have been selected but prizes could not be distributed automatically.`)
-                .addFields(
-                  { name: '🎊 Winners', value: winnerMentions || 'None' },
-                  { name: '🎁 Prize Owed', value: `${prizePerWinner.toFixed(4)} ${contest.currency} each` },
-                  { name: '⚠️ Action Required', value: 'Server admin must configure treasury with `/wallet connect` and manually pay winners.' }
-                )
-                .setTimestamp();
-              
-              await channel.send({
-                content: `🎉 **CONTEST WINNERS!** 🎉\n\nCongratulations ${winnerMentions}!`,
-                embeds: [noTreasuryEmbed]
-              });
-            }
-          } catch (e) {
-            console.log(`[Contest] Could not announce winners for contest #${contest.id}:`, e.message);
-          }
-          await db.updateContestStatus(contest.id, 'completed');
-          continue;
+      }
+    } catch (e) {
+      console.error('[Contest Checker] Error fetching expired contests:', e.message);
+    }
+  }, 30000);
         }
         
         // Check bot wallet balance
@@ -868,3 +809,16 @@ client.on('interactionCreate', async interaction => {
 
 // Login to Discord
 client.login(process.env.DISCORD_TOKEN);
+
+// Start integrated API server (provides HTTP endpoints for the web UI)
+try {
+  require('../server/api')(client);
+} catch (err) {
+  console.error('[API] Unable to start API server:', err.message);
+}
+// Start scheduler for scheduled posts
+try {
+  require('../server/scheduler')(client);
+} catch (err) {
+  console.error('[Scheduler] Unable to start scheduler:', err.message);
+}
