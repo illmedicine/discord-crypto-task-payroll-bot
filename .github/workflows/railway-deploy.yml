@@ -21,7 +21,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Deploy to Railway
-        uses: railwayapp/railway-up@v1
-        with:
-          railwayToken: ${{ secrets.RAILWAY_TOKEN }}
+      - name: NOTICE: Railway auto-deploy disabled in this workflow
+        run: |
+          echo "The 'railwayapp/railway-up' action referenced here is not available (repository/action not found)."
+          echo "Recommended: Use the Railway dashboard to connect this GitHub repository and enable Auto Deploy for the 'main' branch."
+          echo "Steps: 1) Open https://railway.app, 2) Select your project, 3) Settings → Connect Repository, 4) Enable automatic deploys on 'main'."
+          echo "This workflow step has been replaced with this notice to prevent failing runs."
+          exit 0
