@@ -125,13 +125,33 @@ module.exports = {
     const guildId = interaction.guildId;
     const channelId = interaction.channelId;
 
+    // Defensive: Ensure this is used in a guild
+    if (!interaction.guild) {
+      return interaction.reply({
+        content: '❌ This command can only be used in a server (not in DMs).',
+        ephemeral: true
+      });
+    }
+
     // ==================== CREATE VOTE EVENT ====================
     if (subcommand === 'create') {
       await interaction.deferReply({ ephemeral: false });
 
       try {
         // Check permissions - must be server owner
-        const guild = await interaction.guild.fetch();
+        let guild;
+        try {
+          guild = await interaction.guild.fetch();
+        } catch (e) {
+          return interaction.editReply({
+            content: '❌ Unable to fetch server information. Please try again in a server channel.'
+          });
+        }
+        if (!guild || !guild.ownerId) {
+          return interaction.editReply({
+            content: '❌ Unable to determine server owner. Please try again later.'
+          });
+        }
         if (interaction.user.id !== guild.ownerId) {
           return interaction.editReply({
             content: '❌ Only the server owner can create vote events.'
