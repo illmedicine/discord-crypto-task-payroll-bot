@@ -33,4 +33,5 @@ jobs:
             exit 1;
           fi
           # The new @railway/cli reads RAILWAY_TOKEN from the environment, so we don't pass it via a CLI flag
-          railway up --yes
+          # Pass `--yes` through to the underlying deploy command using `-- --yes`
+          railway up -- --yes
