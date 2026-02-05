@@ -47,17 +47,39 @@ module.exports = {
         return await interaction.editReply('❌ No image attachments found in this message.');
       }
 
-      // Store selected images in a temp DB table or in-memory (for demo: use global)
-      if (!global.voteEventSelections) global.voteEventSelections = {};
-      if (!global.voteEventSelections[interaction.user.id]) global.voteEventSelections[interaction.user.id] = [];
-      images.forEach(img => {
-        // Prevent duplicates
-        if (!global.voteEventSelections[interaction.user.id].some(i => i.url === img.url)) {
-          global.voteEventSelections[interaction.user.id].push(img);
-        }
-      });
+      // Check for active vote events in this channel
+      const activeEvents = (await db.getActiveVoteEvents(interaction.guildId)).filter(ev => ev.channel_id === interaction.channelId);
 
-      await interaction.editReply(`✅ Added ${images.length} image(s) to your vote event selection. Use /vote-event create to start the event.`);
+      if (activeEvents.length === 0) {
+        // No event: store image and prompt user to run /vote-event create
+        if (!global.voteEventSelections) global.voteEventSelections = {};
+        global.voteEventSelections[interaction.user.id] = images;
+        await interaction.editReply({
+          content: `✅ No active vote event found in this channel. The selected image has been saved as slot 1. Please run /vote-event create to start a new event.`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      // If events exist, present a select menu to choose which event to add the image to
+      const { StringSelectMenuBuilder, ActionRowBuilder } = require('discord.js');
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('add_image_to_vote_event')
+        .setPlaceholder('Select a vote event to add this image')
+        .addOptions(activeEvents.map(ev => ({
+          label: ev.title || `Event #${ev.id}`,
+          value: String(ev.id)
+        })));
+      const row = new ActionRowBuilder().addComponents(menu);
+      // Store image in global for follow-up
+      if (!global.voteEventSelections) global.voteEventSelections = {};
+      global.voteEventSelections[interaction.user.id] = images;
+      await interaction.editReply({
+        content: `Select which vote event to add the image to:`,
+        components: [row],
+        ephemeral: true
+      });
+      // The select menu interaction will be handled in the interactionCreate event in your main bot file
     } catch (err) {
       console.error('Add to Vote Event error:', err);
       if (interaction.deferred || interaction.replied) {

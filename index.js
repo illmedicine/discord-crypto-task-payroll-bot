@@ -789,6 +789,40 @@ client.on('interactionCreate', async interaction => {
       }
       return;
     }
+
+    // Handle add image to vote event select menu
+    if (interaction.customId === 'add_image_to_vote_event') {
+      try {
+        // Get selected event ID
+        const eventId = interaction.values[0];
+        // Get image(s) from global (set by context menu)
+        const images = global.voteEventSelections && global.voteEventSelections[interaction.user.id] ? global.voteEventSelections[interaction.user.id] : [];
+        if (!images.length) {
+          await interaction.reply({ content: '❌ No image found to add.', ephemeral: true });
+          return;
+        }
+        // Get current images for event to determine upload order
+        const eventImages = await db.getVoteEventImages(eventId);
+        let uploadOrder = eventImages.length + 1;
+        for (const img of images) {
+          // Prevent duplicate image IDs
+          if (!eventImages.some(ei => ei.image_id === img.id)) {
+            await db.addVoteEventImage(eventId, img.id, img.url, uploadOrder++);
+          }
+        }
+        // Clean up global
+        if (global.voteEventSelections) delete global.voteEventSelections[interaction.user.id];
+        await interaction.reply({ content: `✅ Image(s) added to the selected vote event!`, ephemeral: true });
+      } catch (err) {
+        console.error('❌ Error adding image to vote event:', err);
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: '❌ An error occurred adding the image to the vote event.', ephemeral: true });
+        } else {
+          await interaction.reply({ content: '❌ An error occurred adding the image to the vote event.', ephemeral: true });
+        }
+      }
+      return;
+    }
     return;
   }
 
