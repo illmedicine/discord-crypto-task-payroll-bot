@@ -22,7 +22,7 @@ jobs:
         run: npm ci
 
       - name: Install Railway CLI
-        run: npm i -g railway@latest
+        run: npm i -g @railway/cli
 
       - name: Deploy to Railway (CLI)
         env:
