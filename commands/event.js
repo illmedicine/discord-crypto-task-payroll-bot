@@ -13,13 +13,15 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('event-create')
     .setDescription('Create a photo-based voting event with crypto rewards! (Owner only)')
+    // All required options first
     .addStringOption(opt => opt.setName('title').setDescription('Event title').setRequired(true))
-    .addStringOption(opt => opt.setName('description').setDescription('Event description').setRequired(false))
     .addNumberOption(opt => opt.setName('prize').setDescription('Total prize pool (e.g. 1.5)').setRequired(true))
     .addIntegerOption(opt => opt.setName('slots').setDescription('Max participants').setRequired(true))
     .addAttachmentOption(opt => opt.setName('image1').setDescription('First image').setRequired(true))
     .addAttachmentOption(opt => opt.setName('image2').setDescription('Second image').setRequired(true))
-    .addAttachmentOption(opt => opt.setName('image3').setDescription('Third image').setRequired(true)),
+    .addAttachmentOption(opt => opt.setName('image3').setDescription('Third image').setRequired(true))
+    // Optional options after required
+    .addStringOption(opt => opt.setName('description').setDescription('Event description').setRequired(false)),
   async execute(interaction) {
     // Only allow server owner
     if (interaction.user.id !== interaction.guild.ownerId) {

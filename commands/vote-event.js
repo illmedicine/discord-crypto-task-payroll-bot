@@ -10,6 +10,7 @@ module.exports = {
       subcommand
         .setName('create')
         .setDescription('Create a new voting event (Server Owner only)')
+        // All required options first
         .addStringOption(option =>
           option.setName('title')
             .setDescription('Event title')
@@ -34,6 +35,17 @@ module.exports = {
             .setMinValue(2)
             .setMaxValue(1000)
         )
+        .addAttachmentOption(option =>
+          option.setName('image1')
+            .setDescription('First image for voting')
+            .setRequired(true)
+        )
+        .addAttachmentOption(option =>
+          option.setName('image2')
+            .setDescription('Second image for voting')
+            .setRequired(true)
+        )
+        // Optional options after required
         .addNumberOption(option =>
           option.setName('prize_amount')
             .setDescription('Prize amount to split among winners (optional)')
@@ -55,16 +67,6 @@ module.exports = {
             .setRequired(false)
             .setMinValue(1)
             .setMaxValue(10080)
-        )
-        .addAttachmentOption(option =>
-          option.setName('image1')
-            .setDescription('First image for voting')
-            .setRequired(true)
-        )
-        .addAttachmentOption(option =>
-          option.setName('image2')
-            .setDescription('Second image for voting')
-            .setRequired(true)
         )
         .addAttachmentOption(option =>
           option.setName('image3')

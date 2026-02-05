@@ -13,8 +13,8 @@ module.exports = {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Check if user is admin
-      if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      // Check if user is admin (Discord.js v14: use interaction.memberPermissions)
+      if (!interaction.memberPermissions || !interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
         return interaction.editReply({
           content: '❌ You need Administrator permissions to use this command.'
         });
