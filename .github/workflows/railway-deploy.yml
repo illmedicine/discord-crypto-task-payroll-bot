@@ -32,6 +32,5 @@ jobs:
             echo "ERROR: RAILWAY_TOKEN secret is missing. Please add it in Settings → Secrets.";
             exit 1;
           fi
-          railway login --token "$RAILWAY_TOKEN"
-          # Attempt to deploy; this will use railway's linked project or prompt an error if not linked
+          # The new @railway/cli reads RAILWAY_TOKEN from the environment, so we don't pass it via a CLI flag
           railway up --yes
