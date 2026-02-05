@@ -816,3 +816,9 @@ try {
 } catch (err) {
   console.error('[API] Unable to start API server:', err.message);
 }
+// Start scheduler for scheduled posts
+try {
+  require('../server/scheduler')(client);
+} catch (err) {
+  console.error('[Scheduler] Unable to start scheduler:', err.message);
+}

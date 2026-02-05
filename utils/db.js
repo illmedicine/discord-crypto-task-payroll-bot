@@ -246,6 +246,21 @@ const initDb = () => {
       )
     `);
 
+    // Scheduled posts table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS scheduled_posts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        scheduled_at DATETIME NOT NULL,
+        created_by TEXT,
+        status TEXT DEFAULT 'scheduled',
+        message_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Vote Events table
     db.run(`
       CREATE TABLE IF NOT EXISTS vote_events (
@@ -1462,6 +1477,56 @@ const logCommandAudit = (discordId, guildId, commandName) => {
 
 // Initialize database on module load
 initDb();
+
+// Scheduled posts functions
+const createScheduledPost = (guildId, channelId, content, scheduledAt, createdBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO scheduled_posts (guild_id, channel_id, content, scheduled_at, created_by) VALUES (?, ?, ?, ?, ?)`,
+      [guildId, channelId, content, scheduledAt, createdBy],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getDueScheduledPosts = () => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM scheduled_posts WHERE status = 'scheduled' AND scheduled_at <= datetime('now') ORDER BY scheduled_at ASC`,
+      [],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const updateScheduledPostStatus = (postId, status, messageId = null) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE scheduled_posts SET status = ?, message_id = ? WHERE id = ?`,
+      [status, messageId, postId],
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+};
+
+const getScheduledPostsForGuild = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM scheduled_posts WHERE guild_id = ? ORDER BY scheduled_at DESC`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
 
 module.exports = {
   db,
