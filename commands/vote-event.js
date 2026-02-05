@@ -126,7 +126,16 @@ module.exports = {
     const channelId = interaction.channelId;
 
     // Defensive: Ensure this is used in a guild
-    if (!interaction.guild) {
+    // If interaction.guild is missing, try to fetch it from the client as fallback
+    let guild = interaction.guild;
+    if (!guild && interaction.client && interaction.guildId) {
+      try {
+        guild = interaction.client.guilds.cache.get(interaction.guildId) || await interaction.client.guilds.fetch(interaction.guildId);
+      } catch (e) {
+        guild = null;
+      }
+    }
+    if (!guild) {
       return interaction.reply({
         content: '❌ This command can only be used in a server (not in DMs).',
         ephemeral: true
@@ -139,24 +148,7 @@ module.exports = {
 
       try {
         // Defensive: Ensure this is used in a guild and guild object is available
-        if (!interaction.guild) {
-          return interaction.editReply({
-            content: '❌ This command can only be used in a server (not in DMs).',
-          });
-        }
-        let guild;
-        try {
-          // Some environments may not support fetch; fallback to interaction.guild if fetch is not available
-          if (typeof interaction.guild.fetch === 'function') {
-            guild = await interaction.guild.fetch();
-          } else {
-            guild = interaction.guild;
-          }
-        } catch (e) {
-          return interaction.editReply({
-            content: '❌ Unable to fetch server information. Please try again in a server channel.'
-          });
-        }
+        // (guild is already resolved above)
         if (!guild || !guild.ownerId) {
           return interaction.editReply({
             content: '❌ Unable to determine server owner. Please try again later.'
