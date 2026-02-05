@@ -138,10 +138,20 @@ module.exports = {
       await interaction.deferReply({ ephemeral: false });
 
       try {
-        // Check permissions - must be server owner
+        // Defensive: Ensure this is used in a guild and guild object is available
+        if (!interaction.guild) {
+          return interaction.editReply({
+            content: '❌ This command can only be used in a server (not in DMs).',
+          });
+        }
         let guild;
         try {
-          guild = await interaction.guild.fetch();
+          // Some environments may not support fetch; fallback to interaction.guild if fetch is not available
+          if (typeof interaction.guild.fetch === 'function') {
+            guild = await interaction.guild.fetch();
+          } else {
+            guild = interaction.guild;
+          }
         } catch (e) {
           return interaction.editReply({
             content: '❌ Unable to fetch server information. Please try again in a server channel.'
@@ -456,7 +466,24 @@ module.exports = {
         }
 
         // Check permission - must be server owner
-        const guild = await interaction.guild.fetch();
+        if (!interaction.guild) {
+          return interaction.editReply({
+            content: '❌ This command must be used in a server channel (not a DM).',
+            ephemeral: true
+          });
+        }
+        let guild;
+        if (typeof interaction.guild.fetch === 'function') {
+          guild = await interaction.guild.fetch();
+        } else {
+          guild = interaction.guild;
+        }
+        if (!guild) {
+          return interaction.editReply({
+            content: '❌ Unable to retrieve server information. Please try again in a server channel.',
+            ephemeral: true
+          });
+        }
         if (interaction.user.id !== guild.ownerId) {
           return interaction.editReply({
             content: '❌ Only the server owner can remove vote events.'
