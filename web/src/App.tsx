@@ -3,6 +3,9 @@ import Dashboard from './pages/Dashboard'
 import Tasks from './pages/Tasks'
 import VoteEvents from './pages/VoteEvents'
 
+const ScheduledPosts = React.lazy(() => import('./pages/ScheduledPosts'))
+const Proofs = React.lazy(() => import('./pages/Proofs'))
+
 export default function App() {
   const [page, setPage] = useState<'dashboard' | 'tasks' | 'votes' | 'scheduled' | 'proofs'>('dashboard')
 
@@ -22,8 +25,8 @@ export default function App() {
         {page === 'dashboard' && <Dashboard />}
         {page === 'tasks' && <Tasks />}
         {page === 'votes' && <VoteEvents />}
-        {page === 'scheduled' && <React.Suspense fallback={<div>Loading...</div>}><React.lazy(() => import('./pages/ScheduledPosts')) /></React.Suspense>}
-        {page === 'proofs' && <React.Suspense fallback={<div>Loading...</div>}><React.lazy(() => import('./pages/Proofs')) /></React.Suspense>}
+        {page === 'scheduled' && <React.Suspense fallback={<div>Loading...</div>}><ScheduledPosts /></React.Suspense>}
+        {page === 'proofs' && <React.Suspense fallback={<div>Loading...</div>}><Proofs /></React.Suspense>}
       </main>
     </div>
   )
