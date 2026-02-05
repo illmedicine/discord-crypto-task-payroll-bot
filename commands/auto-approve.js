@@ -9,6 +9,7 @@ module.exports = {
       subcommand
         .setName('enable')
         .setDescription('Enable auto-approve for a bulk task')
+        // All options are optional, but keep order consistent
         .addIntegerOption(option =>
           option.setName('bulk_task_id')
             .setDescription('Bulk task ID to enable auto-approve for')

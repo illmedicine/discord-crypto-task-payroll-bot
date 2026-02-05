@@ -10,6 +10,7 @@ module.exports = {
       subcommand
         .setName('create')
         .setDescription('Create a new bulk task listing')
+        // All required options first
         .addStringOption(option =>
           option.setName('title')
             .setDescription('Task title (e.g., "Social Media Verification")')

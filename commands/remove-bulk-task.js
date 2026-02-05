@@ -5,6 +5,12 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('remove-bulk-task')
     .setDescription('Remove a bulk task (Treasury Owner only)')
+    // Place required options first (if any in future), then optional
+    .addStringOption(option =>
+      option.setName('reason')
+        .setDescription('Reason for removing the task (will be shown to affected members)')
+        .setRequired(false)
+    )
     .addIntegerOption(option =>
       option.setName('bulk_task_id')
         .setDescription('Bulk task ID to remove')
@@ -13,11 +19,6 @@ module.exports = {
     .addIntegerOption(option =>
       option.setName('proof_id')
         .setDescription('Proof ID (will remove the associated bulk task)')
-        .setRequired(false)
-    )
-    .addStringOption(option =>
-      option.setName('reason')
-        .setDescription('Reason for removing the task (will be shown to affected members)')
         .setRequired(false)
     ),
 

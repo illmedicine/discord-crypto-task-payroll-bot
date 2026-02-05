@@ -10,6 +10,7 @@ module.exports = {
       subcommand
         .setName('create')
         .setDescription('Create a new giveaway contest')
+        // All required options first
         .addStringOption(option =>
           option.setName('title')
             .setDescription('Contest title')
