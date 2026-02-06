@@ -89,7 +89,7 @@ Remove a vote event (Server Owner only)
 1. **Creation**: Server owner creates event with images and settings
 2. **Joining Phase**: Participants join the event (requires wallet connection)
 3. **Voting Phase**: Participants cast their votes via dropdown menu
-4. **Event End**: Triggered by timer or manual end
+4. **Event End**: Triggered by timer, OR automatically when all participants have submitted their votes (voting-complete triggers immediate processing)
 5. **Results**: Winners determined, prizes distributed, results announced
 
 ## Event Card Display

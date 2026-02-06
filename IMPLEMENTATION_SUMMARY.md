@@ -30,6 +30,7 @@
 - **Modified File**: `index.js`
 - **Added**:
   - Vote event join button handler
+- Immediate event processing: when all participants have submitted votes the event is processed and payouts/announcements are made instantly
   - Vote submission (select menu) handler
   - Automated event end checker (30-second interval)
   - Winner calculation logic

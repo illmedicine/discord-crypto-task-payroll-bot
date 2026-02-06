@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const db = require('../utils/db');
 const crypto = require('../utils/crypto');
+const { processVoteEvent } = require('../utils/voteEventProcessor');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -601,6 +602,23 @@ module.exports = {
 
       await interaction.reply({ embeds: [successEmbed], ephemeral: false });
 
+      // After joining, check if the event is now full and notify channel that voting is locked
+      try {
+        const updatedEvent = await db.getVoteEvent(eventId);
+        if (updatedEvent.current_participants >= updatedEvent.max_participants) {
+          try {
+            const channel = await interaction.client.channels.fetch(updatedEvent.channel_id);
+            if (channel) {
+              await channel.send({ content: `🔒 **Vote Event #${eventId} is now full and voting is locked.** Voting will conclude when all participants submit their votes.` });
+            }
+          } catch (e) {
+            console.error('[VoteEvent] Could not notify channel about event being full:', e);
+          }
+        }
+      } catch (e) {
+        console.error('[VoteEvent] Error checking updated event after join:', e);
+      }
+
     } catch (error) {
       console.error('Vote event join error:', error);
       return interaction.reply({
@@ -681,6 +699,18 @@ module.exports = {
         .setTimestamp();
 
       await interaction.reply({ embeds: [successEmbed], ephemeral: false });
+
+      // After recording the vote, check if all participants have voted. If so, process event immediately.
+      try {
+        const participantsNow = await db.getVoteEventParticipants(eventId);
+        const allVoted = participantsNow.length > 0 && participantsNow.every(p => p.voted_image_id);
+        if (allVoted) {
+          // Fire-and-forget processing (do not block reply)
+          processVoteEvent(eventId, interaction.client, 'votes-complete').catch(err => console.error('[VoteEvent] Error processing event on votes-complete:', err));
+        }
+      } catch (e) {
+        console.error('[VoteEvent] Error checking participants after vote submit:', e);
+      }
 
     } catch (error) {
       console.error('Vote submission error:', error);
