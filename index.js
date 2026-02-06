@@ -4,6 +4,20 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+// Better runtime logging for debugging deploy issues
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
+console.log('[ENV] DISCORD_TOKEN set:', !!process.env.DISCORD_TOKEN);
+console.log('[ENV] DISCORD_CLIENT_ID set:', !!process.env.DISCORD_CLIENT_ID);
+console.log('[ENV] DISCORD_CLIENT_SECRET set:', !!process.env.DISCORD_CLIENT_SECRET);
+console.log('[ENV] DCB_SESSION_SECRET set:', !!process.env.DCB_SESSION_SECRET);
+
+
 const crypto = require('./utils/crypto');
 const db = require('./utils/db');
 const { ANCHOR_GUILD_ID, prefixLine, getTrustRisk } = require('./utils/trustRisk');
