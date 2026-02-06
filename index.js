@@ -13,7 +13,6 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'),
 const BUILD_DATE = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 const LATEST_FEATURES = [
   'NEW: Trust & Risk Scoring!',
-  'NEW: /contest giveaways!',
   'Auto wallet lookup on /pay',
   '/user-wallet command',
   'Solana transactions'
@@ -184,28 +183,6 @@ client.once('clientReady', async () => {
       ],
       status: 'online'
     });
-  }, 30000);
-
-  // Contest end checker - runs every 30 seconds
-  console.log('🎉 Starting contest end checker...');
-
-  const { processContest } = require('../server/contestProcessor');
-
-  setInterval(async () => {
-    try {
-      const expiredContests = await db.getExpiredContests();
-      
-      for (const contest of expiredContests) {
-        console.log(`[Contest Checker] Delegating processing for contest #${contest.id}`);
-        try {
-          await processContest(contest, client);
-        } catch (err) {
-          console.error(`[Contest Checker] Error processing contest ${contest.id}:`, err.message);
-        }
-      }
-    } catch (e) {
-      console.error('[Contest Checker] Error fetching expired contests:', e.message);
-    }
   }, 30000);
 
   // Vote Event end checker - runs every 30 seconds
@@ -520,24 +497,6 @@ client.on('interactionCreate', async interaction => {
           await submitProofCommand.handleVerificationButton(interaction, client);
         } catch (error) {
           console.error('❌ Error handling verification button:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
-        }
-      }
-      return;
-    }
-    
-    // Handle contest entry button
-    if (interaction.customId.startsWith('contest_enter_')) {
-      const contestCommand = client.commands.get('contest');
-      if (contestCommand && contestCommand.handleEntryButton) {
-        try {
-          await contestCommand.handleEntryButton(interaction);
-        } catch (error) {
-          console.error('❌ Error handling contest entry button:', error);
           if (interaction.replied || interaction.deferred) {
             await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
           } else {
