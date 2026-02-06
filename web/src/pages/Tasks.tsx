@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
+import { api } from '../api'
 
 type Task = {
   id: number
@@ -17,7 +18,7 @@ export default function Tasks() {
 
   useEffect(() => {
     setLoading(true)
-    axios.get('/api/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false))
+    api.get('/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false))
   }, [])
 
   return (
@@ -36,7 +37,7 @@ export default function Tasks() {
                 <td>{t.amount}</td>
                 <td>{t.status}</td>
                 <td>
-                  <button onClick={async () => { await axios.post(`/api/tasks/${t.id}/execute`); setLoading(true); axios.get('/api/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false)); }}>Execute</button>
+                  <button onClick={async () => { await api.post(`/tasks/${t.id}/execute`); setLoading(true); api.get('/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false)); }}>Execute</button>
                 </td>
               </tr>
             ))}

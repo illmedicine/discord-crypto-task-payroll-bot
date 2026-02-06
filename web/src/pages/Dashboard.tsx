@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
+import { api, getAuthUrl } from '../api'
 
 type Contest = {
   id: number
@@ -18,7 +19,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     setLoading(true)
-    axios.get('/api/contests')
+    api.get('/contests')
       .then(r => setContests(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -29,7 +30,11 @@ export default function Dashboard() {
       <h2>Contests</h2>
 
       <div style={{ marginBottom: 12 }}>
-        <a className="btn" href="/auth/discord">Login with Discord</a>
+        { (import.meta as any).env?.VITE_API_BASE ? (
+          <a className="btn" href={getAuthUrl()}>Login with Discord</a>
+        ) : (
+          <button className="btn" disabled title="Requires backend URL (set VITE_API_BASE)">Login with Discord (backend required)</button>
+        )}
       </div>
 
       {loading ? <p>Loading...</p> : (
@@ -46,14 +51,14 @@ export default function Dashboard() {
                 <td>{c.status}</td>
                 <td>
                   <button onClick={async () => {
-                    await axios.post(`/api/contests/${c.id}/process`);
+                    await api.post(`/contests/${c.id}/process`);
                     // refresh
-                    setLoading(true); axios.get('/api/contests').then(r => setContests(r.data)).finally(() => setLoading(false));
+                    setLoading(true); api.get('/contests').then(r => setContests(r.data)).finally(() => setLoading(false));
                   }}>Process Now</button>
                   {!c.message_id && <button style={{ marginLeft:8 }} onClick={async () => {
                     // quick publish
-                    await axios.post('/api/publish', { guild_id: c.guild_id, channel_id: c.channel_id, content: `🎉 **${c.title}** has started! Prize: ${c.prize_amount} ${c.currency}` });
-                    setLoading(true); axios.get('/api/contests').then(r => setContests(r.data)).finally(() => setLoading(false));
+                    await api.post('/publish', { guild_id: c.guild_id, channel_id: c.channel_id, content: `🎉 **${c.title}** has started! Prize: ${c.prize_amount} ${c.currency}` });
+                    setLoading(true); api.get('/contests').then(r => setContests(r.data)).finally(() => setLoading(false));
                   }}>Publish</button>}
                 </td>
               </tr>

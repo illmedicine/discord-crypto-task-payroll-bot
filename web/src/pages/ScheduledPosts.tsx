@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
+import { api } from '../api'
 
 type Post = { id: number, content: string, scheduled_at: string, status: string }
 
@@ -13,7 +14,7 @@ export default function ScheduledPosts() {
   useEffect(() => { load(); }, [])
 
   const load = async () => {
-    const res = await axios.get('/api/scheduled-posts', { params: { guild_id: guildId } })
+    const res = await api.get('/scheduled-posts', { params: { guild_id: guildId } })
     setPosts(res.data || [])
   }
 

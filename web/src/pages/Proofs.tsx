@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
+import { api } from '../api'
 
 type Proof = { id:number, title:string, assigned_user_id:string, screenshot_url:string, status:string }
 
@@ -9,7 +10,7 @@ export default function Proofs() {
 
   useEffect(() => { load(); }, [])
   const load = async () => {
-    const res = await axios.get('/api/proofs/pending', { params: { guild_id: guildId } });
+    const res = await api.get('/proofs/pending', { params: { guild_id: guildId } });
     setProofs(res.data || []);
   }
 
