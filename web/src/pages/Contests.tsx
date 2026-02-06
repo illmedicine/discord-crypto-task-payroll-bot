@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-type VoteEvent = {
+type Contest = {
   id: number
   title: string
   prize_amount: number
@@ -8,66 +8,72 @@ type VoteEvent = {
   status: string
 }
 
-export default function VoteEvents() {
-  const [events, setEvents] = useState<VoteEvent[]>([])
+export default function Contests() {
+  const [contests, setContests] = useState<Contest[]>([])
   const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
   const [prizeAmount, setPrizeAmount] = useState('')
   const [currency, setCurrency] = useState('SOL')
-  const [minParticipants, setMinParticipants] = useState('')
-  const [maxParticipants, setMaxParticipants] = useState('')
-  const [durationMinutes, setDurationMinutes] = useState('')
+  const [numWinners, setNumWinners] = useState('')
+  const [maxEntries, setMaxEntries] = useState('')
+  const [durationHours, setDurationHours] = useState('')
+  const [referenceUrl, setReferenceUrl] = useState('')
   const [generatedCommand, setGeneratedCommand] = useState('')
 
   const handleCreate = (ev: React.FormEvent) => {
     ev.preventDefault()
-    const command = `/vote-event create title:"${title}" prize_amount:${prizeAmount} currency:${currency} min_participants:${minParticipants} max_participants:${maxParticipants} duration_minutes:${durationMinutes}`
+    const command = `/contest create title:"${title}" description:"${description}" prize_amount:${prizeAmount} currency:${currency} num_winners:${numWinners} max_entries:${maxEntries} duration_hours:${durationHours} reference_url:"${referenceUrl}"`
     setGeneratedCommand(command)
     // Optionally add to local state
-    const newEvent: VoteEvent = {
+    const newContest: Contest = {
       id: Date.now(),
       title,
       prize_amount: parseFloat(prizeAmount),
       currency,
       status: 'pending'
     }
-    setEvents(prev => [newEvent, ...prev])
+    setContests(prev => [newContest, ...prev])
     setTitle('')
+    setDescription('')
     setPrizeAmount('')
-    setMinParticipants('')
-    setMaxParticipants('')
-    setDurationMinutes('')
+    setNumWinners('')
+    setMaxEntries('')
+    setDurationHours('')
+    setReferenceUrl('')
   }
 
   return (
     <div className="container">
-      <h2>Vote Events</h2>
+      <h2>Contests</h2>
       <table>
         <thead>
           <tr><th>ID</th><th>Title</th><th>Prize</th><th>Status</th></tr>
         </thead>
         <tbody>
-          {events.map(e => (
-            <tr key={e.id}>
-              <td>{e.id}</td>
-              <td>{e.title}</td>
-              <td>{e.prize_amount} {e.currency}</td>
-              <td>{e.status}</td>
+          {contests.map(c => (
+            <tr key={c.id}>
+              <td>{c.id}</td>
+              <td>{c.title}</td>
+              <td>{c.prize_amount} {c.currency}</td>
+              <td>{c.status}</td>
             </tr>
           ))}
         </tbody>
       </table>
 
-      <h3>Create Vote Event</h3>
+      <h3>Create Contest</h3>
       <form onSubmit={handleCreate} className="mini-form">
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Title" required />
+        <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Description" required />
         <input value={prizeAmount} onChange={e => setPrizeAmount(e.target.value)} placeholder="Prize Amount" type="number" required />
         <select value={currency} onChange={e => setCurrency(e.target.value)}>
           <option value="SOL">SOL</option>
           <option value="USD">USD</option>
         </select>
-        <input value={minParticipants} onChange={e => setMinParticipants(e.target.value)} placeholder="Min Participants" type="number" required />
-        <input value={maxParticipants} onChange={e => setMaxParticipants(e.target.value)} placeholder="Max Participants" type="number" required />
-        <input value={durationMinutes} onChange={e => setDurationMinutes(e.target.value)} placeholder="Duration (minutes)" type="number" required />
+        <input value={numWinners} onChange={e => setNumWinners(e.target.value)} placeholder="Number of Winners" type="number" required />
+        <input value={maxEntries} onChange={e => setMaxEntries(e.target.value)} placeholder="Max Entries" type="number" required />
+        <input value={durationHours} onChange={e => setDurationHours(e.target.value)} placeholder="Duration (hours)" type="number" required />
+        <input value={referenceUrl} onChange={e => setReferenceUrl(e.target.value)} placeholder="Reference URL" />
         <button type="submit">Generate Command</button>
       </form>
 

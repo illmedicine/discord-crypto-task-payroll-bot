@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 
 // Deploy base path for GitHub Pages (update repository name if different)
 export default defineConfig({
-  base: '/DCB-Event-Manager/',
+  base: '/discord-crypto-task-payroll-bot/',
   plugins: [react()],
   server: {
     proxy: {
