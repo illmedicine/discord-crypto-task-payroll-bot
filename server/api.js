@@ -2,6 +2,8 @@ const express = require('express');
 const axios = require('axios');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
 
 module.exports = (client) => {
   const app = express();
@@ -9,6 +11,10 @@ module.exports = (client) => {
 
   app.use(express.json());
   app.use(cookieParser());
+
+  // CORS - allow frontend origin and allow credentials
+  const allowedOrigin = process.env.DCB_API_BASE || '*';
+  app.use(cors({ origin: allowedOrigin === '*' ? true : allowedOrigin, credentials: true }));
 
   // Basic health check
   app.get('/api/health', (req, res) => {
@@ -22,13 +28,16 @@ module.exports = (client) => {
     return `${proto}://${req.get('host')}`;
   }
 
+  const SESSION_SECRET = process.env.DCB_SESSION_SECRET || 'change-this-secret';
+  const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+
   // Start Discord OAuth - redirect to Discord authorize URL
   app.get('/auth/discord', (req, res) => {
     const clientId = process.env.DISCORD_CLIENT_ID;
     if (!clientId) return res.status(500).send('DISCORD_CLIENT_ID not configured');
 
     const state = crypto.randomBytes(12).toString('hex');
-    res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: 'lax' });
+    res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
 
     const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/discord/callback`);
     const scope = encodeURIComponent('identify email guilds');
@@ -37,7 +46,7 @@ module.exports = (client) => {
     return res.redirect(url);
   });
 
-  // Callback - exchange code for token and show user info
+  // Callback - exchange code for token, create session cookie and redirect back to UI
   app.get('/auth/discord/callback', async (req, res) => {
     const { code, state } = req.query;
     const savedState = req.cookies?.dcb_oauth_state;
@@ -67,22 +76,64 @@ module.exports = (client) => {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
 
-      // TODO: Persist tokens / create session as needed. For now show a simple page.
+      // Create a session JWT
+      const payload = {
+        id: userResp.data.id,
+        username: userResp.data.username,
+        discriminator: userResp.data.discriminator,
+        avatar: userResp.data.avatar
+      };
+
+      const token = jwt.sign(payload, SESSION_SECRET, { expiresIn: SESSION_TTL_SECONDS });
+
+      // Set cookie
+      res.cookie('dcb_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: SESSION_TTL_SECONDS * 1000
+      });
+
       res.clearCookie('dcb_oauth_state');
+
+      // Redirect back to UI (if configured) or show success page
+      const uiBase = process.env.DCB_API_BASE ? process.env.DCB_API_BASE : null;
+      if (uiBase) {
+        // if frontend is separate, redirect to its root
+        return res.redirect(uiBase);
+      }
+
       return res.send(`
         <html>
           <head><title>DCB Login Success</title></head>
           <body>
             <h1>Login successful</h1>
             <p>Welcome, ${userResp.data.username}#${userResp.data.discriminator}</p>
-            <pre>${JSON.stringify(userResp.data, null, 2)}</pre>
-            <p>You can now close this window.</p>
+            <p>You can close this window and return to the admin UI.</p>
           </body>
         </html>
       `);
     } catch (err) {
       console.error('[OAuth] Error exchanging code or fetching user:', err.response ? err.response.data : err.message);
       return res.status(500).send('OAuth exchange failed');
+    }
+  });
+
+  // Logout
+  app.post('/auth/logout', (req, res) => {
+    res.clearCookie('dcb_session');
+    res.json({ ok: true });
+  });
+
+  // Return current session user
+  app.get('/api/auth/me', (req, res) => {
+    const token = req.cookies?.dcb_session;
+    if (!token) return res.status(401).json({ error: 'no_session' });
+    try {
+      const payload = jwt.verify(token, SESSION_SECRET);
+      return res.json({ user: payload });
+    } catch (e) {
+      return res.status(401).json({ error: 'invalid_session' });
     }
   });
 

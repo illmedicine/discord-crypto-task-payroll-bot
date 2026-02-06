@@ -5,6 +5,7 @@ const API_PREFIX = API_BASE ? `${API_BASE.replace(/\/$/, '')}/api` : '/api'
 
 export const api = axios.create({
   baseURL: API_PREFIX,
+  withCredentials: true,
 })
 
 export const getAuthUrl = (path = '/auth/discord') => {

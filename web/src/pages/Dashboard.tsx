@@ -16,6 +16,7 @@ type Contest = {
 export default function Dashboard() {
   const [contests, setContests] = useState<Contest[]>([])
   const [loading, setLoading] = useState(false)
+  const [user, setUser] = useState<{ username: string, discriminator: string } | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -23,6 +24,9 @@ export default function Dashboard() {
       .then(r => setContests(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
+
+    // check auth
+    api.get('/auth/me').then(r => setUser(r.data.user)).catch(() => setUser(null))
   }, [])
 
   return (
@@ -30,10 +34,17 @@ export default function Dashboard() {
       <h2>Contests</h2>
 
       <div style={{ marginBottom: 12 }}>
-        { (import.meta as any).env?.VITE_API_BASE ? (
-          <a className="btn" href={getAuthUrl()}>Login with Discord</a>
+        {user ? (
+          <div>
+            <span style={{ marginRight: 8 }}>Logged in as <strong>{user.username}#{user.discriminator}</strong></span>
+            <button onClick={async () => { await api.post('/auth/logout'); setUser(null); }}>Logout</button>
+          </div>
         ) : (
-          <button className="btn" disabled title="Requires backend URL (set VITE_API_BASE)">Login with Discord (backend required)</button>
+          (import.meta as any).env?.VITE_API_BASE ? (
+            <a className="btn" href={getAuthUrl()}>Login with Discord</a>
+          ) : (
+            <button className="btn" disabled title="Requires backend URL (set VITE_API_BASE)">Login with Discord (backend required)</button>
+          )
         )}
       </div>
 
