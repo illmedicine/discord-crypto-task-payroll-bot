@@ -4,7 +4,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "db:info": "node scripts/db-sync.js"
+    "db:info": "node scripts/db-sync.js",
+    "test": "mocha --recursive --exit"
+  },
+  "devDependencies": {
+    "chai": "^4.3.8",
+    "mocha": "^10.2.0",
+    "proxyquire": "^2.1.3",
+    "sinon": "^16.0.0"
   },
   "dependencies": {
     "@solana/web3.js": "^1.91.0",
