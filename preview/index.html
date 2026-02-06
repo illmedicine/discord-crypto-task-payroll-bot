@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>DiscryptoBank Event Manager — Preview</title>
+    <style>
+      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; padding: 2rem; }
+      .card { border: 1px solid #e1e4e8; padding: 1rem; border-radius: 8px; max-width: 900px; }
+      a.button { display:inline-block; padding: .5rem 1rem; background:#0366d6; color: #fff; text-decoration:none; border-radius:6px; }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>DiscryptoBank Event Manager — Static Preview</h1>
+      <p>This is a static preview of the admin dashboard. The full app requires a server (API, database, and Discord OAuth) and is deployed on Railway.</p>
+      <p>When the Railway deployment completes, set the <strong>RAILWAY_URL</strong> below or edit this file to point to the live site.</p>
+      <p><a class="button" id="openApp" href="#">Open Live App</a></p>
+      <p style="margin-top:1rem;color:#555;">Notes: this static preview is suitable for GitHub Pages. For full functionality (Discord OAuth, SQLite DB), use the Railway-hosted deployment.</p>
+    </main>
+    <script>
+      // Update this link when Railway URL is known
+      const RAILWAY_URL = 'https://your-app.up.railway.app';
+      document.getElementById('openApp').href = RAILWAY_URL;
+    </script>
+  </body>
+</html>
