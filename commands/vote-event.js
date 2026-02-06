@@ -119,6 +119,16 @@ module.exports = {
             .setDescription('Reason for removing the event')
             .setRequired(false)
         )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('process')
+        .setDescription('Manually trigger processing for a vote event (Server Owner only)')
+        .addIntegerOption(option =>
+          option.setName('event_id')
+            .setDescription('Vote event ID to process')
+            .setRequired(true)
+        )
     ),
 
   async execute(interaction) {
@@ -531,6 +541,44 @@ module.exports = {
         return interaction.editReply({
           content: `❌ Error: ${error.message}`
         });
+      }
+    }
+
+    // ==================== MANUAL PROCESS VOTE EVENT ====================
+    if (subcommand === 'process') {
+      await interaction.deferReply({ ephemeral: true });
+
+      try {
+        const eventId = interaction.options.getInteger('event_id');
+        const event = await db.getVoteEvent(eventId);
+
+        if (!event) {
+          return interaction.editReply({ content: `❌ Vote event #${eventId} not found.` });
+        }
+
+        if (event.guild_id !== guildId) {
+          return interaction.editReply({ content: '❌ This vote event is not from this server.' });
+        }
+
+        // Server owner only
+        if (!interaction.guild) return interaction.editReply({ content: '❌ This command must be used in a server channel.', ephemeral: true });
+        let guild;
+        if (typeof interaction.guild.fetch === 'function') guild = await interaction.guild.fetch(); else guild = interaction.guild;
+        if (!guild) return interaction.editReply({ content: '❌ Unable to retrieve server information.', ephemeral: true });
+        if (interaction.user.id !== guild.ownerId) return interaction.editReply({ content: '❌ Only the server owner can manually process an event.' });
+
+        // Process event
+        try {
+          await processVoteEvent(eventId, interaction.client, 'manual');
+          return interaction.editReply({ content: `✅ Processing of vote event #${eventId} started. Results and payments will be announced in the event channel.` });
+        } catch (procErr) {
+          console.error('[VoteEvent] Manual process error:', procErr);
+          return interaction.editReply({ content: `❌ Error processing event: ${procErr.message}` });
+        }
+
+      } catch (error) {
+        console.error('Vote event process error:', error);
+        return interaction.editReply({ content: `❌ Error: ${error.message}` });
       }
     }
   },
