@@ -10,14 +10,14 @@ type Props = {
   }
 }
 
-function Row({ event }: Props) {
+function Row({ event, style }: Props & { style?: React.CSSProperties }) {
   return (
-    <tr>
-      <td>{event.id}</td>
-      <td>{event.title}</td>
-      <td>{event.prize_amount} {event.currency}</td>
-      <td>{event.status}</td>
-    </tr>
+    <div className="table-row" style={style}>
+      <div className="col col-id">{event.id}</div>
+      <div className="col col-title">{event.title}</div>
+      <div className="col col-prize">{event.prize_amount} {event.currency}</div>
+      <div className="col col-status">{event.status}</div>
+    </div>
   )
 }
 

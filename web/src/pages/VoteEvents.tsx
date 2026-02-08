@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import VoteEventRow from '../components/VoteEventRow'
+import { FixedSizeList as List } from 'react-window'
 
 type VoteEvent = {
   id: number
@@ -42,16 +43,23 @@ export default function VoteEvents() {
   return (
     <div className="container">
       <h2>Vote Events</h2>
-      <table>
-        <thead>
-          <tr><th>ID</th><th>Title</th><th>Prize</th><th>Status</th></tr>
-        </thead>
-        <tbody>
-          {events.map(e => (
-            <VoteEventRow key={e.id} event={e} />
-          ))}
-        </tbody>
-      </table>
+      <div className="table">
+        <div className="table-head">
+          <div className="col col-id">ID</div>
+          <div className="col col-title">Title</div>
+          <div className="col col-prize">Prize</div>
+          <div className="col col-status">Status</div>
+        </div>
+        <List
+          height={300}
+          itemCount={events.length}
+          itemSize={48}
+          width={'100%'}
+          itemKey={index => events[index].id}
+        >
+          {({ index, style }) => <VoteEventRow event={events[index]} style={style} />}
+        </List>
+      </div>
 
       <h3>Create Vote Event</h3>
       <form onSubmit={handleCreate} className="mini-form">

@@ -1,4 +1,7 @@
 import React, { useEffect } from 'react'
+import { throttle } from '../utils/throttle'
+
+const throttledWarn = throttle((...args: any[]) => console.warn(...args), 200)
 
 // Lightweight performance monitor that logs long tasks and frame drops to console.
 export default function PerformanceMonitor() {
@@ -7,14 +10,15 @@ export default function PerformanceMonitor() {
 
     try {
       const obs = new PerformanceObserver((list) => {
+        const report = (entry: any) => {
+          if (entry.duration > 50) {
+            throttledWarn(`[Perf] Long task: ${Math.round(entry.duration)}ms — ${entry.name || 'task'}`)
+          }
+        }
         for (const entry of list.getEntries()) {
           // Long Task API entries
           if ((entry as any).entryType === 'longtask') {
-            const e = entry as any
-            if (e.duration > 50) {
-              // Keep messages concise
-              console.warn(`[Perf] Long task: ${Math.round(e.duration)}ms — ${e.name || 'task'}`)
-            }
+            report(entry)
           }
         }
       })
@@ -36,7 +40,7 @@ export default function PerformanceMonitor() {
       const elapsed = now - last
       last = now
       if (elapsed > 40) {
-        console.warn(`[Perf] requestAnimationFrame gap ${Math.round(elapsed)}ms`)
+        throttledWarn(`[Perf] requestAnimationFrame gap ${Math.round(elapsed)}ms`)
       }
       rafId = requestAnimationFrame(tick)
     }

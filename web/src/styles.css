@@ -3,6 +3,19 @@ body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
 .container { padding: 24px; }
 table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
 th, td { border: 1px solid #ddd; padding: 8px; }
+
+/* Virtualized table styles */
+.table { border: 1px solid #ddd; margin-bottom: 16px }
+.table-head, .table-row { display: flex; align-items: center; }
+.table-head { background: #f6f6f6; font-weight: bold; }
+.table-row:nth-child(even) { background: #fff }
+.table-row:nth-child(odd) { background: #fafafa }
+.col { padding: 8px; border-right: 1px solid #eee }
+.col-id { width: 80px }
+.col-title { flex: 1 }
+.col-prize { width: 160px }
+.col-status { width: 120px }
+
 .mini-form input, .mini-form select { margin-right: 8px; padding: 6px; }
 .btn { display:inline-block; background:#5865F2; color:#fff; padding:8px 12px; border-radius:6px; text-decoration:none; }
 .btn:hover { opacity:0.95; }

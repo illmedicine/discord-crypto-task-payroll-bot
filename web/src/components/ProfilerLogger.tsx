@@ -1,4 +1,6 @@
 import React from 'react'
+import { throttle } from '../utils/throttle'
+const warn = throttle((...args: any[]) => console.warn(...args), 200)
 
 export default function ProfilerLogger({ id, children }: { id: string; children: React.ReactNode }) {
   function onRenderCallback(
@@ -11,7 +13,7 @@ export default function ProfilerLogger({ id, children }: { id: string; children:
     interactions: any
   ) {
     if (actualDuration > 30) {
-      console.warn(`[Profiler] ${id} ${phase} took ${Math.round(actualDuration)}ms (base ${Math.round(baseDuration)}ms)`)
+      warn(`[Profiler] ${id} ${phase} took ${Math.round(actualDuration)}ms (base ${Math.round(baseDuration)}ms)`)
     }
   }
 
