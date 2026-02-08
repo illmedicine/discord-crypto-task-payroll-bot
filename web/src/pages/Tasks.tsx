@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { api } from '../api'
+import TaskRow from '../components/TaskRow'
+import { FixedSizeList as List } from 'react-window'
 
 type Task = {
   id: number
@@ -25,24 +27,26 @@ export default function Tasks() {
     <div className="container">
       <h2>Tasks</h2>
       {loading ? <p>Loading...</p> : (
-        <table>
-          <thead>
-            <tr><th>ID</th><th>Recipient</th><th>Amount</th><th>Status</th><th>Actions</th></tr>
-          </thead>
-          <tbody>
-            {tasks.map(t => (
-              <tr key={t.id}>
-                <td>{t.id}</td>
-                <td>{t.recipient_address}</td>
-                <td>{t.amount}</td>
-                <td>{t.status}</td>
-                <td>
-                  <button onClick={async () => { await api.post(`/tasks/${t.id}/execute`); setLoading(true); api.get('/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false)); }}>Execute</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table">
+          <div className="table-head">
+            <div className="col col-id">ID</div>
+            <div className="col col-title">Recipient</div>
+            <div className="col col-prize">Amount</div>
+            <div className="col col-status">Status</div>
+            <div className="col col-actions">Actions</div>
+          </div>
+          <List
+            height={300}
+            itemCount={tasks.length}
+            itemSize={56}
+            width={'100%'}
+            itemKey={index => tasks[index].id}
+          >
+            {({ index, style }) => (
+              <TaskRow task={tasks[index]} style={style} onExecute={async (id) => { await api.post(`/tasks/${id}/execute`); setLoading(true); api.get('/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false)); }} />
+            )}
+          </List>
+        </div>
       )}
 
       <h3>Create Task</h3>

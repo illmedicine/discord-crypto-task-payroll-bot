@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { api } from '../api'
+import PostRow from '../components/PostRow'
+import { FixedSizeList as List } from 'react-window'
 
 type Post = { id: number, content: string, scheduled_at: string, status: string }
 
@@ -35,14 +37,23 @@ export default function ScheduledPosts() {
         <button type="submit">Schedule</button>
       </form>
 
-      <table>
-        <thead><tr><th>ID</th><th>Content</th><th>Time</th><th>Status</th></tr></thead>
-        <tbody>
-          {posts.map(p => (
-            <tr key={p.id}><td>{p.id}</td><td>{p.content}</td><td>{p.scheduled_at}</td><td>{p.status}</td></tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table">
+        <div className="table-head">
+          <div className="col col-id">ID</div>
+          <div className="col col-title">Content</div>
+          <div className="col col-prize">Time</div>
+          <div className="col col-status">Status</div>
+        </div>
+        <List
+          height={300}
+          itemCount={posts.length}
+          itemSize={56}
+          width={'100%'}
+          itemKey={index => posts[index].id}
+        >
+          {({ index, style }) => <PostRow post={posts[index]} style={style} />}
+        </List>
+      </div>
     </div>
   )
 }

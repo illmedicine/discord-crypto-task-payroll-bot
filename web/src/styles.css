@@ -17,6 +17,8 @@ th, td { border: 1px solid #ddd; padding: 8px; }
 .col-status { width: 120px }
 .col-user { width: 160px }
 .col-actions { width: 320px }
+.col-title { flex: 1; min-width: 160px }
+.col-id { width: 80px }
 
 .mini-form input, .mini-form select { margin-right: 8px; padding: 6px; }
 .btn { display:inline-block; background:#5865F2; color:#fff; padding:8px 12px; border-radius:6px; text-decoration:none; }
