@@ -1,4 +1,6 @@
 import React, { useState } from 'react'
+import ContestRow from '../components/ContestRow'
+import { FixedSizeList as List } from 'react-window'
 
 type Contest = {
   id: number
@@ -45,21 +47,23 @@ export default function Contests() {
   return (
     <div className="container">
       <h2>Contests</h2>
-      <table>
-        <thead>
-          <tr><th>ID</th><th>Title</th><th>Prize</th><th>Status</th></tr>
-        </thead>
-        <tbody>
-          {contests.map(c => (
-            <tr key={c.id}>
-              <td>{c.id}</td>
-              <td>{c.title}</td>
-              <td>{c.prize_amount} {c.currency}</td>
-              <td>{c.status}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="table">
+        <div className="table-head">
+          <div className="col col-id">ID</div>
+          <div className="col col-title">Title</div>
+          <div className="col col-prize">Prize</div>
+          <div className="col col-status">Status</div>
+        </div>
+        <List
+          height={300}
+          itemCount={contests.length}
+          itemSize={48}
+          width={'100%'}
+          itemKey={index => contests[index].id}
+        >
+          {({ index, style }) => <ContestRow contest={contests[index]} style={style} />}
+        </List>
+      </div>
 
       <h3>Create Contest</h3>
       <form onSubmit={handleCreate} className="mini-form">
