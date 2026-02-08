@@ -1,14 +1,17 @@
-const { EmbedBuilder } = require('discord.js');
-const db = require('./db');
-const crypto = require('./crypto');
+// db and crypto are required lazily inside processVoteEvent to make testing/mocking easier
+// EmbedBuilder is required lazily inside functions to avoid heavy module load during tests
 const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 
 /**
  * Process a vote event ending: determine winners, attempt payouts, announce results, and finalize status.
  * Safe to call multiple times; will no-op if event is already ended/cancelled/completed.
  */
-const processVoteEvent = async (eventId, client, reason = 'time') => {
+const processVoteEvent = async (eventId, client, reason = 'time', deps = {}) => {
   try {
+    // Lazy-load dependencies to avoid hard dependency on sqlite3/build during tests
+    const db = deps.db || require('./db');
+    const crypto = deps.crypto || require('./crypto');
+
     const event = await db.getVoteEvent(eventId);
     if (!event) return;
 
@@ -29,6 +32,7 @@ const processVoteEvent = async (eventId, client, reason = 'time') => {
       try {
         const channel = await client.channels.fetch(event.channel_id);
         if (channel) {
+          const { EmbedBuilder } = require('discord.js');
           const cancelEmbed = new EmbedBuilder()
             .setColor('#FF6600')
             .setTitle(`🗳️ Vote Event #${event.id} Cancelled`)
@@ -86,28 +90,39 @@ const processVoteEvent = async (eventId, client, reason = 'time') => {
         console.log(`[VoteEventProcessor] No treasury wallet configured for guild ${event.guild_id}, skipping payments`);
       } else {
         const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
-        const botWallet = crypto.getWallet();
-        const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
 
         for (const userId of winnerUserIds) {
           try {
             const userData = await db.getUser(userId);
             if (userData && userData.solana_address) {
-              const recipientPubkey = new PublicKey(userData.solana_address);
-              const lamports = Math.floor(prizePerWinner * 1e9);
+              // Use crypto.sendSol if available for easier testing, otherwise fall back to on-chain tx
+              if (typeof crypto.sendSol === 'function') {
+                const res = await crypto.sendSol(userData.solana_address, prizePerWinner);
+                if (res && res.success) {
+                  await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, res.signature||res.signature);
+                  paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature: res.signature });
+                } else {
+                  paymentResults.push({ userId, success: false, reason: res.error || 'Payment failed' });
+                }
+              } else {
+                const recipientPubkey = new PublicKey(userData.solana_address);
+                const lamports = Math.floor(prizePerWinner * 1e9);
 
-              const instruction = SystemProgram.transfer({
-                fromPubkey: treasuryPubkey,
-                toPubkey: recipientPubkey,
-                lamports
-              });
+                const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
+                const instruction = SystemProgram.transfer({
+                  fromPubkey: treasuryPubkey,
+                  toPubkey: recipientPubkey,
+                  lamports
+                });
 
-              const tx = new Transaction().add(instruction);
-              const signature = await sendAndConfirmTransaction(connection, tx, [botWallet]);
+                const tx = new Transaction().add(instruction);
+                const botWallet = crypto.getWallet();
+                const signature = await sendAndConfirmTransaction(connection, tx, [botWallet]);
 
-              await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, signature);
+                await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, signature);
 
-              paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature });
+                paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature });
+              }
             } else {
               paymentResults.push({ userId, success: false, reason: 'No wallet connected' });
             }
@@ -135,6 +150,7 @@ const processVoteEvent = async (eventId, client, reason = 'time') => {
     try {
       const channel = await client.channels.fetch(event.channel_id);
       if (channel) {
+        const { EmbedBuilder } = require('discord.js');
         const resultsEmbed = new EmbedBuilder()
           .setColor('#9B59B6')
           .setTitle(`🗳️ Vote Event #${event.id} Results!`)

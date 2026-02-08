@@ -7,6 +7,9 @@ import Contests from './pages/Contests'
 const ScheduledPosts = React.lazy(() => import('./pages/ScheduledPosts'))
 const Proofs = React.lazy(() => import('./pages/Proofs'))
 
+import PerformanceMonitor from './components/PerformanceMonitor'
+import ProfilerLogger from './components/ProfilerLogger'
+
 export default function App() {
   const [page, setPage] = useState<'dashboard' | 'tasks' | 'votes' | 'contests' | 'scheduled' | 'proofs'>('dashboard')
 
@@ -24,12 +27,15 @@ export default function App() {
         </nav>
       </header>
       <main>
-        {page === 'dashboard' && <Dashboard />}
-        {page === 'tasks' && <Tasks />}
-        {page === 'votes' && <VoteEvents />}
-        {page === 'contests' && <Contests />}
-        {page === 'scheduled' && <React.Suspense fallback={<div>Loading...</div>}><ScheduledPosts /></React.Suspense>}
-        {page === 'proofs' && <React.Suspense fallback={<div>Loading...</div>}><Proofs /></React.Suspense>}
+        <PerformanceMonitor />
+        <ProfilerLogger id="App"> 
+          {page === 'dashboard' && <Dashboard />}
+          {page === 'tasks' && <Tasks />}
+          {page === 'votes' && <VoteEvents />}
+          {page === 'contests' && <Contests />}
+          {page === 'scheduled' && <React.Suspense fallback={<div>Loading...</div>}><ScheduledPosts /></React.Suspense>}
+          {page === 'proofs' && <React.Suspense fallback={<div>Loading...</div>}><Proofs /></React.Suspense>}
+        </ProfilerLogger>
       </main>
     </div>
   )

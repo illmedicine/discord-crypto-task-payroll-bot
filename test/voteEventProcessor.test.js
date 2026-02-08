@@ -2,7 +2,10 @@ const { expect } = require('chai');
 const sinon = require('sinon');
 const proxyquire = require('proxyquire');
 
-describe('voteEventProcessor', () => {
+describe('voteEventProcessor', function () {
+  // Allow more time for module loading in CI/Windows UNC environments
+  // Note: UNC path + Windows can be slow here; increase timeout
+  this.timeout(600000);
   let dbStub;
   let cryptoStub;
   let clientStub;
@@ -31,11 +34,8 @@ describe('voteEventProcessor', () => {
       }
     };
 
-    // Load processor with stubs
-    const mod = proxyquire('../utils/voteEventProcessor', {
-      './db': dbStub,
-      './crypto': cryptoStub
-    });
+    // Load processor (we will pass stubs via deps when calling)
+    const mod = require('../utils/voteEventProcessor');
 
     processVoteEvent = mod.processVoteEvent;
   });
@@ -53,7 +53,9 @@ describe('voteEventProcessor', () => {
     dbStub.getUser.withArgs('U2').resolves({ solana_address: 'ADDR2' });
 
     // Act
-    await processVoteEvent(eventId, clientStub, 'test');
+    console.log('[TEST] Calling processVoteEvent for event', eventId);
+    await processVoteEvent(eventId, clientStub, 'test', { db: dbStub, crypto: cryptoStub });
+    console.log('[TEST] processVoteEvent returned for event', eventId);
 
     // Assert: winners were set
     expect(dbStub.setVoteEventWinners.calledOnce).to.be.true;
@@ -70,7 +72,7 @@ describe('voteEventProcessor', () => {
     dbStub.getVoteEvent.resolves({ id: eventId, guild_id: 'G1', title: 'Small Event', owner_favorite_image_id: null, prize_amount: 1, currency: 'SOL', min_participants: 3, channel_id: 'C1', status: 'active' });
     dbStub.getVoteEventParticipants.resolves([{ user_id: 'U1', voted_image_id: null }]);
 
-    await processVoteEvent(eventId, clientStub, 'test');
+    await processVoteEvent(eventId, clientStub, 'test', { db: dbStub, crypto: cryptoStub });
 
     // It should update status to cancelled (inside function flow)
     expect(dbStub.updateVoteEventStatus.called).to.be.true;

@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import VoteEventRow from '../components/VoteEventRow'
 
 type VoteEvent = {
   id: number
@@ -47,12 +48,7 @@ export default function VoteEvents() {
         </thead>
         <tbody>
           {events.map(e => (
-            <tr key={e.id}>
-              <td>{e.id}</td>
-              <td>{e.title}</td>
-              <td>{e.prize_amount} {e.currency}</td>
-              <td>{e.status}</td>
-            </tr>
+            <VoteEventRow key={e.id} event={e} />
           ))}
         </tbody>
       </table>
