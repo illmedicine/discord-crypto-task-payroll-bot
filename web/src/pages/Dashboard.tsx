@@ -90,6 +90,11 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
   const [activityFilter, setActivityFilter] = useState('all')
   const [loading, setLoading] = useState(false)
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
+  const [solBalance, setSolBalance] = useState<number | null>(null)
+  const [budgetTotal, setBudgetTotal] = useState<number>(0)
+  const [budgetSpent, setBudgetSpent] = useState<number>(0)
+  const [budgetCurrency, setBudgetCurrency] = useState<string>('SOL')
+  const [walletNetwork, setWalletNetwork] = useState<string>('mainnet-beta')
 
   useEffect(() => {
     if (!guildId) return
@@ -108,6 +113,24 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
       setContests((contestsRes.data || []).slice(0, 3) as Contest[])
       setTransactions((txRes.data || []) as Transaction[])
       setWalletAddress(balRes.data?.wallet_address || null)
+      const w = balRes.data?.wallet
+      if (w) {
+        setBudgetTotal(w.budget_total || 0)
+        setBudgetSpent(w.budget_spent || 0)
+        setBudgetCurrency(w.budget_currency || 'SOL')
+        setWalletNetwork(w.network || 'mainnet-beta')
+        // Fetch live SOL balance
+        if (w.wallet_address) {
+          const rpcUrl = w.network === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com'
+          fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [w.wallet_address] }),
+          }).then(r => r.json()).then(d => {
+            if (d?.result?.value !== undefined) setSolBalance(d.result.value / 1e9)
+          }).catch(() => {})
+        }
+      }
     }).finally(() => setLoading(false))
   }, [guildId])
 
@@ -132,21 +155,27 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
   return (
     <div className="container">
       {/* Balance Card */}
-      <div className="balance-card">
+      <div className="balance-card" onClick={() => onNavigate('treasury')} style={{ cursor: 'pointer' }} title="Click to manage treasury">
         <div className="balance-label">
           <span className="live-dot" />
           Live Balance
         </div>
         <div className="balance-value">
-          {walletAddress ? '◎ --' : '$0.00'}
-          <span className="balance-change positive">+12.5%</span>
+          {walletAddress ? (solBalance !== null ? `◎ ${solBalance.toFixed(4)}` : '◎ --') : '$0.00'}
+          {budgetTotal > 0 && (
+            <span className="balance-change" style={{ color: budgetSpent / budgetTotal > 0.9 ? 'var(--danger)' : 'var(--success)' }}>
+              {((budgetTotal - budgetSpent) / budgetTotal * 100).toFixed(0)}% budget left
+            </span>
+          )}
         </div>
         <div className="balance-sub">
-          {walletAddress ? `Wallet: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : 'No wallet configured'}
+          {walletAddress
+            ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)} · ${walletNetwork === 'devnet' ? 'Devnet' : 'Mainnet'}${budgetTotal > 0 ? ` · Budget: ${budgetSpent.toFixed(2)}/${budgetTotal} ${budgetCurrency}` : ''}`
+            : 'No wallet configured — click to connect'}
         </div>
         <div className="balance-actions">
-          <button className="balance-btn primary">Send</button>
-          <button className="balance-btn primary">Deposit</button>
+          <button className="balance-btn primary" onClick={e => { e.stopPropagation(); onNavigate('treasury') }}>Manage Wallet</button>
+          <button className="balance-btn primary" onClick={e => { e.stopPropagation(); onNavigate('history') }}>View History</button>
         </div>
       </div>
 

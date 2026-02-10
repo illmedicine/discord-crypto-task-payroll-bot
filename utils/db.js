@@ -50,10 +50,24 @@ const initDb = () => {
       CREATE TABLE IF NOT EXISTS guild_wallets (
         guild_id TEXT PRIMARY KEY,
         wallet_address TEXT NOT NULL,
+        label TEXT DEFAULT 'Treasury',
+        budget_total REAL DEFAULT 0,
+        budget_spent REAL DEFAULT 0,
+        budget_currency TEXT DEFAULT 'SOL',
+        network TEXT DEFAULT 'mainnet-beta',
         configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        configured_by TEXT
+        configured_by TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Migration: add new columns if table already exists (safe to run repeatedly)
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN label TEXT DEFAULT 'Treasury'`, () => {});
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_total REAL DEFAULT 0`, () => {});
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_spent REAL DEFAULT 0`, () => {});
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_currency TEXT DEFAULT 'SOL'`, () => {});
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN network TEXT DEFAULT 'mainnet-beta'`, () => {});
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`, () => {});
 
     // Guild Settings - approve roles, etc
     db.run(`
@@ -398,11 +412,18 @@ const initDb = () => {
 };
 
 // Guild Wallet operations
-const setGuildWallet = (guildId, walletAddress, configuredByUserId) => {
+const setGuildWallet = (guildId, walletAddress, configuredByUserId, label, network) => {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by) VALUES (?, ?, ?)`,
-      [guildId, walletAddress, configuredByUserId],
+      `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, configured_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(guild_id) DO UPDATE SET
+         wallet_address = excluded.wallet_address,
+         configured_by = excluded.configured_by,
+         label = excluded.label,
+         network = excluded.network,
+         updated_at = CURRENT_TIMESTAMP`,
+      [guildId, walletAddress, configuredByUserId, label || 'Treasury', network || 'mainnet-beta'],
       function(err) {
         if (err) reject(err);
         else resolve();
@@ -418,7 +439,49 @@ const getGuildWallet = (guildId) => {
       [guildId],
       (err, row) => {
         if (err) reject(err);
-        else resolve(row);
+        else resolve(row || null);
+      }
+    );
+  });
+};
+
+const updateGuildWallet = (guildId, updates) => {
+  const fields = [];
+  const params = [];
+  if (updates.wallet_address !== undefined) { fields.push('wallet_address = ?'); params.push(updates.wallet_address); }
+  if (updates.label !== undefined) { fields.push('label = ?'); params.push(updates.label); }
+  if (updates.budget_total !== undefined) { fields.push('budget_total = ?'); params.push(Number(updates.budget_total)); }
+  if (updates.budget_spent !== undefined) { fields.push('budget_spent = ?'); params.push(Number(updates.budget_spent)); }
+  if (updates.budget_currency !== undefined) { fields.push('budget_currency = ?'); params.push(updates.budget_currency); }
+  if (updates.network !== undefined) { fields.push('network = ?'); params.push(updates.network); }
+  if (fields.length === 0) return Promise.resolve();
+  fields.push('updated_at = CURRENT_TIMESTAMP');
+  params.push(guildId);
+  return new Promise((resolve, reject) => {
+    db.run(`UPDATE guild_wallets SET ${fields.join(', ')} WHERE guild_id = ?`, params, function(err) {
+      if (err) reject(err);
+      else resolve({ changes: this.changes });
+    });
+  });
+};
+
+const deleteGuildWallet = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [guildId], function(err) {
+      if (err) reject(err);
+      else resolve({ changes: this.changes });
+    });
+  });
+};
+
+const addBudgetSpend = (guildId, amount) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      'UPDATE guild_wallets SET budget_spent = budget_spent + ?, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?',
+      [Number(amount), guildId],
+      function(err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
       }
     );
   });
@@ -1720,6 +1783,9 @@ module.exports = {
   initDb,
   setGuildWallet,
   getGuildWallet,
+  updateGuildWallet,
+  deleteGuildWallet,
+  addBudgetSpend,
   setApprovedRoles,
   getApprovedRoles,
   createBulkTask,

@@ -933,6 +933,203 @@ h3 {
   margin-top: 40px;
 }
 
+/* ===== Treasury Page ===== */
+.treasury-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.treasury-wallet-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-card);
+}
+.treasury-wallet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.treasury-wallet-header h3 {
+  font-size: 18px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.treasury-wallet-addr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.treasury-wallet-addr a {
+  color: var(--accent-blue);
+  text-decoration: none;
+  font-size: 14px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.treasury-wallet-addr a:hover { text-decoration: underline; }
+.treasury-wallet-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.treasury-wallet-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.treasury-wallet-label strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.treasury-balance-block {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 20px 0;
+}
+.treasury-balance-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.treasury-balance-value {
+  font-size: 32px;
+  font-weight: 700;
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.treasury-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.treasury-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-color);
+}
+.treasury-edit-form .form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.treasury-edit-form .form-row > * {
+  flex: 1;
+  min-width: 160px;
+}
+.treasury-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 20px;
+}
+.treasury-connect-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  text-align: center;
+  box-shadow: var(--shadow-card);
+}
+.treasury-connect-card h3 {
+  font-size: 20px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.treasury-connect-card p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+.treasury-connect-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+.budget-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.budget-stat-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.budget-stat {
+  flex: 1;
+  min-width: 120px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  text-align: center;
+}
+.budget-stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.budget-stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.budget-bar-container {
+  margin: 10px 0;
+}
+.budget-bar {
+  height: 10px;
+  background: var(--bg-input);
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+.budget-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.4s ease;
+  background: var(--gradient-green);
+}
+.budget-bar-fill.warn { background: var(--gradient-gold); }
+.budget-bar-fill.danger { background: var(--accent-red); }
+.budget-bar-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  text-align: right;
+}
+.budget-form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.budget-form > * {
+  flex: 1;
+  min-width: 100px;
+}
+.mono {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 900px) {
   .sidebar {

@@ -595,9 +595,80 @@ module.exports = (client) => {
     try {
       const wallet = await db.getGuildWallet(req.guild.id);
       // Return wallet info; actual balance fetched client-side or via Solana RPC
-      return res.json({ wallet_address: wallet?.wallet_address || null });
+      return res.json({ wallet_address: wallet?.wallet_address || null, wallet });
     } catch (err) {
       return res.status(500).json({ error: 'failed_to_get_balance' });
+    }
+  });
+
+  // ---- Guild Treasury Wallet Management ----
+  app.get('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const wallet = await db.getGuildWallet(req.guild.id);
+      return res.json(wallet || null);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_get_wallet' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { wallet_address, label, network } = req.body || {};
+      if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
+        return res.status(400).json({ error: 'invalid_wallet_address' });
+      }
+      await db.setGuildWallet(req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta');
+      await db.logActivity(req.guild.id, 'wallet', 'Treasury Wallet Connected', `Wallet ${wallet_address.slice(0,8)}...${wallet_address.slice(-4)} connected`, `@${req.user.username}`, 0, 'SOL', null);
+      const wallet = await db.getGuildWallet(req.guild.id);
+      return res.json(wallet);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_set_wallet' });
+    }
+  });
+
+  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const updates = req.body || {};
+      if (updates.wallet_address && (typeof updates.wallet_address !== 'string' || updates.wallet_address.length < 32 || updates.wallet_address.length > 44)) {
+        return res.status(400).json({ error: 'invalid_wallet_address' });
+      }
+      await db.updateGuildWallet(req.guild.id, updates);
+      const wallet = await db.getGuildWallet(req.guild.id);
+      return res.json(wallet);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_update_wallet' });
+    }
+  });
+
+  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      await db.deleteGuildWallet(req.guild.id);
+      await db.logActivity(req.guild.id, 'wallet', 'Treasury Wallet Disconnected', 'Treasury wallet removed', `@${req.user.username}`, 0, 'SOL', null);
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_delete_wallet' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { budget_total, budget_currency } = req.body || {};
+      if (budget_total == null || Number(budget_total) < 0) return res.status(400).json({ error: 'invalid_budget' });
+      await db.updateGuildWallet(req.guild.id, { budget_total: Number(budget_total), budget_currency: budget_currency || 'SOL' });
+      const wallet = await db.getGuildWallet(req.guild.id);
+      return res.json(wallet);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_set_budget' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      await db.updateGuildWallet(req.guild.id, { budget_spent: 0 });
+      const wallet = await db.getGuildWallet(req.guild.id);
+      return res.json(wallet);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_reset_budget' });
     }
   });
 

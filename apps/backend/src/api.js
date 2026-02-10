@@ -512,9 +512,104 @@ module.exports = function buildApi({ discordClient }) {
   app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
-      res.json({ wallet_address: wallet?.wallet_address || null })
+      res.json({ wallet_address: wallet?.wallet_address || null, wallet })
     } catch (err) {
       res.status(500).json({ error: 'failed_to_get_balance' })
+    }
+  })
+
+  // ---- Guild Treasury Wallet Management ----
+  app.get('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      res.json(wallet || null)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_wallet' })
+    }
+  })
+
+  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { wallet_address, label, network } = req.body || {}
+      if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
+        return res.status(400).json({ error: 'invalid_wallet_address' })
+      }
+      await db.run(
+        `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, configured_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(guild_id) DO UPDATE SET
+           wallet_address = excluded.wallet_address,
+           configured_by = excluded.configured_by,
+           label = excluded.label,
+           network = excluded.network,
+           updated_at = CURRENT_TIMESTAMP`,
+        [req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta']
+      )
+      await db.run(
+        'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [req.guild.id, 'wallet', 'Treasury Wallet Connected', `Wallet ${wallet_address.slice(0,8)}...${wallet_address.slice(-4)} connected`, `@${req.user.username}`, 0, 'SOL']
+      )
+      const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      res.json(wallet)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_set_wallet' })
+    }
+  })
+
+  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const updates = req.body || {}
+      const fields = []; const params = []
+      if (updates.wallet_address !== undefined) { fields.push('wallet_address = ?'); params.push(updates.wallet_address) }
+      if (updates.label !== undefined) { fields.push('label = ?'); params.push(updates.label) }
+      if (updates.budget_total !== undefined) { fields.push('budget_total = ?'); params.push(Number(updates.budget_total)) }
+      if (updates.budget_spent !== undefined) { fields.push('budget_spent = ?'); params.push(Number(updates.budget_spent)) }
+      if (updates.budget_currency !== undefined) { fields.push('budget_currency = ?'); params.push(updates.budget_currency) }
+      if (updates.network !== undefined) { fields.push('network = ?'); params.push(updates.network) }
+      if (fields.length) {
+        fields.push('updated_at = CURRENT_TIMESTAMP')
+        params.push(req.guild.id)
+        await db.run(`UPDATE guild_wallets SET ${fields.join(', ')} WHERE guild_id = ?`, params)
+      }
+      const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      res.json(wallet)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_update_wallet' })
+    }
+  })
+
+  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      await db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      await db.run(
+        'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [req.guild.id, 'wallet', 'Treasury Wallet Disconnected', 'Treasury wallet removed', `@${req.user.username}`, 0, 'SOL']
+      )
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_delete_wallet' })
+    }
+  })
+
+  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { budget_total, budget_currency } = req.body || {}
+      if (budget_total == null || Number(budget_total) < 0) return res.status(400).json({ error: 'invalid_budget' })
+      await db.run('UPDATE guild_wallets SET budget_total = ?, budget_currency = ?, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?', [Number(budget_total), budget_currency || 'SOL', req.guild.id])
+      const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      res.json(wallet)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_set_budget' })
+    }
+  })
+
+  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      await db.run('UPDATE guild_wallets SET budget_spent = 0, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?', [req.guild.id])
+      const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      res.json(wallet)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_reset_budget' })
     }
   })
 
