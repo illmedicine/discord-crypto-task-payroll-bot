@@ -339,6 +339,61 @@ const initDb = () => {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // Activity feed table - tracks all live activity for the dashboard
+    db.run(`
+      CREATE TABLE IF NOT EXISTS activity_feed (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        user_tag TEXT,
+        amount REAL,
+        currency TEXT DEFAULT 'SOL',
+        reference_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
+      )
+    `);
+
+    // Events table - scheduled events (separate from vote_events/contests)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        event_type TEXT DEFAULT 'general',
+        prize_amount REAL DEFAULT 0,
+        currency TEXT DEFAULT 'SOL',
+        max_participants INTEGER,
+        current_participants INTEGER DEFAULT 0,
+        starts_at DATETIME,
+        ends_at DATETIME,
+        status TEXT DEFAULT 'scheduled',
+        created_by TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(created_by) REFERENCES users(discord_id)
+      )
+    `);
+
+    // Event participants table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS event_participants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(event_id, user_id),
+        FOREIGN KEY(event_id) REFERENCES events(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(user_id) REFERENCES users(discord_id)
+      )
+    `);
   });
 };
 
@@ -1528,8 +1583,141 @@ const getScheduledPostsForGuild = (guildId) => {
   });
 };
 
+// ---- Activity Feed functions ----
+const logActivity = (guildId, type, title, description, userTag, amount, currency, referenceId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency, reference_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, type, title, description || null, userTag || null, amount || null, currency || 'SOL', referenceId || null],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getActivityFeed = (guildId, limit = 20, typeFilter = null) => {
+  return new Promise((resolve, reject) => {
+    let sql = `SELECT * FROM activity_feed WHERE guild_id = ?`;
+    const params = [guildId];
+    if (typeFilter && typeFilter !== 'all') {
+      sql += ` AND type = ?`;
+      params.push(typeFilter);
+    }
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(limit);
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
+// ---- Events (scheduled events) functions ----
+const createEvent = (guildId, channelId, title, description, eventType, prizeAmount, currency, maxParticipants, startsAt, endsAt, createdBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO events (guild_id, channel_id, title, description, event_type, prize_amount, currency, max_participants, starts_at, ends_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, channelId, title, description || '', eventType || 'general', prizeAmount || 0, currency || 'SOL', maxParticipants || null, startsAt || null, endsAt || null, createdBy],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getEvent = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM events WHERE id = ?`, [eventId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row || null);
+    });
+  });
+};
+
+const getEventsForGuild = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM events WHERE guild_id = ? ORDER BY created_at DESC`, [guildId], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
+const getActiveEvents = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM events WHERE guild_id = ? AND status IN ('scheduled','active') ORDER BY starts_at ASC`, [guildId], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
+const updateEventStatus = (eventId, status) => {
+  return new Promise((resolve, reject) => {
+    db.run(`UPDATE events SET status = ? WHERE id = ?`, [status, eventId], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+};
+
+const deleteEvent = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.run(`DELETE FROM events WHERE id = ?`, [eventId], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+};
+
+// ---- Dashboard stats functions ----
+const getDashboardStats = (guildId) => {
+  return new Promise((resolve, reject) => {
+    const stats = {};
+    db.get(`SELECT COUNT(*) as cnt FROM bulk_tasks WHERE guild_id = ? AND status = 'active'`, [guildId], (err, row) => {
+      if (err) return reject(err);
+      stats.activeTasks = row?.cnt || 0;
+      db.get(`SELECT COUNT(*) as cnt FROM proof_submissions WHERE guild_id = ? AND status = 'pending'`, [guildId], (err2, row2) => {
+        if (err2) return reject(err2);
+        stats.pendingProofs = row2?.cnt || 0;
+        db.get(`SELECT COUNT(DISTINCT assigned_user_id) as cnt FROM task_assignments WHERE guild_id = ?`, [guildId], (err3, row3) => {
+          if (err3) return reject(err3);
+          stats.workers = row3?.cnt || 0;
+          db.get(`SELECT COUNT(*) as cnt FROM contests WHERE guild_id = ? AND status = 'active'`, [guildId], (err4, row4) => {
+            if (err4) return reject(err4);
+            stats.liveContests = row4?.cnt || 0;
+            db.get(`SELECT COUNT(*) as cnt FROM events WHERE guild_id = ? AND status IN ('scheduled','active')`, [guildId], (err5, row5) => {
+              if (err5) return reject(err5);
+              stats.activeEvents = row5?.cnt || 0;
+              resolve(stats);
+            });
+          });
+        });
+      });
+    });
+  });
+};
+
+const getRecentTransactions = (guildId, limit = 20) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM transactions WHERE guild_id = ? ORDER BY created_at DESC LIMIT ?`,
+      [guildId, limit],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
 module.exports = {
   db,
+  initDb,
   setGuildWallet,
   getGuildWallet,
   setApprovedRoles,
@@ -1597,5 +1785,23 @@ module.exports = {
   countOwnerConnectedGuilds,
   countUserActiveGuilds,
   getProofOutcomeStats,
-  logCommandAudit
+  logCommandAudit,
+  // Scheduled posts
+  createScheduledPost,
+  getDueScheduledPosts,
+  getScheduledPostsForGuild,
+  updateScheduledPostStatus,
+  // Activity feed
+  logActivity,
+  getActivityFeed,
+  // Events (scheduled)
+  createEvent,
+  getEvent,
+  getEventsForGuild,
+  getActiveEvents,
+  updateEventStatus,
+  deleteEvent,
+  // Dashboard
+  getDashboardStats,
+  getRecentTransactions,
 };

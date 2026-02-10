@@ -12,16 +12,24 @@ type Task = {
   status: string
 }
 
-export default function Tasks() {
+type Props = {
+  guildId: string
+}
+
+export default function Tasks({ guildId }: Props) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(false)
   const [addr, setAddr] = useState('')
   const [amount, setAmount] = useState('1')
 
   useEffect(() => {
+    if (!guildId) {
+      setTasks([])
+      return
+    }
     setLoading(true)
-    api.get('/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false))
-  }, [])
+    api.get(`/admin/guilds/${guildId}/tasks`).then(r => setTasks(r.data)).finally(() => setLoading(false))
+  }, [guildId])
 
   return (
     <div className="container">
@@ -43,7 +51,7 @@ export default function Tasks() {
             itemKey={index => tasks[index].id}
           >
             {({ index, style }) => (
-              <TaskRow task={tasks[index]} style={style} onExecute={async (id) => { await api.post(`/tasks/${id}/execute`); setLoading(true); api.get('/tasks').then(r => setTasks(r.data)).finally(() => setLoading(false)); }} />
+              <TaskRow task={tasks[index]} style={style} onExecute={async (id) => { await api.post(`/admin/guilds/${guildId}/tasks/${id}/execute`); setLoading(true); api.get(`/admin/guilds/${guildId}/tasks`).then(r => setTasks(r.data)).finally(() => setLoading(false)); }} />
             )}
           </List>
         </div>
@@ -52,7 +60,8 @@ export default function Tasks() {
       <h3>Create Task</h3>
       <form className="mini-form" onSubmit={async (e) => {
         e.preventDefault();
-        const res = await axios.post('/api/tasks', { guild_id: 'TEST_GUILD', recipient_address: addr, amount: parseFloat(amount) });
+        if (!guildId) return
+        const res = await api.post(`/admin/guilds/${guildId}/tasks`, { recipient_address: addr, amount: parseFloat(amount) });
         setTasks(prev => [res.data, ...prev]); setAddr(''); setAmount('1');
       }}>
         <input placeholder="Recipient Solana Address" value={addr} onChange={e => setAddr(e.target.value)} required />

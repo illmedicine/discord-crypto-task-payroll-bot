@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DisCryptoBank Dashboard</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>DisCryptoBank Admin</h1>
+      <p>Create Events / Contests / Tasks without typing Discord commands.</p>
+    </header>
+
+    <section class="card">
+      <h2>Login</h2>
+      <div class="row">
+        <input id="token" placeholder="DASHBOARD_ADMIN_TOKEN" type="password" />
+        <button id="saveToken">Save</button>
+      </div>
+      <small>Stored locally in your browser. Required for all API calls.</small>
+    </section>
+
+    <section class="card">
+      <h2>Create Event</h2>
+
+      <div class="grid">
+        <label>Guild</label>
+        <select id="guildSelect"></select>
+
+        <label>Channel</label>
+        <select id="channelSelect"></select>
+
+        <label>Title</label>
+        <input id="title" placeholder="Hot Pick Event" />
+
+        <label>Description</label>
+        <textarea id="desc" placeholder="Pick the photo the owner nominated to win..."></textarea>
+
+        <label>Image URL #1</label>
+        <input id="img1" placeholder="https://..." />
+
+        <label>Image URL #2</label>
+        <input id="img2" placeholder="https://..." />
+
+        <label>Image URL #3</label>
+        <input id="img3" placeholder="https://..." />
+
+        <label>Secret Winner (0/1/2)</label>
+        <select id="winner">
+          <option value="0">Image #1</option>
+          <option value="1">Image #2</option>
+          <option value="2">Image #3</option>
+        </select>
+
+        <label>Max Seats</label>
+        <input id="seats" type="number" value="25" />
+
+        <label>Prize Amount</label>
+        <input id="prize" type="number" value="10" step="0.01" />
+
+        <label>Currency</label>
+        <select id="currency">
+          <option>USD</option>
+          <option>SOL</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <button id="createEvent">Create Draft</button>
+        <button id="refreshEvents" class="ghost">Refresh List</button>
+      </div>
+
+      <div id="events" class="list"></div>
+    </section>
+
+    <footer>
+      <small>DisCryptoBank • Dashboard</small>
+    </footer>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

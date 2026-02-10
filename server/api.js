@@ -4,6 +4,8 @@ const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const db = require('../utils/db');
 
 module.exports = (client) => {
   const app = express();
@@ -12,9 +14,30 @@ module.exports = (client) => {
   app.use(express.json());
   app.use(cookieParser());
 
+  const isProd = process.env.NODE_ENV === 'production';
+  const uiBase = process.env.DCB_UI_BASE || null;
+  const publicBase = process.env.DCB_PUBLIC_URL || null;
+  const cookieSameSite = (process.env.DCB_COOKIE_SAMESITE || (isProd ? 'none' : 'lax'));
+  const cookieSecure = isProd;
+
   // CORS - allow frontend origin and allow credentials
-  const allowedOrigin = process.env.DCB_API_BASE || '*';
-  app.use(cors({ origin: allowedOrigin === '*' ? true : allowedOrigin, credentials: true }));
+  const allowedOrigin = (() => {
+    if (!uiBase) return '*';
+    try {
+      return new URL(uiBase).origin;
+    } catch (_) {
+      return uiBase;
+    }
+  })();
+
+  app.use(cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowedOrigin === '*') return cb(null, true);
+      return cb(null, origin === allowedOrigin);
+    },
+    credentials: true,
+  }));
 
   // Basic health check
   app.get('/api/health', (req, res) => {
@@ -23,7 +46,7 @@ module.exports = (client) => {
 
   // Helper to compute base url for redirect URIs
   function baseUrl(req) {
-    if (process.env.DCB_API_BASE) return process.env.DCB_API_BASE.replace(/\/$/, '');
+    if (publicBase) return publicBase.replace(/\/$/, '');
     const proto = req.headers['x-forwarded-proto'] || req.protocol;
     return `${proto}://${req.get('host')}`;
   }
@@ -31,13 +54,63 @@ module.exports = (client) => {
   const SESSION_SECRET = process.env.DCB_SESSION_SECRET || 'change-this-secret';
   const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
+  function getSessionUser(req) {
+    const token = req.cookies?.dcb_session;
+    if (!token) return null;
+    try {
+      return jwt.verify(token, SESSION_SECRET);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function requireAuth(req, res, next) {
+    const user = getSessionUser(req);
+    if (!user) return res.status(401).json({ error: 'unauthorized' });
+    req.user = user;
+    return next();
+  }
+
+  async function requireGuildOwner(req, res, next) {
+    try {
+      const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id;
+      if (!guildId) return res.status(400).json({ error: 'missing_guild_id' });
+      const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
+      const ownerId = guild?.ownerId;
+      if (!ownerId) return res.status(403).json({ error: 'cannot_determine_owner' });
+      if (!req.user || req.user.id !== ownerId) return res.status(403).json({ error: 'forbidden_not_guild_owner' });
+      req.guild = guild;
+      return next();
+    } catch (err) {
+      return res.status(404).json({ error: 'guild_not_found' });
+    }
+  }
+
+  async function fetchTextChannel(guildId, channelId) {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !('guildId' in channel) || channel.guildId !== guildId) {
+      throw new Error('invalid_channel');
+    }
+    if (!('send' in channel)) {
+      throw new Error('not_text_channel');
+    }
+    return channel;
+  }
+
+  function safeIso(dt) {
+    if (!dt) return null;
+    const d = new Date(dt);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString();
+  }
+
   // Start Discord OAuth - redirect to Discord authorize URL
   app.get('/auth/discord', (req, res) => {
     const clientId = process.env.DISCORD_CLIENT_ID;
     if (!clientId) return res.status(500).send('DISCORD_CLIENT_ID not configured');
 
     const state = crypto.randomBytes(12).toString('hex');
-    res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+    res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure });
 
     const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/discord/callback`);
     const scope = encodeURIComponent('identify email guilds');
@@ -89,15 +162,14 @@ module.exports = (client) => {
       // Set cookie
       res.cookie('dcb_session', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: cookieSecure,
+        sameSite: cookieSameSite,
         maxAge: SESSION_TTL_SECONDS * 1000
       });
 
       res.clearCookie('dcb_oauth_state');
 
       // Redirect back to UI (if configured) or show success page
-      const uiBase = process.env.DCB_API_BASE ? process.env.DCB_API_BASE : null;
       if (uiBase) {
         // if frontend is separate, redirect to its root
         return res.redirect(uiBase);
@@ -137,14 +209,465 @@ module.exports = (client) => {
     }
   });
 
-  // Mount minimal API endpoints used by the front-end (optional placeholders)
-  app.get('/api/contests', (req, res) => {
-    res.json([]);
+  // ==================== Admin API (requires Discord OAuth session + guild ownership) ====================
+
+  // List guilds where the logged-in user is owner and the bot is present
+  app.get('/api/admin/guilds', requireAuth, async (req, res) => {
+    try {
+      // Use Discord OAuth "guilds" scope via API call (more accurate than cache)
+      const authHeader = req.headers.authorization;
+      // We don't store user access token; so we instead infer by checking ownerId on guilds bot is in.
+      const results = [];
+      for (const g of client.guilds.cache.values()) {
+        try {
+          const guild = await g.fetch();
+          if (guild.ownerId === req.user.id) {
+            results.push({ id: guild.id, name: guild.name });
+          }
+        } catch (_) {
+          // ignore
+        }
+      }
+      return res.json(results);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_list_guilds' });
+    }
+  });
+
+  // List channels in a guild (text + announcement) for publish dropdowns
+  app.get('/api/admin/guilds/:guildId/channels', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const guild = req.guild;
+      const channels = await guild.channels.fetch();
+      const out = [];
+      for (const c of channels.values()) {
+        // 0 = GuildText, 5 = GuildAnnouncement
+        if (c && (c.type === 0 || c.type === 5)) {
+          out.push({ id: c.id, name: c.name, type: c.type });
+        }
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name));
+      return res.json(out);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_list_channels' });
+    }
+  });
+
+  // ---- Vote Events ----
+  app.get('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const rows = await db.getActiveVoteEvents(req.guild.id);
+      return res.json(rows || []);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_list_vote_events' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const {
+        channel_id,
+        title,
+        description,
+        prize_amount,
+        currency,
+        min_participants,
+        max_participants,
+        duration_minutes,
+        owner_favorite_image_id,
+        images
+      } = req.body || {};
+
+      if (!channel_id || !title || !description) return res.status(400).json({ error: 'missing_fields' });
+      if (!min_participants || !max_participants) return res.status(400).json({ error: 'missing_participant_limits' });
+      if (!Array.isArray(images) || images.length < 2) return res.status(400).json({ error: 'at_least_two_images_required' });
+
+      const eventId = await db.createVoteEvent(
+        req.guild.id,
+        channel_id,
+        title,
+        description,
+        Number(prize_amount || 0),
+        currency || 'USD',
+        Number(min_participants),
+        Number(max_participants),
+        duration_minutes == null ? null : Number(duration_minutes),
+        owner_favorite_image_id || null,
+        req.user.id
+      );
+
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        if (!img || !img.id || !img.url) continue;
+        await db.addVoteEventImage(eventId, String(img.id), String(img.url), i + 1);
+      }
+
+      const created = await db.getVoteEvent(eventId);
+      return res.json({ id: eventId, event: created });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_create_vote_event' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId);
+      const event = await db.getVoteEvent(eventId);
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' });
+
+      const channelId = req.body?.channel_id || event.channel_id;
+      const channel = await fetchTextChannel(req.guild.id, channelId);
+      const images = await db.getVoteEventImages(eventId);
+
+      const endTimestamp = event.ends_at ? Math.floor(new Date(event.ends_at).getTime() / 1000) : null;
+
+      const embed = new EmbedBuilder()
+        .setColor('#9B59B6')
+        .setTitle(`🗳️ ${event.title}`)
+        .setDescription(event.description || '')
+        .addFields(
+          { name: '👥 Participants', value: `${event.current_participants}/${event.max_participants}`, inline: true },
+          { name: '✅ Min to Start', value: `${event.min_participants}`, inline: true },
+          { name: '🎁 Prize', value: `${Number(event.prize_amount || 0)} ${event.currency}`, inline: true }
+        )
+        .setFooter({ text: `Event #${eventId}` })
+        .setTimestamp();
+
+      if (endTimestamp) {
+        embed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true });
+      }
+      if (images && images[0]?.image_url) {
+        embed.setImage(images[0].image_url);
+      }
+
+      const joinButton = new ButtonBuilder()
+        .setCustomId(`vote_event_join_${eventId}`)
+        .setLabel('🎫 Join Event')
+        .setStyle(ButtonStyle.Success);
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId(`vote_event_vote_${eventId}`)
+        .setPlaceholder('Select your favorite image to vote')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(
+          (images || []).map(img => new StringSelectMenuOptionBuilder()
+            .setLabel(`Image ${img.upload_order}`)
+            .setValue(img.image_id)
+            .setDescription(`Vote for Image ${img.upload_order}`)
+          )
+        );
+
+      const msg = await channel.send({
+        embeds: [embed],
+        components: [
+          new ActionRowBuilder().addComponents(joinButton),
+          new ActionRowBuilder().addComponents(selectMenu)
+        ]
+      });
+
+      await db.updateVoteEventMessageId(eventId, msg.id);
+      if (channelId !== event.channel_id) {
+        // Keep DB channel_id aligned with where it was published
+        await new Promise((resolve, reject) => {
+          db.db.run(
+            `UPDATE vote_events SET channel_id = ? WHERE id = ?`,
+            [channelId, eventId],
+            (err) => err ? reject(err) : resolve()
+          );
+        });
+      }
+
+      return res.json({ ok: true, message_id: msg.id, channel_id: channelId });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_publish_vote_event' });
+    }
+  });
+
+  // ---- Contests ----
+  app.get('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const all = await db.getAllContests();
+      const filtered = (all || []).filter(c => c.guild_id === req.guild.id);
+      return res.json(filtered);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_list_contests' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const {
+        channel_id,
+        title,
+        description,
+        prize_amount,
+        currency,
+        num_winners,
+        max_entries,
+        duration_hours,
+        reference_url
+      } = req.body || {};
+
+      if (!channel_id || !title || !prize_amount || !max_entries || !duration_hours || !reference_url) {
+        return res.status(400).json({ error: 'missing_fields' });
+      }
+
+      const contestId = await db.createContest(
+        req.guild.id,
+        channel_id,
+        title,
+        description || '',
+        Number(prize_amount),
+        currency || 'USD',
+        Number(num_winners || 1),
+        Number(max_entries),
+        Number(duration_hours),
+        String(reference_url),
+        req.user.id
+      );
+
+      const created = await db.getContest(contestId);
+      return res.json({ id: contestId, contest: created });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_create_contest' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const contestId = Number(req.params.contestId);
+      const contest = await db.getContest(contestId);
+      if (!contest || contest.guild_id !== req.guild.id) return res.status(404).json({ error: 'contest_not_found' });
+
+      const channelId = req.body?.channel_id || contest.channel_id;
+      const channel = await fetchTextChannel(req.guild.id, channelId);
+      const endTimestamp = contest.ends_at ? Math.floor(new Date(contest.ends_at).getTime() / 1000) : null;
+
+      const embed = new EmbedBuilder()
+        .setColor('#FFD700')
+        .setTitle(`🏆 ${contest.title}`)
+        .setDescription(contest.description || '')
+        .addFields(
+          { name: '🎁 Prize', value: `${contest.prize_amount} ${contest.currency}`, inline: true },
+          { name: '👑 Winners', value: `${contest.num_winners}`, inline: true },
+          { name: '🎟️ Entries', value: `${contest.current_entries}/${contest.max_entries}`, inline: true },
+          { name: '🔗 Reference', value: contest.reference_url }
+        )
+        .setFooter({ text: `Contest #${contestId}` })
+        .setTimestamp();
+
+      if (endTimestamp) {
+        embed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true });
+      }
+
+      const enterButton = new ButtonBuilder()
+        .setCustomId(`contest_enter_${contestId}`)
+        .setLabel('🎫 Enter Contest')
+        .setStyle(ButtonStyle.Primary);
+
+      const infoButton = new ButtonBuilder()
+        .setCustomId(`contest_info_${contestId}`)
+        .setLabel('ℹ️ Info')
+        .setStyle(ButtonStyle.Secondary);
+
+      const msg = await channel.send({
+        embeds: [embed],
+        components: [new ActionRowBuilder().addComponents(enterButton, infoButton)]
+      });
+
+      await db.updateContestMessageId(contestId, msg.id);
+
+      if (channelId !== contest.channel_id) {
+        await new Promise((resolve, reject) => {
+          db.db.run(
+            `UPDATE contests SET channel_id = ? WHERE id = ?`,
+            [channelId, contestId],
+            (err) => err ? reject(err) : resolve()
+          );
+        });
+      }
+
+      return res.json({ ok: true, message_id: msg.id, channel_id: channelId });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_publish_contest' });
+    }
+  });
+
+  // ---- Bulk Tasks ----
+  app.get('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const rows = await db.getAllBulkTasks(req.guild.id);
+      return res.json(rows || []);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_list_bulk_tasks' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { title, description, payout_amount, payout_currency, total_slots } = req.body || {};
+      if (!title || payout_amount == null || !payout_currency || !total_slots) {
+        return res.status(400).json({ error: 'missing_fields' });
+      }
+      const taskId = await db.createBulkTask(
+        req.guild.id,
+        title,
+        description || '',
+        Number(payout_amount),
+        payout_currency,
+        Number(total_slots),
+        req.user.id
+      );
+      const created = await db.getBulkTask(taskId);
+      return res.json({ id: taskId, task: created });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_create_bulk_task' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const taskId = Number(req.params.taskId);
+      const task = await db.getBulkTask(taskId);
+      if (!task || task.guild_id !== req.guild.id) return res.status(404).json({ error: 'bulk_task_not_found' });
+
+      const channelId = req.body?.channel_id;
+      if (!channelId) return res.status(400).json({ error: 'missing_channel_id' });
+      const channel = await fetchTextChannel(req.guild.id, channelId);
+
+      const availableSlots = Number(task.total_slots) - Number(task.filled_slots);
+
+      const embed = new EmbedBuilder()
+        .setColor('#14F195')
+        .setTitle(`📌 Task: ${task.title}`)
+        .setDescription(task.description || '')
+        .addFields(
+          { name: '💰 Payout', value: `${task.payout_amount} ${task.payout_currency}`, inline: true },
+          { name: '🎟️ Slots', value: `${availableSlots}/${task.total_slots}`, inline: true },
+          { name: '🆔 Task ID', value: `#${taskId}`, inline: true }
+        )
+        .setTimestamp();
+
+      const claimButton = new ButtonBuilder()
+        .setCustomId(`bulk_task_claim_${taskId}`)
+        .setLabel('🎯 Claim Slot')
+        .setStyle(ButtonStyle.Success);
+
+      const msg = await channel.send({
+        embeds: [embed],
+        components: [new ActionRowBuilder().addComponents(claimButton)]
+      });
+
+      return res.json({ ok: true, message_id: msg.id, channel_id: channelId });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_publish_bulk_task' });
+    }
   });
 
   // Start listening
   app.listen(port, () => {
     console.log(`[API] Server listening on port ${port}`);
+  });
+
+  // ---- Dashboard Stats ----
+  app.get('/api/admin/guilds/:guildId/dashboard/stats', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const stats = await db.getDashboardStats(req.guild.id);
+      return res.json(stats);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_get_stats' });
+    }
+  });
+
+  app.get('/api/admin/guilds/:guildId/dashboard/activity', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 20;
+      const type = req.query.type || null;
+      const rows = await db.getActivityFeed(req.guild.id, limit, type);
+      return res.json(rows);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_get_activity' });
+    }
+  });
+
+  app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const wallet = await db.getGuildWallet(req.guild.id);
+      // Return wallet info; actual balance fetched client-side or via Solana RPC
+      return res.json({ wallet_address: wallet?.wallet_address || null });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_get_balance' });
+    }
+  });
+
+  // ---- Transaction History ----
+  app.get('/api/admin/guilds/:guildId/transactions', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 50;
+      const rows = await db.getRecentTransactions(req.guild.id, limit);
+      return res.json(rows);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_get_transactions' });
+    }
+  });
+
+  // ---- Events (Scheduled Events) ----
+  app.get('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const rows = await db.getEventsForGuild(req.guild.id);
+      return res.json(rows);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_list_events' });
+    }
+  });
+
+  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { channel_id, title, description, event_type, prize_amount, currency, max_participants, starts_at, ends_at } = req.body || {};
+      if (!title) return res.status(400).json({ error: 'missing_title' });
+      const eventId = await db.createEvent(
+        req.guild.id,
+        channel_id || null,
+        String(title),
+        description || '',
+        event_type || 'general',
+        Number(prize_amount || 0),
+        currency || 'SOL',
+        max_participants ? Number(max_participants) : null,
+        starts_at || null,
+        ends_at || null,
+        req.user.id
+      );
+      // Log activity
+      await db.logActivity(req.guild.id, 'event', 'Event Scheduled', title, `@${req.user.username}`, Number(prize_amount || 0), currency || 'SOL', eventId);
+      const created = await db.getEvent(eventId);
+      return res.json(created);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_create_event' });
+    }
+  });
+
+  app.patch('/api/admin/guilds/:guildId/events/:eventId/status', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId);
+      const { status } = req.body || {};
+      if (!status) return res.status(400).json({ error: 'missing_status' });
+      await db.updateEventStatus(eventId, status);
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_update_event' });
+    }
+  });
+
+  app.delete('/api/admin/guilds/:guildId/events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId);
+      await db.deleteEvent(eventId);
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_delete_event' });
+    }
   });
 
   return app;

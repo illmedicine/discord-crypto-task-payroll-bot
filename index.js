@@ -143,7 +143,7 @@ const registerCommands = async () => {
   }
 };
 
-registerCommands();
+registerCommands().catch(() => {});
 
 // Bot ready event
 client.once('clientReady', async () => {
@@ -161,7 +161,7 @@ client.once('clientReady', async () => {
   
   // Re-register commands on startup to ensure they're fresh
   console.log(`🔄 Performing command sync on startup...`);
-  await registerCommands();
+  registerCommands().catch(() => {});
   
   // Set bot presence with version and latest feature
   const featureIndex = Math.floor(Date.now() / 60000) % LATEST_FEATURES.length;
@@ -333,6 +333,125 @@ client.on('interactionCreate', async interaction => {
       }
       return;
     }
+
+    // Handle contest enter button (web-published)
+    if (interaction.customId.startsWith('contest_enter_')) {
+      try {
+        const contestId = Number(interaction.customId.split('_')[2]);
+        if (!contestId) {
+          await interaction.reply({ content: '❌ Invalid contest.', ephemeral: true });
+          return;
+        }
+
+        const contest = await db.getContest(contestId);
+        if (!contest || contest.guild_id !== interaction.guildId) {
+          await interaction.reply({ content: '❌ Contest not found in this server.', ephemeral: true });
+          return;
+        }
+        if (contest.status !== 'active') {
+          await interaction.reply({ content: '❌ This contest is not active.', ephemeral: true });
+          return;
+        }
+        if (contest.current_entries >= contest.max_entries) {
+          await interaction.reply({ content: '❌ This contest is full (max entries reached).', ephemeral: true });
+          return;
+        }
+
+        const existing = await db.getContestEntry(contestId, interaction.user.id);
+        if (existing) {
+          await interaction.reply({ content: '❌ You have already entered this contest.', ephemeral: true });
+          return;
+        }
+
+        const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+        const modal = new ModalBuilder()
+          .setCustomId(`contest_entry_modal_${contestId}`)
+          .setTitle('Enter Contest');
+
+        const screenshotUrlInput = new TextInputBuilder()
+          .setCustomId('screenshot_url')
+          .setLabel('Screenshot URL (optional)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(screenshotUrlInput));
+        await interaction.showModal(modal);
+      } catch (error) {
+        console.error('❌ Error handling contest enter button:', error);
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+        } else {
+          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+        }
+      }
+      return;
+    }
+
+    // Handle contest info button (web-published)
+    if (interaction.customId.startsWith('contest_info_')) {
+      try {
+        const contestId = Number(interaction.customId.split('_')[2]);
+        const contest = await db.getContest(contestId);
+        if (!contest || contest.guild_id !== interaction.guildId) {
+          await interaction.reply({ content: '❌ Contest not found in this server.', ephemeral: true });
+          return;
+        }
+        const endTimestamp = contest.ends_at ? Math.floor(new Date(contest.ends_at).getTime() / 1000) : null;
+        const embed = new EmbedBuilder()
+          .setColor('#FFD700')
+          .setTitle(`🏆 ${contest.title}`)
+          .setDescription(contest.description || '')
+          .addFields(
+            { name: '🎁 Prize', value: `${contest.prize_amount} ${contest.currency}`, inline: true },
+            { name: '👑 Winners', value: `${contest.num_winners}`, inline: true },
+            { name: '🎟️ Entries', value: `${contest.current_entries}/${contest.max_entries}`, inline: true },
+            { name: '🔗 Reference', value: contest.reference_url }
+          )
+          .setFooter({ text: `Contest #${contestId}` })
+          .setTimestamp();
+        if (endTimestamp) embed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true });
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+      } catch (error) {
+        console.error('❌ Error handling contest info button:', error);
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+        } else {
+          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+        }
+      }
+      return;
+    }
+
+    // Handle bulk task claim button (web-published)
+    if (interaction.customId.startsWith('bulk_task_claim_')) {
+      try {
+        const taskId = Number(interaction.customId.split('_')[3]);
+        const task = await db.getBulkTask(taskId);
+        if (!task || task.guild_id !== interaction.guildId) {
+          await interaction.reply({ content: '❌ Task not found in this server.', ephemeral: true });
+          return;
+        }
+        if (task.status !== 'active') {
+          await interaction.reply({ content: '❌ This task is not active.', ephemeral: true });
+          return;
+        }
+        if (task.filled_slots >= task.total_slots) {
+          await interaction.reply({ content: '❌ This task is full - all slots have been claimed.', ephemeral: true });
+          return;
+        }
+
+        const assignmentId = await db.assignTaskToUser(taskId, interaction.guildId, interaction.user.id, interaction.channelId);
+        await interaction.reply({ content: `✅ Slot claimed! Assignment ID: #${assignmentId}\nUse /submit-proof assignment_id: ${assignmentId} to submit proof.`, ephemeral: true });
+      } catch (error) {
+        console.error('❌ Error handling bulk task claim button:', error);
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+        } else {
+          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+        }
+      }
+      return;
+    }
   }
   
   // Handle select menu interactions
@@ -409,20 +528,41 @@ client.on('interactionCreate', async interaction => {
       }
       return;
     }
-    
-    // Handle contest entry modal
+
+    // Handle contest entry modal (web-published)
     if (interaction.customId.startsWith('contest_entry_modal_')) {
-      const contestCommand = client.commands.get('contest');
-      if (contestCommand && contestCommand.handleEntryModal) {
-        try {
-          await contestCommand.handleEntryModal(interaction);
-        } catch (error) {
-          console.error('❌ Error handling contest entry modal:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
+      try {
+        const contestId = Number(interaction.customId.split('_')[3]);
+        const contest = await db.getContest(contestId);
+        if (!contest || contest.guild_id !== interaction.guildId) {
+          await interaction.reply({ content: '❌ Contest not found in this server.', ephemeral: true });
+          return;
+        }
+        if (contest.status !== 'active') {
+          await interaction.reply({ content: '❌ This contest is not active.', ephemeral: true });
+          return;
+        }
+        if (contest.current_entries >= contest.max_entries) {
+          await interaction.reply({ content: '❌ This contest is full (max entries reached).', ephemeral: true });
+          return;
+        }
+
+        const existing = await db.getContestEntry(contestId, interaction.user.id);
+        if (existing) {
+          await interaction.reply({ content: '❌ You have already entered this contest.', ephemeral: true });
+          return;
+        }
+
+        const screenshotUrl = interaction.fields.getTextInputValue('screenshot_url') || null;
+        await db.addContestEntry(contestId, interaction.guildId, interaction.user.id, screenshotUrl);
+
+        await interaction.reply({ content: `✅ You are entered into contest #${contestId}!`, ephemeral: true });
+      } catch (error) {
+        console.error('❌ Error handling contest entry modal:', error);
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+        } else {
+          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
         }
       }
       return;
@@ -432,17 +572,23 @@ client.on('interactionCreate', async interaction => {
 });
 
 // Login to Discord
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN).catch((err) => {
+  console.error('[Discord] login failed:', err?.message || err);
+});
 
 // Start integrated API server (provides HTTP endpoints for the web UI)
 try {
-  require('../server/api')(client);
+  require('./server/api')(client);
 } catch (err) {
   console.error('[API] Unable to start API server:', err.message);
 }
 // Start scheduler for scheduled posts
 try {
-  require('../server/scheduler')(client);
+  const fs = require('fs');
+  const schedulerPath = path.join(__dirname, 'server', 'scheduler.js');
+  if (fs.existsSync(schedulerPath)) {
+    require('./server/scheduler')(client);
+  }
 } catch (err) {
   console.error('[Scheduler] Unable to start scheduler:', err.message);
 }
