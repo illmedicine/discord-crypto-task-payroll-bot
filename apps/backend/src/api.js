@@ -96,7 +96,18 @@ module.exports = function buildApi({ discordClient }) {
     return channel
   }
 
+  // Serve a minimal favicon to avoid 404
+  app.get('/favicon.ico', (req, res) => res.status(204).end())
+
   app.get('/api/health', (req, res) => res.json({ ok: true }))
+
+  // Check which auth providers are configured
+  app.get('/api/auth/providers', (req, res) => {
+    res.json({
+      discord: !!process.env.DISCORD_CLIENT_ID,
+      google: !!process.env.GOOGLE_CLIENT_ID,
+    })
+  })
 
   app.get('/auth/discord', (req, res) => {
     const clientId = process.env.DISCORD_CLIENT_ID
