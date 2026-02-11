@@ -113,6 +113,9 @@ module.exports = function buildApi({ discordClient }) {
     const clientId = process.env.DISCORD_CLIENT_ID
     if (!clientId) return res.status(500).send('DISCORD_CLIENT_ID not configured')
 
+    // Clear any existing session before starting a new OAuth flow
+    clearSessionCookie(res)
+
     const state = crypto.randomBytes(12).toString('hex')
     res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
 
@@ -193,8 +196,12 @@ module.exports = function buildApi({ discordClient }) {
     }
   })
 
+  const clearSessionCookie = (res) => {
+    res.clearCookie('dcb_session', { httpOnly: true, secure: cookieSecure, sameSite: cookieSameSite, path: '/' })
+  }
+
   app.post('/api/auth/logout', (req, res) => {
-    res.clearCookie('dcb_session')
+    clearSessionCookie(res)
     res.json({ ok: true })
   })
 
@@ -202,6 +209,9 @@ module.exports = function buildApi({ discordClient }) {
   app.get('/auth/google', (req, res) => {
     const clientId = process.env.GOOGLE_CLIENT_ID
     if (!clientId) return res.status(500).send('GOOGLE_CLIENT_ID not configured')
+
+    // Clear any existing session before starting a new OAuth flow
+    clearSessionCookie(res)
 
     const state = crypto.randomBytes(12).toString('hex')
     res.cookie('dcb_google_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
