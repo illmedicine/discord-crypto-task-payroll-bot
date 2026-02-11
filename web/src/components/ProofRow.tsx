@@ -1,22 +1,86 @@
 import React from 'react'
-import LazyImage from './LazyImage'
 
-type Proof = { id:number, title:string, assigned_user_id:string, screenshot_url:string, status:string }
+type Proof = {
+  id: number
+  title: string
+  assigned_user_id: string
+  screenshot_url: string
+  verification_url: string
+  notes: string
+  status: string
+  payout_amount: number
+  payout_currency: string
+  submitted_at: string
+}
 
-export default React.memo(function ProofRow({ proof, style, onAction }: { proof: Proof, style?: React.CSSProperties, onAction?: (action: string, id:number) => void }) {
+const statusColors: Record<string, string> = {
+  pending: '#f59e0b',
+  approved: '#22c55e',
+  rejected: '#ef4444',
+}
+
+export default React.memo(function ProofRow({ proof, style, showActions = true, onAction, onPreview }: {
+  proof: Proof,
+  style?: React.CSSProperties,
+  showActions?: boolean,
+  onAction?: (action: string, id: number) => void,
+  onPreview?: (url: string) => void,
+}) {
+  const thumbUrl = proof.screenshot_url || proof.verification_url || null
+
   return (
-    <div className="table-row" style={style}>
-      <div className="col col-id">{proof.id}</div>
-      <div className="col col-title">{proof.title}</div>
-      <div className="col col-user">{proof.assigned_user_id}</div>
-      <div className="col col-status">{proof.status}</div>
-      <div className="col col-actions">
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => onAction?.('approve', proof.id)}>Approve</button>
-          <button onClick={() => onAction?.('approve_pay', proof.id)}>Approve & Pay</button>
-          <button onClick={() => onAction?.('reject', proof.id)}>Reject</button>
-        </div>
+    <div className="table-row" style={{ ...style, display: 'flex', alignItems: 'center', gap: 4, padding: '8px 0' }}>
+      <div className="col" style={{ width: 50, flexShrink: 0 }}>{proof.id}</div>
+      <div className="col" style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{proof.title || '(untitled)'}</div>
+        {proof.notes && <div style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{proof.notes}</div>}
       </div>
+      <div className="col" style={{ width: 120, flexShrink: 0, fontSize: 12, color: '#aaa' }}>{proof.assigned_user_id}</div>
+      <div className="col" style={{ width: 100, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {thumbUrl ? (
+          <img
+            src={thumbUrl}
+            alt="Proof"
+            loading="lazy"
+            onClick={() => onPreview?.(thumbUrl)}
+            style={{ width: 60, height: 45, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #333', transition: 'transform 0.15s' }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            onMouseOver={(e) => { (e.target as HTMLImageElement).style.transform = 'scale(1.1)' }}
+            onMouseOut={(e) => { (e.target as HTMLImageElement).style.transform = 'scale(1)' }}
+          />
+        ) : (
+          <span style={{ fontSize: 11, color: '#555' }}>No image</span>
+        )}
+        {proof.verification_url && proof.verification_url !== proof.screenshot_url && (
+          <a
+            href={proof.verification_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Verification link"
+            style={{ marginLeft: 4, fontSize: 11, color: '#7c5cfc' }}
+            onClick={e => e.stopPropagation()}
+          >
+            🔗
+          </a>
+        )}
+      </div>
+      <div className="col" style={{ width: 80, flexShrink: 0 }}>
+        <span style={{ padding: '2px 8px', borderRadius: 9999, fontSize: 11, fontWeight: 600, background: `${statusColors[proof.status] || '#666'}22`, color: statusColors[proof.status] || '#888' }}>
+          {proof.status}
+        </span>
+      </div>
+      <div className="col" style={{ width: 100, flexShrink: 0, fontSize: 12 }}>
+        {proof.payout_amount ? `${proof.payout_amount} ${proof.payout_currency || 'SOL'}` : '--'}
+      </div>
+      {showActions && (
+        <div className="col" style={{ width: 260, flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => onAction?.('approve', proof.id)} style={{ fontSize: 11, padding: '4px 8px' }}>✓ Approve</button>
+            <button onClick={() => onAction?.('approve_pay', proof.id)} style={{ fontSize: 11, padding: '4px 8px', background: '#22c55e22', color: '#22c55e', border: '1px solid #22c55e44' }}>✓ Approve & Pay</button>
+            <button onClick={() => onAction?.('reject', proof.id)} style={{ fontSize: 11, padding: '4px 8px', background: '#ef444422', color: '#ef4444', border: '1px solid #ef444444' }}>✗ Reject</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 })

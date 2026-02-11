@@ -170,7 +170,7 @@ export default function App() {
             {page === 'treasury' && <Treasury guildId={guildId} />}
             {page === 'workers' && <Workers guildId={guildId} />}
             {page === 'scheduled' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><ScheduledPosts /></React.Suspense>}
-            {page === 'proofs' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><Proofs /></React.Suspense>}
+            {page === 'proofs' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><Proofs guildId={guildId} /></React.Suspense>}
           </ProfilerLogger>
         </main>
 

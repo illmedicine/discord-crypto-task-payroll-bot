@@ -704,6 +704,100 @@ module.exports = function buildApi({ discordClient }) {
 
   // ---- Workers / DCB Roles ----
 
+  // ---- Proof Submissions ----
+  app.get('/api/admin/guilds/:guildId/proofs', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const status = req.query.status || 'pending'
+      const limit = Math.min(Number(req.query.limit) || 100, 500)
+      let sql, params
+      if (status === 'all') {
+        sql = `SELECT ps.*, ta.assigned_user_id, bt.title, bt.payout_amount, bt.payout_currency
+               FROM proof_submissions ps
+               LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+               LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+               WHERE ps.guild_id = ? ORDER BY ps.submitted_at DESC LIMIT ?`
+        params = [req.guild.id, limit]
+      } else {
+        sql = `SELECT ps.*, ta.assigned_user_id, bt.title, bt.payout_amount, bt.payout_currency
+               FROM proof_submissions ps
+               LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+               LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+               WHERE ps.guild_id = ? AND ps.status = ? ORDER BY ps.submitted_at DESC LIMIT ?`
+        params = [req.guild.id, status, limit]
+      }
+      const rows = await db.all(sql, params)
+      res.json(rows || [])
+    } catch (err) {
+      console.error('[proofs] GET error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_get_proofs' })
+    }
+  })
+
+  app.get('/api/admin/guilds/:guildId/proofs/:proofId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const proof = await db.get(
+        `SELECT ps.*, ta.assigned_user_id, ta.bulk_task_id, bt.title, bt.payout_amount, bt.payout_currency
+         FROM proof_submissions ps
+         LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+         LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+         WHERE ps.id = ? AND ps.guild_id = ?`,
+        [Number(req.params.proofId), req.guild.id]
+      )
+      if (!proof) return res.status(404).json({ error: 'proof_not_found' })
+      res.json(proof)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_proof' })
+    }
+  })
+
+  app.post('/api/admin/guilds/:guildId/proofs/:proofId/approve', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const proofId = Number(req.params.proofId)
+      const proof = await db.get('SELECT * FROM proof_submissions WHERE id = ? AND guild_id = ?', [proofId, req.guild.id])
+      if (!proof) return res.status(404).json({ error: 'proof_not_found' })
+      if (proof.status !== 'pending') return res.status(400).json({ error: 'proof_not_pending' })
+      await db.run('UPDATE proof_submissions SET status = ?, approved_at = CURRENT_TIMESTAMP, approved_by = ? WHERE id = ?', ['approved', req.user.id, proofId])
+      await db.run('UPDATE task_assignments SET status = ? WHERE id = ?', ['approved', proof.task_assignment_id])
+      // Log to activity feed
+      await db.run('INSERT INTO activity_feed (guild_id, type, title, description, user_tag) VALUES (?, ?, ?, ?, ?)',
+        [req.guild.id, 'proof', 'Proof Approved', `Proof #${proofId} approved`, `@${req.user.username}`])
+      // If pay requested, record a transaction placeholder
+      if (req.body?.pay) {
+        const proofDetail = await db.get(
+          `SELECT ps.*, bt.payout_amount, bt.payout_currency, ta.assigned_user_id FROM proof_submissions ps
+           LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+           LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id WHERE ps.id = ?`, [proofId])
+        if (proofDetail?.payout_amount) {
+          await db.run(
+            'INSERT INTO transactions (guild_id, type, amount, currency, recipient_id, description) VALUES (?, ?, ?, ?, ?, ?)',
+            [req.guild.id, 'payout', proofDetail.payout_amount, proofDetail.payout_currency || 'SOL', proofDetail.assigned_user_id, `Task proof #${proofId} approved & paid`])
+        }
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[proofs] approve error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_approve_proof' })
+    }
+  })
+
+  app.post('/api/admin/guilds/:guildId/proofs/:proofId/reject', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const proofId = Number(req.params.proofId)
+      const proof = await db.get('SELECT * FROM proof_submissions WHERE id = ? AND guild_id = ?', [proofId, req.guild.id])
+      if (!proof) return res.status(404).json({ error: 'proof_not_found' })
+      if (proof.status !== 'pending') return res.status(400).json({ error: 'proof_not_pending' })
+      const reason = req.body?.reason || 'Rejected by admin'
+      await db.run('UPDATE proof_submissions SET status = ?, rejection_reason = ?, approved_by = ? WHERE id = ?', ['rejected', reason, req.user.id, proofId])
+      await db.run('UPDATE task_assignments SET status = ? WHERE id = ?', ['assigned', proof.task_assignment_id])
+      await db.run('INSERT INTO activity_feed (guild_id, type, title, description, user_tag) VALUES (?, ?, ?, ?, ?)',
+        [req.guild.id, 'proof', 'Proof Rejected', `Proof #${proofId} rejected: ${reason}`, `@${req.user.username}`])
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[proofs] reject error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_reject_proof' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const days = Number(req.query.days) || 30
