@@ -165,7 +165,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
           Live Balance
         </div>
         <div className="balance-value">
-          {walletAddress ? (solBalance !== null ? `◎ ${solBalance.toFixed(6)}` : '◎ --') : '$0.00'}
+          {walletAddress ? (solBalance !== null ? `◎ ${solBalance.toFixed(4)}` : '◎ --') : '$0.00'}
           {budgetTotal > 0 && (
             <span className="balance-change" style={{ color: budgetSpent / budgetTotal > 0.9 ? 'var(--danger)' : 'var(--success)' }}>
               {((budgetTotal - budgetSpent) / budgetTotal * 100).toFixed(0)}% budget left

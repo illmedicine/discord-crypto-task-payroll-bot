@@ -284,7 +284,7 @@ export default function Treasury({ guildId }: Props) {
                 <div className="treasury-balance-block">
                   <div className="treasury-balance-label">SOL Balance</div>
                   <div className="treasury-balance-value">
-                    {balLoading ? <span className="spinner" /> : solBalance !== null ? `◎ ${solBalance.toFixed(6)}` : '◎ --'}
+                    {balLoading ? <span className="spinner" /> : solBalance !== null ? `◎ ${solBalance.toFixed(4)}` : '◎ --'}
                   </div>
                   <button
                     className="btn btn-sm btn-secondary"
