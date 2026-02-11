@@ -119,8 +119,11 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
         setBudgetSpent(w.budget_spent || 0)
         setBudgetCurrency(w.budget_currency || 'SOL')
         setWalletNetwork(w.network || 'mainnet-beta')
-        // Fetch live SOL balance
-        if (w.wallet_address) {
+        // Use server-side balance if available
+        if (balRes.data?.sol_balance !== null && balRes.data?.sol_balance !== undefined) {
+          setSolBalance(balRes.data.sol_balance)
+        } else if (w.wallet_address) {
+          // Fallback: fetch from RPC client-side
           const defaultRpc = w.network === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com'
           const rpcUrl = (import.meta as any).env?.VITE_SOLANA_RPC_URL || defaultRpc
           fetch(rpcUrl, {
@@ -162,7 +165,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
           Live Balance
         </div>
         <div className="balance-value">
-          {walletAddress ? (solBalance !== null ? `◎ ${solBalance.toFixed(4)}` : '◎ --') : '$0.00'}
+          {walletAddress ? (solBalance !== null ? `◎ ${solBalance.toFixed(6)}` : '◎ --') : '$0.00'}
           {budgetTotal > 0 && (
             <span className="balance-change" style={{ color: budgetSpent / budgetTotal > 0.9 ? 'var(--danger)' : 'var(--success)' }}>
               {((budgetTotal - budgetSpent) / budgetTotal * 100).toFixed(0)}% budget left

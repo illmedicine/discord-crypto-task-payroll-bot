@@ -78,6 +78,15 @@ export default function Treasury({ guildId }: Props) {
   const fetchSolBalance = async (address: string, network: string) => {
     try {
       setBalLoading(true)
+      // Try backend first (server-side RPC, no CORS issues)
+      try {
+        const balRes = await api.get(`/admin/guilds/${guildId}/dashboard/balance`)
+        if (balRes.data?.sol_balance !== null && balRes.data?.sol_balance !== undefined) {
+          setSolBalance(balRes.data.sol_balance)
+          return
+        }
+      } catch (_) { /* fall through to client-side */ }
+      // Fallback: client-side RPC
       const defaultRpc = network === 'devnet'
         ? 'https://api.devnet.solana.com'
         : 'https://api.mainnet-beta.solana.com'
@@ -275,7 +284,7 @@ export default function Treasury({ guildId }: Props) {
                 <div className="treasury-balance-block">
                   <div className="treasury-balance-label">SOL Balance</div>
                   <div className="treasury-balance-value">
-                    {balLoading ? <span className="spinner" /> : solBalance !== null ? `◎ ${solBalance.toFixed(4)}` : '◎ --'}
+                    {balLoading ? <span className="spinner" /> : solBalance !== null ? `◎ ${solBalance.toFixed(6)}` : '◎ --'}
                   </div>
                   <button
                     className="btn btn-sm btn-secondary"

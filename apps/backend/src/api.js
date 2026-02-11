@@ -512,7 +512,21 @@ module.exports = function buildApi({ discordClient }) {
   app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
-      res.json({ wallet_address: wallet?.wallet_address || null, wallet })
+      let sol_balance = null
+      if (wallet?.wallet_address) {
+        try {
+          const rpcUrl = wallet.network === 'devnet'
+            ? 'https://api.devnet.solana.com'
+            : (process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com')
+          const rpcRes = await axios.post(rpcUrl, {
+            jsonrpc: '2.0', id: 1, method: 'getBalance', params: [wallet.wallet_address]
+          }, { timeout: 8000 })
+          if (rpcRes.data?.result?.value !== undefined) {
+            sol_balance = rpcRes.data.result.value / 1e9
+          }
+        } catch (_) { /* RPC unavailable, balance stays null */ }
+      }
+      res.json({ wallet_address: wallet?.wallet_address || null, wallet, sol_balance })
     } catch (err) {
       res.status(500).json({ error: 'failed_to_get_balance' })
     }
