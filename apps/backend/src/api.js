@@ -513,20 +513,31 @@ module.exports = function buildApi({ discordClient }) {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       let sol_balance = null
+      let debug = { wallet_address: wallet?.wallet_address || null, network: wallet?.network || null, rpc_url: null, raw_lamports: null, rpc_error: null }
       if (wallet?.wallet_address) {
         try {
           const rpcUrl = wallet.network === 'devnet'
             ? 'https://api.devnet.solana.com'
             : (process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com')
+          debug.rpc_url = rpcUrl
+          console.log(`[balance] Querying ${rpcUrl} for wallet ${wallet.wallet_address} (network: ${wallet.network})`)
           const rpcRes = await axios.post(rpcUrl, {
             jsonrpc: '2.0', id: 1, method: 'getBalance', params: [wallet.wallet_address]
           }, { timeout: 8000 })
+          console.log(`[balance] RPC response:`, JSON.stringify(rpcRes.data))
           if (rpcRes.data?.result?.value !== undefined) {
+            debug.raw_lamports = rpcRes.data.result.value
             sol_balance = rpcRes.data.result.value / 1e9
           }
-        } catch (_) { /* RPC unavailable, balance stays null */ }
+          if (rpcRes.data?.error) {
+            debug.rpc_error = rpcRes.data.error
+          }
+        } catch (e) {
+          debug.rpc_error = e.message
+          console.error(`[balance] RPC error:`, e.message)
+        }
       }
-      res.json({ wallet_address: wallet?.wallet_address || null, wallet, sol_balance })
+      res.json({ wallet_address: wallet?.wallet_address || null, wallet, sol_balance, debug })
     } catch (err) {
       res.status(500).json({ error: 'failed_to_get_balance' })
     }

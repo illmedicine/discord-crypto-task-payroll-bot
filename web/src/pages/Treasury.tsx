@@ -81,6 +81,7 @@ export default function Treasury({ guildId }: Props) {
       // Try backend first (server-side RPC, no CORS issues)
       try {
         const balRes = await api.get(`/admin/guilds/${guildId}/dashboard/balance`)
+        console.log('[Treasury] Balance API response:', JSON.stringify(balRes.data))
         if (balRes.data?.sol_balance !== null && balRes.data?.sol_balance !== undefined) {
           setSolBalance(balRes.data.sol_balance)
           return
