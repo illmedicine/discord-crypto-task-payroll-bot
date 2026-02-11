@@ -212,6 +212,53 @@ db.serialize(() => {
       UNIQUE(event_id, user_id)
     )`
   )
+
+  // DCB Worker Roles (Staff / Admin)
+  db.run(
+    `CREATE TABLE IF NOT EXISTS dcb_workers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      discord_id TEXT NOT NULL,
+      username TEXT,
+      role TEXT NOT NULL DEFAULT 'staff',
+      added_by TEXT,
+      added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      removed_at DATETIME,
+      UNIQUE(guild_id, discord_id)
+    )`
+  )
+
+  // Worker activity log
+  db.run(
+    `CREATE TABLE IF NOT EXISTS worker_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      discord_id TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      detail TEXT,
+      amount REAL,
+      currency TEXT,
+      channel_id TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
+  // Worker daily stats
+  db.run(
+    `CREATE TABLE IF NOT EXISTS worker_daily_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      discord_id TEXT NOT NULL,
+      stat_date TEXT NOT NULL,
+      commands_run INTEGER DEFAULT 0,
+      messages_sent INTEGER DEFAULT 0,
+      payouts_issued INTEGER DEFAULT 0,
+      payout_total REAL DEFAULT 0,
+      proofs_reviewed INTEGER DEFAULT 0,
+      online_minutes INTEGER DEFAULT 0,
+      UNIQUE(guild_id, discord_id, stat_date)
+    )`
+  )
 })
 
 function run(sql, params = []) {

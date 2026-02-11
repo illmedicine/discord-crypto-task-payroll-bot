@@ -712,6 +712,7 @@ module.exports = function buildApi({ discordClient }) {
       }))
       res.json(enriched)
     } catch (err) {
+      console.error('[workers] GET error:', err?.message || err)
       res.status(500).json({ error: 'failed_to_get_workers' })
     }
   })
@@ -807,6 +808,7 @@ module.exports = function buildApi({ discordClient }) {
       }))
       res.json(list)
     } catch (err) {
+      console.error('[members] GET error:', err?.message || err)
       res.status(500).json({ error: 'failed_to_list_members' })
     }
   })

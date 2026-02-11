@@ -6,7 +6,7 @@ if (!process.env.DCB_SESSION_SECRET) {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences]
 })
 
 client.once('ready', () => {
