@@ -121,7 +121,8 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
         setWalletNetwork(w.network || 'mainnet-beta')
         // Fetch live SOL balance
         if (w.wallet_address) {
-          const rpcUrl = w.network === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com'
+          const defaultRpc = w.network === 'devnet' ? 'https://api.devnet.solana.com' : 'https://api.mainnet-beta.solana.com'
+          const rpcUrl = (import.meta as any).env?.VITE_SOLANA_RPC_URL || defaultRpc
           fetch(rpcUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

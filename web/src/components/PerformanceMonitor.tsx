@@ -5,7 +5,10 @@ const throttledWarn = throttle((...args: any[]) => console.warn(...args), 200)
 
 // Lightweight performance monitor that logs long tasks and frame drops to console.
 export default function PerformanceMonitor() {
+  const isDev = (import.meta as any).env?.DEV
+
   useEffect(() => {
+    if (!isDev) return
     if (typeof PerformanceObserver === 'undefined') return
 
     try {
@@ -33,6 +36,7 @@ export default function PerformanceMonitor() {
 
   // Also hook into rAF to detect frame budget exceedances
   useEffect(() => {
+    if (!isDev) return
     let rafId: number | null = null
     let last = performance.now()
 

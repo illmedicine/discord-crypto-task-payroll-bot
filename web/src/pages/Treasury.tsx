@@ -78,9 +78,10 @@ export default function Treasury({ guildId }: Props) {
   const fetchSolBalance = async (address: string, network: string) => {
     try {
       setBalLoading(true)
-      const rpcUrl = network === 'devnet'
+      const defaultRpc = network === 'devnet'
         ? 'https://api.devnet.solana.com'
         : 'https://api.mainnet-beta.solana.com'
+      const rpcUrl = (import.meta as any).env?.VITE_SOLANA_RPC_URL || defaultRpc
       const resp = await fetch(rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
