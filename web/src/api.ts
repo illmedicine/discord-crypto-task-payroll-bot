@@ -35,3 +35,6 @@ export const getAuthUrl = (path = '/auth/discord') => {
   }
   return `${base.replace(/\/$/, '')}${path}`
 }
+
+export const getGoogleAuthUrl = () => getAuthUrl('/auth/google')
+export const getGoogleLinkUrl = () => getAuthUrl('/auth/google/link')

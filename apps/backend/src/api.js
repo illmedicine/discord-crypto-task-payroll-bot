@@ -75,7 +75,13 @@ module.exports = function buildApi({ discordClient }) {
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
       const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
       if (!guild?.ownerId) return res.status(403).json({ error: 'cannot_determine_owner' })
-      if (!req.user || req.user.id !== guild.ownerId) return res.status(403).json({ error: 'forbidden_not_guild_owner' })
+      // Resolve the Discord ID: if logged in via Google, look up the linked Discord account
+      let discordId = req.user.id
+      if (discordId?.startsWith('google:') && req.user.google_id) {
+        const account = await db.get('SELECT discord_id FROM user_accounts WHERE google_id = ?', [req.user.google_id])
+        if (account?.discord_id) discordId = account.discord_id
+      }
+      if (!discordId || discordId !== guild.ownerId) return res.status(403).json({ error: 'forbidden_not_guild_owner' })
       req.guild = guild
       return next()
     } catch (_) {
@@ -132,20 +138,35 @@ module.exports = function buildApi({ discordClient }) {
         headers: { Authorization: `Bearer ${accessToken}` }
       })
 
+      // Ensure user_accounts row exists for Discord user
+      const discordId = userResp.data.id
+      await db.run(
+        `INSERT INTO user_accounts (discord_id, last_login_at) VALUES (?, CURRENT_TIMESTAMP)
+         ON CONFLICT(discord_id) DO UPDATE SET last_login_at = CURRENT_TIMESTAMP`,
+        [discordId]
+      )
+
+      // Check if this Discord user has a linked Google account
+      const linkedAccount = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
+
       const payload = {
         id: userResp.data.id,
         username: userResp.data.username,
         discriminator: userResp.data.discriminator,
-        avatar: userResp.data.avatar
+        avatar: userResp.data.avatar,
+        auth_provider: 'discord',
+        google_id: linkedAccount?.google_id || null,
+        google_email: linkedAccount?.google_email || null,
+        google_picture: linkedAccount?.google_picture || null,
       }
 
-      const jwtToken = jwt.sign(payload, sessionSecret, { expiresIn: 60 * 60 * 24 * 7 })
+      const jwtToken = jwt.sign(payload, sessionSecret, { expiresIn: 60 * 60 * 24 * 30 }) // 30 days
 
       res.cookie('dcb_session', jwtToken, {
         httpOnly: true,
         secure: cookieSecure,
         sameSite: cookieSameSite,
-        maxAge: 60 * 60 * 24 * 7 * 1000
+        maxAge: 60 * 60 * 24 * 30 * 1000
       })
 
       res.clearCookie('dcb_oauth_state')
@@ -166,6 +187,198 @@ module.exports = function buildApi({ discordClient }) {
     res.json({ ok: true })
   })
 
+  // ---- Google OAuth ----
+  app.get('/auth/google', (req, res) => {
+    const clientId = process.env.GOOGLE_CLIENT_ID
+    if (!clientId) return res.status(500).send('GOOGLE_CLIENT_ID not configured')
+
+    const state = crypto.randomBytes(12).toString('hex')
+    res.cookie('dcb_google_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
+
+    const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/google/callback`)
+    const scope = encodeURIComponent('openid email profile')
+    const url = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${clientId}&scope=${scope}&redirect_uri=${redirectUri}&state=${state}&access_type=offline&prompt=consent`
+    return res.redirect(url)
+  })
+
+  app.get('/auth/google/callback', async (req, res) => {
+    const { code, state } = req.query
+    const savedState = req.cookies?.dcb_google_state
+
+    if (!code) return res.status(400).send('Missing code')
+    if (!state || !savedState || state !== savedState) return res.status(400).send('Invalid OAuth state')
+
+    const clientId = process.env.GOOGLE_CLIENT_ID
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+    if (!clientId || !clientSecret) return res.status(500).send('Google OAuth not configured on server')
+
+    try {
+      // Exchange code for tokens
+      const tokenResp = await axios.post('https://oauth2.googleapis.com/token', new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `${baseUrl(req)}/auth/google/callback`
+      }).toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      })
+
+      const accessToken = tokenResp.data.access_token
+
+      // Get Google user info
+      const userResp = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      })
+
+      const googleUser = userResp.data
+      const googleId = googleUser.id
+      const googleEmail = googleUser.email
+      const googleName = googleUser.name
+      const googlePicture = googleUser.picture
+
+      // Check if this Google account is already linked to a Discord user
+      let account = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [googleId])
+
+      if (!account) {
+        // Check if there's a linked-but-not-Google account being created now
+        // For first-time Google login, we need a Discord link. Check if we're linking.
+        const linkingDiscordId = req.cookies?.dcb_linking_discord_id
+        if (linkingDiscordId) {
+          // Link Google to existing Discord account
+          const existing = await db.get('SELECT * FROM user_accounts WHERE discord_id = ?', [linkingDiscordId])
+          if (existing) {
+            await db.run('UPDATE user_accounts SET google_id = ?, google_email = ?, google_name = ?, google_picture = ?, last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?',
+              [googleId, googleEmail, googleName, googlePicture, linkingDiscordId])
+          } else {
+            await db.run('INSERT INTO user_accounts (discord_id, google_id, google_email, google_name, google_picture) VALUES (?, ?, ?, ?, ?)',
+              [linkingDiscordId, googleId, googleEmail, googleName, googlePicture])
+          }
+          account = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [googleId])
+          res.clearCookie('dcb_linking_discord_id')
+        } else {
+          // Create new account without Discord link
+          // User will need to link Discord later for full guild access
+          await db.run('INSERT OR IGNORE INTO user_accounts (google_id, google_email, google_name, google_picture) VALUES (?, ?, ?, ?)',
+            [googleId, googleEmail, googleName, googlePicture])
+          account = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [googleId])
+        }
+      } else {
+        // Update profile info
+        await db.run('UPDATE user_accounts SET google_email = ?, google_name = ?, google_picture = ?, last_login_at = CURRENT_TIMESTAMP WHERE google_id = ?',
+          [googleEmail, googleName, googlePicture, googleId])
+      }
+
+      // If we have a linked Discord ID, issue a full JWT with Discord id
+      const payload = {
+        id: account?.discord_id || `google:${googleId}`,
+        username: googleName || googleEmail,
+        discriminator: '0',
+        avatar: null,
+        google_id: googleId,
+        google_email: googleEmail,
+        google_picture: googlePicture,
+        auth_provider: 'google'
+      }
+
+      const jwtToken = jwt.sign(payload, sessionSecret, { expiresIn: 60 * 60 * 24 * 30 }) // 30 days for Google
+
+      res.cookie('dcb_session', jwtToken, {
+        httpOnly: true,
+        secure: cookieSecure,
+        sameSite: cookieSameSite,
+        maxAge: 60 * 60 * 24 * 30 * 1000
+      })
+      res.clearCookie('dcb_google_state')
+
+      if (uiBase) {
+        const u = new URL(uiBase)
+        u.searchParams.set('dcb_token', jwtToken)
+        return res.redirect(u.toString())
+      }
+      return res.json({ ok: true })
+    } catch (err) {
+      console.error('[auth/google] OAuth error:', err?.response?.data || err?.message || err)
+      return res.status(500).send('Google OAuth exchange failed')
+    }
+  })
+
+  // Start linking flow: set cookie then redirect to Google
+  app.get('/auth/google/link', requireAuth, (req, res) => {
+    const clientId = process.env.GOOGLE_CLIENT_ID
+    if (!clientId) return res.status(500).send('GOOGLE_CLIENT_ID not configured')
+
+    // Remember the Discord user we're linking
+    res.cookie('dcb_linking_discord_id', req.user.id, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 600_000 })
+
+    const state = crypto.randomBytes(12).toString('hex')
+    res.cookie('dcb_google_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
+
+    const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/google/callback`)
+    const scope = encodeURIComponent('openid email profile')
+    const url = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${clientId}&scope=${scope}&redirect_uri=${redirectUri}&state=${state}&access_type=offline&prompt=consent`
+    return res.redirect(url)
+  })
+
+  // Link Discord to an existing Google-only session
+  app.post('/auth/link-discord', requireAuth, async (req, res) => {
+    try {
+      if (!req.user.google_id) return res.status(400).json({ error: 'not_google_session' })
+      // The user must already have a Discord session first, then link
+      // For now, support linking by having them do Discord OAuth, which sets a discord_id
+      return res.status(400).json({ error: 'use_discord_oauth_to_link', message: 'Log in with Discord first, then link Google from settings.' })
+    } catch (err) {
+      res.status(500).json({ error: 'link_failed' })
+    }
+  })
+
+  // ---- User Preferences (persist selections across sessions) ----
+  app.get('/api/user/preferences', requireAuth, async (req, res) => {
+    try {
+      const prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [req.user.id])
+      res.json(prefs || { selected_guild_id: null, selected_page: 'dashboard' })
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_preferences' })
+    }
+  })
+
+  app.put('/api/user/preferences', requireAuth, async (req, res) => {
+    try {
+      const { selected_guild_id, selected_page, extra_json } = req.body || {}
+      await db.run(
+        `INSERT INTO user_preferences (user_id, selected_guild_id, selected_page, extra_json, updated_at)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id) DO UPDATE SET
+           selected_guild_id = COALESCE(excluded.selected_guild_id, user_preferences.selected_guild_id),
+           selected_page = COALESCE(excluded.selected_page, user_preferences.selected_page),
+           extra_json = COALESCE(excluded.extra_json, user_preferences.extra_json),
+           updated_at = CURRENT_TIMESTAMP`,
+        [req.user.id, selected_guild_id || null, selected_page || 'dashboard', extra_json ? JSON.stringify(extra_json) : null]
+      )
+      const prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [req.user.id])
+      res.json(prefs)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_save_preferences' })
+    }
+  })
+
+  // ---- Account info (linked providers) ----
+  app.get('/api/user/account', requireAuth, async (req, res) => {
+    try {
+      const account = await db.get('SELECT * FROM user_accounts WHERE discord_id = ? OR google_id = ?',
+        [req.user.id, req.user.google_id || null])
+      res.json({
+        discord_linked: !!account?.discord_id,
+        google_linked: !!account?.google_id,
+        google_email: account?.google_email || null,
+        google_name: account?.google_name || null,
+        google_picture: account?.google_picture || null,
+      })
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_account' })
+    }
+  })
+
   app.get('/api/auth/me', (req, res) => {
     const user = getSessionUser(req)
     if (!user) return res.status(401).json({ error: 'no_session' })
@@ -173,11 +386,17 @@ module.exports = function buildApi({ discordClient }) {
   })
 
   app.get('/api/admin/guilds', requireAuth, async (req, res) => {
+    // Resolve Discord ID for Google-linked accounts
+    let discordId = req.user.id
+    if (discordId?.startsWith('google:') && req.user.google_id) {
+      const account = await db.get('SELECT discord_id FROM user_accounts WHERE google_id = ?', [req.user.google_id])
+      if (account?.discord_id) discordId = account.discord_id
+    }
     const results = []
     for (const g of discordClient.guilds.cache.values()) {
       try {
         const guild = await g.fetch()
-        if (guild.ownerId === req.user.id) results.push({ id: guild.id, name: guild.name })
+        if (guild.ownerId === discordId) results.push({ id: guild.id, name: guild.name })
       } catch (_) {
       }
     }

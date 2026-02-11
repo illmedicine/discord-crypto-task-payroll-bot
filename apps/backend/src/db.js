@@ -259,6 +259,33 @@ db.serialize(() => {
       UNIQUE(guild_id, discord_id, stat_date)
     )`
   )
+
+  // User accounts – links Google / Discord identities
+  db.run(
+    `CREATE TABLE IF NOT EXISTS user_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      discord_id TEXT,
+      google_id TEXT,
+      google_email TEXT,
+      google_name TEXT,
+      google_picture TEXT,
+      last_login_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(discord_id),
+      UNIQUE(google_id)
+    )`
+  )
+
+  // User preferences – persists selected guild, page, etc. across sessions
+  db.run(
+    `CREATE TABLE IF NOT EXISTS user_preferences (
+      user_id TEXT PRIMARY KEY,
+      selected_guild_id TEXT,
+      selected_page TEXT DEFAULT 'dashboard',
+      extra_json TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
 })
 
 function run(sql, params = []) {
