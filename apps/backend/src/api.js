@@ -193,7 +193,7 @@ module.exports = function buildApi({ discordClient }) {
     }
   })
 
-  app.post('/auth/logout', (req, res) => {
+  app.post('/api/auth/logout', (req, res) => {
     res.clearCookie('dcb_session')
     res.json({ ok: true })
   })

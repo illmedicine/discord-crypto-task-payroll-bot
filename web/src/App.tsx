@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import Dashboard from './pages/Dashboard'
 import Tasks from './pages/Tasks'
 import VoteEvents from './pages/VoteEvents'
@@ -40,6 +40,19 @@ export default function App() {
   const [accountInfo, setAccountInfo] = useState<{ discord_linked: boolean; google_linked: boolean; google_email?: string } | null>(null)
   const [authProviders, setAuthProviders] = useState<{ discord: boolean; google: boolean }>({ discord: true, google: false })
   const [prefsLoaded, setPrefsLoaded] = useState(false)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const profileRef = useRef<HTMLDivElement>(null)
+
+  // Close profile menu on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setProfileMenuOpen(false)
+      }
+    }
+    if (profileMenuOpen) document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [profileMenuOpen])
 
   // Save preferences to backend whenever guild or page changes
   const savePrefs = async (gid: string, p: string) => {
@@ -189,43 +202,71 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="sidebar-user">
-          <div className="sidebar-user-avatar" title={user.auth_provider === 'google' ? `Google: ${user.google_email || ''}` : `Discord: ${user.username}`}>
-            {user.google_picture ? (
-              <img src={user.google_picture} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-            ) : (
-              user.username.charAt(0).toUpperCase()
-            )}
-          </div>
-          <div className="sidebar-user-info">
-            <div className="sidebar-user-name">{user.username}</div>
-            <div className="sidebar-user-tag" style={{ fontSize: 10, color: '#888' }}>
-              {user.auth_provider === 'google' ? (
-                <>
-                  <span style={{ color: '#34A853' }}>Google</span>
-                  {!accountInfo?.discord_linked && (
-                    <a href={getAuthUrl()} style={{ marginLeft: 6, color: '#7c5cfc', fontSize: 10, textDecoration: 'underline' }}>Link Discord</a>
-                  )}
-                  {accountInfo?.discord_linked && <span style={{ marginLeft: 4, color: '#5865F2' }}>+ Discord</span>}
-                </>
+        <div className="sidebar-user-wrapper" ref={profileRef}>
+          <button className="sidebar-user" onClick={() => setProfileMenuOpen(v => !v)}>
+            <div className="sidebar-user-avatar" title={user.auth_provider === 'google' ? `Google: ${user.google_email || ''}` : `Discord: ${user.username}`}>
+              {user.google_picture ? (
+                <img src={user.google_picture} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
               ) : (
-                <>
-                  <span style={{ color: '#5865F2' }}>Discord</span>
-                  {!accountInfo?.google_linked && authProviders.google && (
-                    <a href={getGoogleLinkUrl()} style={{ marginLeft: 6, color: '#34A853', fontSize: 10, textDecoration: 'underline' }}>Link Google</a>
-                  )}handleGuildChange
-                  {accountInfo?.google_linked && <span style={{ marginLeft: 4, color: '#34A853' }}>+ Google</span>}
-                </>
+                user.username.charAt(0).toUpperCase()
               )}
             </div>
-          </div>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={async () => { localStorage.removeItem('dcb_token'); await api.post('/auth/logout'); location.reload() }}
-            title="Logout"
-          >
-            ↪
+            <div className="sidebar-user-info">
+              <div className="sidebar-user-name">{user.username}</div>
+              <div className="sidebar-user-tag">
+                {user.auth_provider === 'google' ? 'Google' : 'Discord'}
+                {accountInfo?.google_linked && accountInfo?.discord_linked && ' + linked'}
+              </div>
+            </div>
+            <span className="sidebar-user-caret">{profileMenuOpen ? '▾' : '▸'}</span>
           </button>
+
+          {profileMenuOpen && (
+            <div className="profile-menu">
+              <div className="profile-menu-header">
+                <div className="profile-menu-avatar">
+                  {user.google_picture ? (
+                    <img src={user.google_picture} alt="" />
+                  ) : (
+                    user.username.charAt(0).toUpperCase()
+                  )}
+                </div>
+                <div>
+                  <div className="profile-menu-name">{user.username}</div>
+                  <div className="profile-menu-provider">
+                    {user.auth_provider === 'google' ? (
+                      <><span className="provider-badge google">Google</span>{accountInfo?.discord_linked && <span className="provider-badge discord">Discord</span>}</>
+                    ) : (
+                      <><span className="provider-badge discord">Discord</span>{accountInfo?.google_linked && <span className="provider-badge google">Google</span>}</>
+                    )}
+                  </div>
+                  {user.google_email && <div className="profile-menu-email">{user.google_email}</div>}
+                </div>
+              </div>
+
+              <div className="profile-menu-divider" />
+
+              {user.auth_provider === 'google' && !accountInfo?.discord_linked && (
+                <a className="profile-menu-item" href={getAuthUrl()}>
+                  <span className="profile-menu-icon">🔗</span> Link Discord
+                </a>
+              )}
+              {user.auth_provider !== 'google' && !accountInfo?.google_linked && authProviders.google && (
+                <a className="profile-menu-item" href={getGoogleLinkUrl()}>
+                  <span className="profile-menu-icon">🔗</span> Link Google
+                </a>
+              )}
+
+              <div className="profile-menu-divider" />
+
+              <button
+                className="profile-menu-item logout"
+                onClick={async () => { localStorage.removeItem('dcb_token'); try { await api.post('/auth/logout') } catch(_) {}; location.reload() }}
+              >
+                <span className="profile-menu-icon">🚪</span> Logout
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -235,7 +276,7 @@ export default function App() {
           <select
             className="top-bar-guild-select"
             value={guildId}
-            onChange={e => setGuildId(e.target.value)}
+            onChange={e => handleGuildChange(e.target.value)}
           >
             {guilds.length === 0 && <option value="">No servers</option>}
             {guilds.map(g => (
