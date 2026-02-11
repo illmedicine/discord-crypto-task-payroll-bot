@@ -567,35 +567,6 @@ module.exports = (client) => {
 
   // Start listening
   
-//  Guild admin routes (auto-added to fix 404s) 
-app.get('/api/admin/guilds/:guildId/dashboard/stats', async (req, res) => {
-  try { res.json({ success: true, data: { totalMembers: 0, totalPaid: 0, pendingPayments: 0, totalTransactions: 0 } }); }
-  catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
-app.get('/api/admin/guilds/:guildId/dashboard/activity', async (req, res) => {
-  try { res.json({ success: true, data: [] }); }
-  catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
-app.get('/api/admin/guilds/:guildId/dashboard/balance', async (req, res) => {
-  try { res.json({ success: true, data: { balance: 0, currency: 'SOL', walletAddress: null } }); }
-  catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
-app.get('/api/admin/guilds/:guildId/transactions', async (req, res) => {
-  try { res.json({ success: true, data: [], total: 0 }); }
-  catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
-app.get('/api/admin/guilds/:guildId/wallet', async (req, res) => {
-  try { res.json({ success: true, data: { walletAddress: null, connected: false } }); }
-  catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
-app.post('/api/admin/guilds/:guildId/wallet', async (req, res) => {
-  try {
-    const { walletAddress } = req.body;
-    if (!walletAddress) return res.status(400).json({ success: false, message: 'Wallet address required' });
-    res.json({ success: true, data: { walletAddress, connected: true } });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
-});
-//  End guild admin routes 
 app.listen(port, () => {
     console.log(`[API] Server listening on port ${port}`);
   });
@@ -902,6 +873,36 @@ app.listen(port, () => {
       return res.status(500).json({ error: 'failed_to_list_members' });
     }
   });
+  //  Guild admin routes (fix 404s) 
+  app.get('/api/admin/guilds/:guildId/dashboard/stats', requireAuth, async (req, res) => {
+    try { res.json({ success: true, data: { totalMembers: 0, totalPaid: 0, pendingPayments: 0, totalTransactions: 0 } }); }
+    catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  });
+  app.get('/api/admin/guilds/:guildId/dashboard/activity', requireAuth, async (req, res) => {
+    try { res.json({ success: true, data: [] }); }
+    catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  });
+  app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, async (req, res) => {
+    try { res.json({ success: true, data: { balance: 0, currency: 'SOL', walletAddress: null } }); }
+    catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  });
+  app.get('/api/admin/guilds/:guildId/transactions', requireAuth, async (req, res) => {
+    try { res.json({ success: true, data: [], total: 0 }); }
+    catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  });
+  app.get('/api/admin/guilds/:guildId/wallet', requireAuth, async (req, res) => {
+    try { res.json({ success: true, data: { walletAddress: null, connected: false } }); }
+    catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  });
+  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, async (req, res) => {
+    try {
+      const { walletAddress } = req.body;
+      if (!walletAddress) return res.status(400).json({ success: false, message: 'Wallet address required' });
+      res.json({ success: true, data: { walletAddress, connected: true } });
+    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  });
+  //  End guild admin routes 
+
 
   return app;
 };
