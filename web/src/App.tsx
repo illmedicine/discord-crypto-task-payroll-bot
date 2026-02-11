@@ -7,6 +7,7 @@ import BulkTasks from './pages/BulkTasks'
 import Events from './pages/Events'
 import History from './pages/History'
 import Treasury from './pages/Treasury'
+import Workers from './pages/Workers'
 
 const ScheduledPosts = React.lazy(() => import('./pages/ScheduledPosts'))
 const Proofs = React.lazy(() => import('./pages/Proofs'))
@@ -15,11 +16,12 @@ import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
 import { api, API_BASE, getAuthUrl } from './api'
 
-type Page = 'dashboard' | 'tasks' | 'bulk_tasks' | 'votes' | 'contests' | 'events' | 'history' | 'treasury' | 'scheduled' | 'proofs'
+type Page = 'dashboard' | 'tasks' | 'bulk_tasks' | 'votes' | 'contests' | 'events' | 'history' | 'treasury' | 'workers' | 'scheduled' | 'proofs'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
+  { id: 'workers', label: 'Workers', icon: '👥' },
   { id: 'tasks', label: 'Tasks', icon: '📋' },
   { id: 'bulk_tasks', label: 'Bulk Tasks', icon: '📦' },
   { id: 'contests', label: 'Contests', icon: '🏆' },
@@ -166,6 +168,7 @@ export default function App() {
             {page === 'events' && <Events guildId={guildId} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} />}
+            {page === 'workers' && <Workers guildId={guildId} />}
             {page === 'scheduled' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><ScheduledPosts /></React.Suspense>}
             {page === 'proofs' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><Proofs /></React.Suspense>}
           </ProfilerLogger>

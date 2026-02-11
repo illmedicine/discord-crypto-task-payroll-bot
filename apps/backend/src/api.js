@@ -677,5 +677,139 @@ module.exports = function buildApi({ discordClient }) {
     }
   })
 
+  // ---- Workers / DCB Roles ----
+
+  app.get('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const days = Number(req.query.days) || 30
+      const rows = await db.all(
+        `SELECT
+           dw.discord_id, dw.username, dw.role, dw.added_at,
+           COALESCE(SUM(wds.commands_run), 0) as total_commands,
+           COALESCE(SUM(wds.messages_sent), 0) as total_messages,
+           COALESCE(SUM(wds.payouts_issued), 0) as total_payouts_issued,
+           COALESCE(SUM(wds.payout_total), 0) as total_payout_amount,
+           COALESCE(SUM(wds.proofs_reviewed), 0) as total_proofs_reviewed,
+           COALESCE(SUM(wds.online_minutes), 0) as total_online_minutes,
+           COUNT(DISTINCT wds.stat_date) as active_days,
+           (SELECT MAX(wa2.created_at) FROM worker_activity wa2 WHERE wa2.guild_id = dw.guild_id AND wa2.discord_id = dw.discord_id) as last_active
+         FROM dcb_workers dw
+         LEFT JOIN worker_daily_stats wds ON dw.guild_id = wds.guild_id AND dw.discord_id = wds.discord_id
+           AND wds.stat_date >= date('now', '-' || ? || ' days')
+         WHERE dw.guild_id = ? AND dw.removed_at IS NULL
+         GROUP BY dw.discord_id
+         ORDER BY dw.role ASC, total_commands DESC`,
+        [days, req.guild.id]
+      )
+      // Enrich with Discord data
+      const enriched = await Promise.all((rows || []).map(async (w) => {
+        try {
+          const member = await req.guild.members.fetch(w.discord_id)
+          return { ...w, avatar: member.user.displayAvatarURL({ size: 64 }), display_name: member.displayName, status: member.presence?.status || 'offline', joined_guild_at: member.joinedAt?.toISOString() || null, account_created_at: member.user.createdAt?.toISOString() || null }
+        } catch (_) {
+          return { ...w, avatar: null, display_name: w.username, status: 'offline', joined_guild_at: null, account_created_at: null }
+        }
+      }))
+      res.json(enriched)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_workers' })
+    }
+  })
+
+  app.post('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { discord_id, role } = req.body || {}
+      if (!discord_id) return res.status(400).json({ error: 'missing_discord_id' })
+      const workerRole = ['staff', 'admin'].includes(role) ? role : 'staff'
+      let username = 'unknown'
+      try { const m = await req.guild.members.fetch(discord_id); username = m.user.username } catch (_) {}
+      await db.run(
+        `INSERT INTO dcb_workers (guild_id, discord_id, username, role, added_by) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(guild_id, discord_id) DO UPDATE SET username=excluded.username, role=excluded.role, added_by=excluded.added_by, removed_at=NULL, added_at=CURRENT_TIMESTAMP`,
+        [req.guild.id, discord_id, username, workerRole, req.user.id]
+      )
+      await db.run('INSERT INTO worker_activity (guild_id, discord_id, action_type, detail) VALUES (?, ?, ?, ?)',
+        [req.guild.id, discord_id, 'role_assigned', `Assigned ${workerRole} via dashboard`])
+      res.json({ ok: true, role: workerRole, username })
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_add_worker' })
+    }
+  })
+
+  app.patch('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { role } = req.body || {}
+      if (!['staff', 'admin'].includes(role)) return res.status(400).json({ error: 'invalid_role' })
+      await db.run('UPDATE dcb_workers SET role = ? WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL', [role, req.guild.id, req.params.discordId])
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_update_worker' })
+    }
+  })
+
+  app.delete('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      await db.run('UPDATE dcb_workers SET removed_at = CURRENT_TIMESTAMP WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL', [req.guild.id, req.params.discordId])
+      res.json({ ok: true })
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_remove_worker' })
+    }
+  })
+
+  app.get('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const worker = await db.get('SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL', [req.guild.id, req.params.discordId])
+      if (!worker) return res.status(404).json({ error: 'worker_not_found' })
+      const stats = await db.get(
+        `SELECT COALESCE(SUM(commands_run),0) as total_commands, COALESCE(SUM(messages_sent),0) as total_messages,
+         COALESCE(SUM(payouts_issued),0) as total_payouts_issued, COALESCE(SUM(payout_total),0) as total_payout_amount,
+         COALESCE(SUM(proofs_reviewed),0) as total_proofs_reviewed, COALESCE(SUM(online_minutes),0) as total_online_minutes,
+         COUNT(DISTINCT stat_date) as active_days
+         FROM worker_daily_stats WHERE guild_id = ? AND discord_id = ? AND stat_date >= date('now', '-30 days')`,
+        [req.guild.id, req.params.discordId]
+      )
+      const activity = await db.all('SELECT * FROM worker_activity WHERE guild_id = ? AND discord_id = ? ORDER BY created_at DESC LIMIT 50', [req.guild.id, req.params.discordId])
+      let enriched = { ...worker, ...(stats || {}), activity: activity || [] }
+      try {
+        const member = await req.guild.members.fetch(req.params.discordId)
+        enriched.avatar = member.user.displayAvatarURL({ size: 128 })
+        enriched.display_name = member.displayName
+        enriched.status = member.presence?.status || 'offline'
+        enriched.joined_guild_at = member.joinedAt?.toISOString() || null
+        enriched.account_created_at = member.user.createdAt?.toISOString() || null
+      } catch (_) {}
+      res.json(enriched)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_worker' })
+    }
+  })
+
+  app.get('/api/admin/guilds/:guildId/workers-activity', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 100, 500)
+      const rows = await db.all(
+        `SELECT wa.*, dw.username, dw.role FROM worker_activity wa
+         LEFT JOIN dcb_workers dw ON wa.guild_id = dw.guild_id AND wa.discord_id = dw.discord_id AND dw.removed_at IS NULL
+         WHERE wa.guild_id = ? ORDER BY wa.created_at DESC LIMIT ?`,
+        [req.guild.id, limit]
+      )
+      res.json(rows || [])
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_activity' })
+    }
+  })
+
+  app.get('/api/admin/guilds/:guildId/members', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const members = await req.guild.members.fetch({ limit: 100 })
+      const list = members.filter(m => !m.user.bot).map(m => ({
+        id: m.id, username: m.user.username, display_name: m.displayName, avatar: m.user.displayAvatarURL({ size: 32 })
+      }))
+      res.json(list)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_list_members' })
+    }
+  })
+
   return app
 }

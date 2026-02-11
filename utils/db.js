@@ -408,6 +408,56 @@ const initDb = () => {
         FOREIGN KEY(user_id) REFERENCES users(discord_id)
       )
     `);
+
+    // DCB Worker Roles (Staff / Admin)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS dcb_workers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        username TEXT,
+        role TEXT NOT NULL DEFAULT 'staff',
+        added_by TEXT,
+        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        removed_at DATETIME,
+        UNIQUE(guild_id, discord_id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
+      )
+    `);
+
+    // Worker activity log (commands, payouts, channel messages, etc.)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS worker_activity (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        detail TEXT,
+        amount REAL,
+        currency TEXT,
+        channel_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
+      )
+    `);
+
+    // Worker daily snapshots (aggregated stats per day for fast dashboard queries)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS worker_daily_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        stat_date TEXT NOT NULL,
+        commands_run INTEGER DEFAULT 0,
+        messages_sent INTEGER DEFAULT 0,
+        payouts_issued INTEGER DEFAULT 0,
+        payout_total REAL DEFAULT 0,
+        proofs_reviewed INTEGER DEFAULT 0,
+        online_minutes INTEGER DEFAULT 0,
+        UNIQUE(guild_id, discord_id, stat_date),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
+      )
+    `);
   });
 };
 
@@ -1778,6 +1828,194 @@ const getRecentTransactions = (guildId, limit = 20) => {
   });
 };
 
+// ---- DCB Worker Role helpers ----
+
+const addWorker = (guildId, discordId, username, role, addedBy) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO dcb_workers (guild_id, discord_id, username, role, added_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(guild_id, discord_id) DO UPDATE SET
+         username = excluded.username,
+         role = excluded.role,
+         added_by = excluded.added_by,
+         removed_at = NULL,
+         added_at = CURRENT_TIMESTAMP`,
+      [guildId, discordId, username, role || 'staff', addedBy],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const removeWorker = (guildId, discordId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE dcb_workers SET removed_at = CURRENT_TIMESTAMP WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL`,
+      [guildId, discordId],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.changes);
+      }
+    );
+  });
+};
+
+const getWorker = (guildId, discordId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL`,
+      [guildId, discordId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row || null);
+      }
+    );
+  });
+};
+
+const getGuildWorkers = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM dcb_workers WHERE guild_id = ? AND removed_at IS NULL ORDER BY role ASC, added_at ASC`,
+      [guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const updateWorkerRole = (guildId, discordId, newRole) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE dcb_workers SET role = ? WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL`,
+      [newRole, guildId, discordId],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.changes);
+      }
+    );
+  });
+};
+
+// ---- Worker Activity helpers ----
+
+const logWorkerActivity = (guildId, discordId, actionType, detail, amount, currency, channelId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, amount, currency, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, discordId, actionType, detail || null, amount || null, currency || null, channelId || null],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getWorkerActivity = (guildId, discordId, limit = 50) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM worker_activity WHERE guild_id = ? AND discord_id = ? ORDER BY created_at DESC LIMIT ?`,
+      [guildId, discordId, limit],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const getGuildWorkerActivity = (guildId, limit = 100) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT wa.*, dw.username, dw.role FROM worker_activity wa
+       LEFT JOIN dcb_workers dw ON wa.guild_id = dw.guild_id AND wa.discord_id = dw.discord_id AND dw.removed_at IS NULL
+       WHERE wa.guild_id = ? ORDER BY wa.created_at DESC LIMIT ?`,
+      [guildId, limit],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const upsertWorkerDailyStat = (guildId, discordId, statDate, field, increment) => {
+  return new Promise((resolve, reject) => {
+    const validFields = ['commands_run', 'messages_sent', 'payouts_issued', 'payout_total', 'proofs_reviewed', 'online_minutes'];
+    if (!validFields.includes(field)) return reject(new Error('invalid stat field'));
+    db.run(
+      `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, ${field})
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(guild_id, discord_id, stat_date) DO UPDATE SET
+         ${field} = ${field} + ?`,
+      [guildId, discordId, statDate, increment, increment],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getWorkerStats = (guildId, discordId, days = 30) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT
+         COALESCE(SUM(commands_run), 0) as total_commands,
+         COALESCE(SUM(messages_sent), 0) as total_messages,
+         COALESCE(SUM(payouts_issued), 0) as total_payouts_issued,
+         COALESCE(SUM(payout_total), 0) as total_payout_amount,
+         COALESCE(SUM(proofs_reviewed), 0) as total_proofs_reviewed,
+         COALESCE(SUM(online_minutes), 0) as total_online_minutes,
+         COUNT(DISTINCT stat_date) as active_days
+       FROM worker_daily_stats
+       WHERE guild_id = ? AND discord_id = ? AND stat_date >= date('now', '-' || ? || ' days')`,
+      [guildId, discordId, days],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row || {});
+      }
+    );
+  });
+};
+
+const getGuildWorkersSummary = (guildId, days = 30) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT
+         dw.discord_id,
+         dw.username,
+         dw.role,
+         dw.added_at,
+         COALESCE(SUM(wds.commands_run), 0) as total_commands,
+         COALESCE(SUM(wds.messages_sent), 0) as total_messages,
+         COALESCE(SUM(wds.payouts_issued), 0) as total_payouts_issued,
+         COALESCE(SUM(wds.payout_total), 0) as total_payout_amount,
+         COALESCE(SUM(wds.proofs_reviewed), 0) as total_proofs_reviewed,
+         COALESCE(SUM(wds.online_minutes), 0) as total_online_minutes,
+         COUNT(DISTINCT wds.stat_date) as active_days,
+         (SELECT MAX(wa2.created_at) FROM worker_activity wa2 WHERE wa2.guild_id = dw.guild_id AND wa2.discord_id = dw.discord_id) as last_active
+       FROM dcb_workers dw
+       LEFT JOIN worker_daily_stats wds ON dw.guild_id = wds.guild_id AND dw.discord_id = wds.discord_id
+         AND wds.stat_date >= date('now', '-' || ? || ' days')
+       WHERE dw.guild_id = ? AND dw.removed_at IS NULL
+       GROUP BY dw.discord_id
+       ORDER BY dw.role ASC, total_commands DESC`,
+      [days, guildId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
 module.exports = {
   db,
   initDb,
@@ -1870,4 +2108,16 @@ module.exports = {
   // Dashboard
   getDashboardStats,
   getRecentTransactions,
+  // Worker / Staff management
+  addWorker,
+  removeWorker,
+  getWorker,
+  getGuildWorkers,
+  updateWorkerRole,
+  logWorkerActivity,
+  getWorkerActivity,
+  getGuildWorkerActivity,
+  upsertWorkerDailyStat,
+  getWorkerStats,
+  getGuildWorkersSummary,
 };

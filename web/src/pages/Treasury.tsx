@@ -50,12 +50,6 @@ export default function Treasury({ guildId }: Props) {
   const [budgetInput, setBudgetInput] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('SOL')
 
-  // Edit mode
-  const [editing, setEditing] = useState(false)
-  const [editAddr, setEditAddr] = useState('')
-  const [editLabel, setEditLabel] = useState('')
-  const [editNetwork, setEditNetwork] = useState('')
-
   const load = async () => {
     if (!guildId) return
     setLoading(true)
@@ -114,7 +108,6 @@ export default function Treasury({ guildId }: Props) {
     setWallet(null)
     setSolBalance(null)
     setTransactions([])
-    setEditing(false)
     if (guildId) load()
   }, [guildId])
 
@@ -132,39 +125,16 @@ export default function Treasury({ guildId }: Props) {
       setInputLabel('Treasury')
       await load()
     } catch (err: any) {
-      alert(err?.response?.data?.error || 'Failed to connect wallet')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const updateWallet = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!guildId) return
-    setSaving(true)
-    try {
-      const updates: Record<string, any> = {}
-      if (editAddr && editAddr !== wallet?.wallet_address) updates.wallet_address = editAddr.trim()
-      if (editLabel !== wallet?.label) updates.label = editLabel
-      if (editNetwork !== wallet?.network) updates.network = editNetwork
-      await api.patch(`/admin/guilds/${guildId}/wallet`, updates)
-      setEditing(false)
-      await load()
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Failed to update wallet')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const disconnectWallet = async () => {
-    if (!guildId || !confirm('Disconnect the treasury wallet from this server? Budget data will be lost.')) return
-    setSaving(true)
-    try {
-      await api.delete(`/admin/guilds/${guildId}/wallet`)
-      await load()
-    } catch {
-      alert('Failed to disconnect wallet')
+      const data = err?.response?.data
+      if (data?.error === 'wallet_already_configured') {
+        alert(`🔒 Treasury Wallet Locked\n\nThis server already has a treasury wallet configured:\n${data.wallet_address}\n\nThe wallet is locked and cannot be changed.`)
+      } else if (err?.response?.status === 403) {
+        alert('🔒 Only the Server Owner can connect a treasury wallet.')
+      } else if (err?.response?.status === 401) {
+        alert('Please log in again to connect a wallet.')
+      } else {
+        alert(data?.message || data?.error || 'Failed to connect wallet. Make sure the backend is running.')
+      }
     } finally {
       setSaving(false)
     }
@@ -233,6 +203,9 @@ export default function Treasury({ guildId }: Props) {
           <div className="empty-state" style={{ padding: '16px 0' }}>
             <div className="empty-state-icon">🔗</div>
             <div className="empty-state-text">No treasury wallet is connected to this server.<br />Connect a Solana wallet to manage payouts and budgets.</div>
+          </div>
+          <div style={{ background: 'var(--bg-secondary, #1a1a2e)', border: '1px solid var(--border-color, #333)', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--text-muted, #aaa)' }}>
+            <strong style={{ color: 'var(--text-primary, #fff)' }}>🔒 Important:</strong> Only the <strong>Server Owner</strong> can connect the treasury wallet. Once connected, the wallet is <strong>permanently locked</strong> to this server and cannot be changed.
           </div>
           <form onSubmit={connectWallet}>
             <div className="form-row">
@@ -313,39 +286,11 @@ export default function Treasury({ guildId }: Props) {
               </div>
 
               <div className="treasury-actions">
-                <button className="btn btn-sm btn-secondary" onClick={() => { setEditing(!editing); setEditAddr(wallet.wallet_address); setEditLabel(wallet.label || ''); setEditNetwork(wallet.network || 'mainnet-beta'); }}>
-                  ✏️ Edit
-                </button>
-                <button className="btn btn-sm btn-danger" onClick={disconnectWallet} disabled={saving}>
-                  🔌 Disconnect
-                </button>
+                <span className="badge badge-active" style={{ fontSize: 12, padding: '4px 10px' }}>
+                  🔒 Locked &amp; Immutable
+                </span>
               </div>
 
-              {editing && (
-                <form onSubmit={updateWallet} className="treasury-edit-form">
-                  <div className="form-row">
-                    <div className="form-group" style={{ flex: 2 }}>
-                      <label className="form-label">Wallet Address</label>
-                      <input className="form-input" value={editAddr} onChange={e => setEditAddr(e.target.value)} minLength={32} maxLength={44} />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Label</label>
-                      <input className="form-input" value={editLabel} onChange={e => setEditLabel(e.target.value)} />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Network</label>
-                      <select className="form-select" value={editNetwork} onChange={e => setEditNetwork(e.target.value)}>
-                        <option value="mainnet-beta">Mainnet</option>
-                        <option value="devnet">Devnet</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>Save</button>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(false)}>Cancel</button>
-                  </div>
-                </form>
-              )}
             </div>
           </div>
 

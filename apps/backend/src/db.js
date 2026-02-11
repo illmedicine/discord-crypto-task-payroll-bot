@@ -100,10 +100,24 @@ db.serialize(() => {
     `CREATE TABLE IF NOT EXISTS guild_wallets (
       guild_id TEXT PRIMARY KEY,
       wallet_address TEXT NOT NULL,
+      label TEXT DEFAULT 'Treasury',
+      budget_total REAL DEFAULT 0,
+      budget_spent REAL DEFAULT 0,
+      budget_currency TEXT DEFAULT 'SOL',
+      network TEXT DEFAULT 'mainnet-beta',
       configured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      configured_by TEXT
+      configured_by TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   )
+
+  // Migration: add new columns if table already exists (safe to run repeatedly)
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN label TEXT DEFAULT 'Treasury'`, () => {})
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_total REAL DEFAULT 0`, () => {})
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_spent REAL DEFAULT 0`, () => {})
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_currency TEXT DEFAULT 'SOL'`, () => {})
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN network TEXT DEFAULT 'mainnet-beta'`, () => {})
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`, () => {})
 
   // Transactions
   db.run(

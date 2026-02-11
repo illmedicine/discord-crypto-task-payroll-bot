@@ -32,7 +32,7 @@ const LATEST_FEATURES = [
   'Solana transactions'
 ];
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences] });
 
 // Command collection
 client.commands = new Collection();
@@ -260,6 +260,21 @@ client.on('interactionCreate', async interaction => {
 
       // Log command audit
       await db.logCommandAudit(interaction.user.id, interaction.guildId, interaction.commandName).catch(() => {});
+
+      // Track worker activity if user is a DCB worker
+      if (interaction.guildId) {
+        db.getWorker(interaction.guildId, interaction.user.id).then(worker => {
+          if (worker) {
+            const today = new Date().toISOString().slice(0, 10);
+            db.logWorkerActivity(interaction.guildId, interaction.user.id, 'command', `/${interaction.commandName}`, null, null, interaction.channelId).catch(() => {});
+            db.upsertWorkerDailyStat(interaction.guildId, interaction.user.id, today, 'commands_run', 1).catch(() => {});
+            // Track payout commands specifically
+            if (['pay', 'task-approve', 'approve-proof'].includes(interaction.commandName)) {
+              db.upsertWorkerDailyStat(interaction.guildId, interaction.user.id, today, 'payouts_issued', 1).catch(() => {});
+            }
+          }
+        }).catch(() => {});
+      }
 
       // Wrap reply/edit/followUp so every command automatically includes prefix
       const injectPrefix = (payload) => {
@@ -568,6 +583,49 @@ client.on('interactionCreate', async interaction => {
       return;
     }
     return;
+  }
+});
+
+// Track messages from DCB workers for activity stats
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.guild) return;
+  try {
+    const worker = await db.getWorker(message.guild.id, message.author.id);
+    if (worker) {
+      const today = new Date().toISOString().slice(0, 10);
+      db.upsertWorkerDailyStat(message.guild.id, message.author.id, today, 'messages_sent', 1).catch(() => {});
+    }
+  } catch (_) {}
+});
+
+// Track presence updates for worker online-time (approximate in 5-min increments)
+const _workerPresenceCache = new Map();
+client.on('presenceUpdate', (oldPresence, newPresence) => {
+  if (!newPresence?.user || newPresence.user.bot) return;
+  const guildId = newPresence.guild?.id;
+  const userId = newPresence.userId;
+  if (!guildId) return;
+
+  const key = `${guildId}:${userId}`;
+  const now = Date.now();
+
+  if (newPresence.status === 'online' || newPresence.status === 'idle' || newPresence.status === 'dnd') {
+    if (!_workerPresenceCache.has(key)) {
+      _workerPresenceCache.set(key, now);
+    }
+  } else {
+    // Going offline — credit time if they were a worker
+    const start = _workerPresenceCache.get(key);
+    if (start) {
+      _workerPresenceCache.delete(key);
+      const mins = Math.max(1, Math.round((now - start) / 60000));
+      const today = new Date().toISOString().slice(0, 10);
+      db.getWorker(guildId, userId).then(worker => {
+        if (worker) {
+          db.upsertWorkerDailyStat(guildId, userId, today, 'online_minutes', mins).catch(() => {});
+        }
+      }).catch(() => {});
+    }
   }
 });
 
