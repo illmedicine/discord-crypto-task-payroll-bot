@@ -36,7 +36,15 @@ module.exports = {
       await interaction.deferReply();
       try {
         // Check if user is the server owner
-        const guild = interaction.guild;
+        let guild = interaction.guild;
+        if (!guild) {
+          try {
+            guild = await interaction.client.guilds.fetch(guildId);
+          } catch (e) {
+            console.error('[WALLET] Could not fetch guild:', e.message);
+            return interaction.editReply({ content: '❌ This command can only be used in a server.' });
+          }
+        }
         if (interaction.user.id !== guild.ownerId) {
           return interaction.editReply({
             content: '❌ Only the **Server Owner** can connect the treasury wallet for this server.'
