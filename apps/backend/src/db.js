@@ -1,8 +1,13 @@
 const path = require('path')
+const fs = require('fs')
 const sqlite3 = require('sqlite3')
 
-const dbPath = process.env.DCB_DB_PATH || path.join(process.cwd(), 'payroll.db')
+// Prefer env var, then /data volume (persistent), then CWD
+const dbPath = process.env.DCB_DB_PATH
+  || (process.env.RAILWAY_ENVIRONMENT && fs.existsSync('/data') ? '/data/payroll.db' : null)
+  || path.join(process.cwd(), 'payroll.db')
 
+console.log(`[backend-db] Using database: ${dbPath}`)
 const db = new sqlite3.Database(dbPath)
 
 db.serialize(() => {

@@ -10,6 +10,13 @@ const getDbPath = () => {
     console.log(`[DB] Using custom database path: ${process.env.DB_PATH}`);
     return process.env.DB_PATH;
   }
+
+  // On Railway, prefer /data volume for persistence across deploys
+  if (process.env.RAILWAY_ENVIRONMENT && fs.existsSync('/data')) {
+    const volPath = '/data/payroll.db';
+    console.log(`[DB] Railway mode (persistent volume) - Using: ${volPath}`);
+    return volPath;
+  }
   
   // Use payroll.db in app directory for both local and Railway
   const dbPath = path.join(__dirname, '../payroll.db');
