@@ -38,3 +38,6 @@ export const getAuthUrl = (path = '/auth/discord') => {
 
 export const getGoogleAuthUrl = () => getAuthUrl('/auth/google')
 export const getGoogleLinkUrl = () => getAuthUrl('/auth/google/link')
+export const getDiscordLinkUrl = () => getAuthUrl('/auth/discord/link')
+
+export default api

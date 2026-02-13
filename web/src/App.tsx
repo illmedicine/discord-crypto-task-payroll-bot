@@ -14,7 +14,7 @@ const Proofs = React.lazy(() => import('./pages/Proofs'))
 
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
-import { api, API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl } from './api'
+import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
 type Page = 'dashboard' | 'tasks' | 'bulk_tasks' | 'votes' | 'contests' | 'events' | 'history' | 'treasury' | 'workers' | 'scheduled' | 'proofs'
 
@@ -247,7 +247,7 @@ export default function App() {
               <div className="profile-menu-divider" />
 
               {user.auth_provider === 'google' && !accountInfo?.discord_linked && (
-                <a className="profile-menu-item" href={getAuthUrl()} onClick={() => localStorage.removeItem('dcb_token')}>
+                <a className="profile-menu-item" href={getDiscordLinkUrl()} onClick={() => localStorage.removeItem('dcb_token')}>
                   <span className="profile-menu-icon">🔗</span> Link Discord
                 </a>
               )}

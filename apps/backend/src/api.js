@@ -71,6 +71,43 @@ module.exports = function buildApi({ discordClient }) {
     return next()
   }
 
+  // Resolve the canonical user ID for a session user.
+  // Always returns the Discord ID if the account is linked, otherwise google:xxx, otherwise raw id.
+  async function resolveCanonicalUserId(user) {
+    if (!user) return null
+    try {
+      if (user.id?.startsWith('google:') && user.google_id) {
+        const account = await db.get('SELECT discord_id FROM user_accounts WHERE google_id = ?', [user.google_id])
+        if (account?.discord_id) return account.discord_id
+      }
+      return user.id
+    } catch (_) {
+      return user.id
+    }
+  }
+
+  // Migrate preferences from one user_id key to another (e.g. google:xxx → discord snowflake)
+  async function migratePreferences(fromUserId, toUserId) {
+    if (!fromUserId || !toUserId || fromUserId === toUserId) return
+    try {
+      const oldPrefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [fromUserId])
+      if (!oldPrefs) return
+      const existing = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [toUserId])
+      if (!existing) {
+        // Move old row to the canonical key
+        await db.run('UPDATE user_preferences SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?', [toUserId, fromUserId])
+      } else {
+        // Target already has prefs — merge (keep target values, fill gaps from old), then delete old
+        const mergedGuild = existing.selected_guild_id || oldPrefs.selected_guild_id
+        const mergedPage = existing.selected_page || oldPrefs.selected_page
+        const mergedExtra = existing.extra_json || oldPrefs.extra_json
+        await db.run('UPDATE user_preferences SET selected_guild_id = ?, selected_page = ?, extra_json = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+          [mergedGuild, mergedPage, mergedExtra, toUserId])
+        await db.run('DELETE FROM user_preferences WHERE user_id = ?', [fromUserId])
+      }
+    } catch (_) {}
+  }
+
   async function requireGuildOwner(req, res, next) {
     try {
       const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
@@ -78,11 +115,7 @@ module.exports = function buildApi({ discordClient }) {
       const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
       if (!guild?.ownerId) return res.status(403).json({ error: 'cannot_determine_owner' })
       // Resolve the Discord ID: if logged in via Google, look up the linked Discord account
-      let discordId = req.user.id
-      if (discordId?.startsWith('google:') && req.user.google_id) {
-        const account = await db.get('SELECT discord_id FROM user_accounts WHERE google_id = ?', [req.user.google_id])
-        if (account?.discord_id) discordId = account.discord_id
-      }
+      const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId || discordId !== guild.ownerId) return res.status(403).json({ error: 'forbidden_not_guild_owner' })
       req.guild = guild
       return next()
@@ -164,6 +197,38 @@ module.exports = function buildApi({ discordClient }) {
 
       // Check if this Discord user has a linked Google account
       const linkedAccount = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
+
+      // If linking a Google-first user to this Discord account
+      const linkingGoogleId = req.cookies?.dcb_linking_google_id
+      if (linkingGoogleId) {
+        const googleAccount = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [linkingGoogleId])
+        if (googleAccount) {
+          if (!googleAccount.discord_id) {
+            // Merge: set Google info on the Discord row, delete the orphan Google-only row
+            await db.run('UPDATE user_accounts SET google_id = ?, google_email = ?, google_name = ?, google_picture = ?, last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?',
+              [linkingGoogleId, googleAccount.google_email, googleAccount.google_name, googleAccount.google_picture, discordId])
+            await db.run('DELETE FROM user_accounts WHERE id = ? AND discord_id IS NULL', [googleAccount.id])
+          } else if (googleAccount.discord_id === discordId) {
+            // Already linked — just update login time
+            await db.run('UPDATE user_accounts SET last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?', [discordId])
+          }
+          // Migrate any preferences saved under google:xxx to the Discord ID
+          await migratePreferences(`google:${linkingGoogleId}`, discordId)
+        }
+        res.clearCookie('dcb_linking_google_id')
+        // Re-fetch linked info after merge
+        const updated = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
+        if (updated) {
+          linkedAccount.google_id = updated.google_id
+          linkedAccount.google_email = updated.google_email
+          linkedAccount.google_picture = updated.google_picture
+        }
+      }
+
+      // Also migrate any orphaned google preferences if this Discord user has a linked Google
+      if (linkedAccount?.google_id) {
+        await migratePreferences(`google:${linkedAccount.google_id}`, discordId)
+      }
 
       const payload = {
         id: userResp.data.id,
@@ -279,6 +344,8 @@ module.exports = function buildApi({ discordClient }) {
           }
           account = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [googleId])
           res.clearCookie('dcb_linking_discord_id')
+          // Migrate preferences from google:xxx to the Discord ID
+          await migratePreferences(`google:${googleId}`, linkingDiscordId)
         } else {
           // Create new account without Discord link
           // User will need to link Discord later for full guild access
@@ -343,22 +410,43 @@ module.exports = function buildApi({ discordClient }) {
     return res.redirect(url)
   })
 
-  // Link Discord to an existing Google-only session
-  app.post('/auth/link-discord', requireAuth, async (req, res) => {
-    try {
-      if (!req.user.google_id) return res.status(400).json({ error: 'not_google_session' })
-      // The user must already have a Discord session first, then link
-      // For now, support linking by having them do Discord OAuth, which sets a discord_id
-      return res.status(400).json({ error: 'use_discord_oauth_to_link', message: 'Log in with Discord first, then link Google from settings.' })
-    } catch (err) {
-      res.status(500).json({ error: 'link_failed' })
-    }
+  // Start linking Discord to an existing Google-only session
+  app.get('/auth/discord/link', requireAuth, (req, res) => {
+    const clientId = process.env.DISCORD_CLIENT_ID
+    if (!clientId) return res.status(500).send('DISCORD_CLIENT_ID not configured')
+    if (!req.user.google_id) return res.status(400).send('Not a Google session — log in with Google first')
+
+    // Remember the Google user we're linking
+    res.cookie('dcb_linking_google_id', req.user.google_id, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 600_000 })
+
+    // Clear existing session before starting a new OAuth flow
+    clearSessionCookie(res)
+
+    const state = crypto.randomBytes(12).toString('hex')
+    res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
+
+    const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/discord/callback`)
+    const scope = encodeURIComponent('identify email guilds')
+    const url = `https://discord.com/api/oauth2/authorize?response_type=code&client_id=${clientId}&scope=${scope}&redirect_uri=${redirectUri}&prompt=consent&state=${state}`
+    return res.redirect(url)
   })
 
   // ---- User Preferences (persist selections across sessions) ----
+  // Preferences always use the canonical user ID so they survive provider switches.
   app.get('/api/user/preferences', requireAuth, async (req, res) => {
     try {
-      const prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [req.user.id])
+      const canonicalId = await resolveCanonicalUserId(req.user)
+      let prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [canonicalId])
+
+      // Fallback: check under the raw session id (un-migrated data)
+      if (!prefs && canonicalId !== req.user.id) {
+        prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [req.user.id])
+        if (prefs) {
+          // Auto-migrate to canonical key
+          await migratePreferences(req.user.id, canonicalId)
+        }
+      }
+
       res.json(prefs || { selected_guild_id: null, selected_page: 'dashboard' })
     } catch (err) {
       res.status(500).json({ error: 'failed_to_get_preferences' })
@@ -367,6 +455,7 @@ module.exports = function buildApi({ discordClient }) {
 
   app.put('/api/user/preferences', requireAuth, async (req, res) => {
     try {
+      const canonicalId = await resolveCanonicalUserId(req.user)
       const { selected_guild_id, selected_page, extra_json } = req.body || {}
       await db.run(
         `INSERT INTO user_preferences (user_id, selected_guild_id, selected_page, extra_json, updated_at)
@@ -376,9 +465,13 @@ module.exports = function buildApi({ discordClient }) {
            selected_page = COALESCE(excluded.selected_page, user_preferences.selected_page),
            extra_json = COALESCE(excluded.extra_json, user_preferences.extra_json),
            updated_at = CURRENT_TIMESTAMP`,
-        [req.user.id, selected_guild_id || null, selected_page || 'dashboard', extra_json ? JSON.stringify(extra_json) : null]
+        [canonicalId, selected_guild_id || null, selected_page || 'dashboard', extra_json ? JSON.stringify(extra_json) : null]
       )
-      const prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [req.user.id])
+      // Clean up any orphaned prefs under old keys
+      if (canonicalId !== req.user.id) {
+        await db.run('DELETE FROM user_preferences WHERE user_id = ?', [req.user.id]).catch(() => {})
+      }
+      const prefs = await db.get('SELECT * FROM user_preferences WHERE user_id = ?', [canonicalId])
       res.json(prefs)
     } catch (err) {
       res.status(500).json({ error: 'failed_to_save_preferences' })
@@ -410,11 +503,7 @@ module.exports = function buildApi({ discordClient }) {
 
   app.get('/api/admin/guilds', requireAuth, async (req, res) => {
     // Resolve Discord ID for Google-linked accounts
-    let discordId = req.user.id
-    if (discordId?.startsWith('google:') && req.user.google_id) {
-      const account = await db.get('SELECT discord_id FROM user_accounts WHERE google_id = ?', [req.user.google_id])
-      if (account?.discord_id) discordId = account.discord_id
-    }
+    const discordId = await resolveCanonicalUserId(req.user)
     const results = []
     for (const g of discordClient.guilds.cache.values()) {
       try {
