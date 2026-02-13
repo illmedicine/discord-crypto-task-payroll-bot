@@ -6,6 +6,8 @@ const axios = require('axios')
 const crypto = require('crypto')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
+const multer = require('multer')
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } })
 
 module.exports = function buildApi({ discordClient }) {
   const app = express()
@@ -596,6 +598,76 @@ module.exports = function buildApi({ discordClient }) {
     res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
   })
 
+  // ---- Discord Channel Media (images previously posted) ----
+  app.get('/api/admin/guilds/:guildId/channels/:channelId/media', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const channel = await fetchTextChannel(req.guild.id, req.params.channelId)
+      const limit = Math.min(Number(req.query.limit) || 50, 100)
+      const messages = await channel.messages.fetch({ limit })
+      const media = []
+      for (const msg of messages.values()) {
+        for (const att of msg.attachments.values()) {
+          if (att.contentType && att.contentType.startsWith('image/')) {
+            media.push({
+              id: att.id,
+              url: att.url,
+              proxyURL: att.proxyURL,
+              name: att.name,
+              width: att.width,
+              height: att.height,
+              messageId: msg.id,
+              authorTag: msg.author?.tag || 'Unknown',
+              postedAt: msg.createdAt?.toISOString(),
+            })
+          }
+        }
+        // Also pick up image embeds
+        for (const embed of msg.embeds) {
+          if (embed.image?.url) {
+            media.push({
+              id: `embed-${msg.id}-${media.length}`,
+              url: embed.image.url,
+              proxyURL: embed.image.proxyURL || embed.image.url,
+              name: 'Embedded image',
+              width: embed.image.width,
+              height: embed.image.height,
+              messageId: msg.id,
+              authorTag: msg.author?.tag || 'Unknown',
+              postedAt: msg.createdAt?.toISOString(),
+            })
+          }
+        }
+      }
+      res.json(media)
+    } catch (err) {
+      console.error('[media] fetch error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_fetch_media' })
+    }
+  })
+
+  // ---- Upload image to a Discord channel (returns attachment URL) ----
+  app.post('/api/admin/guilds/:guildId/channels/:channelId/upload', requireAuth, requireGuildOwner, upload.single('image'), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'no_file' })
+      const channel = await fetchTextChannel(req.guild.id, req.params.channelId)
+      const msg = await channel.send({
+        content: req.body.caption || '📸 Event image upload',
+        files: [{ attachment: req.file.buffer, name: req.file.originalname || 'image.png' }],
+      })
+      const att = msg.attachments.first()
+      res.json({
+        id: att.id,
+        url: att.url,
+        proxyURL: att.proxyURL,
+        name: att.name,
+        messageId: msg.id,
+      })
+    } catch (err) {
+      console.error('[upload] error:', err?.message || err)
+      res.status(500).json({ error: 'upload_failed' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
     const rows = await db.all('SELECT * FROM vote_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)
@@ -654,60 +726,105 @@ module.exports = function buildApi({ discordClient }) {
   })
 
   app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
-    const eventId = Number(req.params.eventId)
-    const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
-    if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' })
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' })
 
-    const channelId = req.body?.channel_id || event.channel_id
-    const channel = await fetchTextChannel(req.guild.id, channelId)
-    const images = await db.all('SELECT * FROM vote_event_images WHERE vote_event_id = ? ORDER BY upload_order ASC', [eventId])
+      const channelId = req.body?.channel_id || event.channel_id
+      const channel = await fetchTextChannel(req.guild.id, channelId)
+      const images = await db.all('SELECT * FROM vote_event_images WHERE vote_event_id = ? ORDER BY upload_order ASC', [eventId])
 
-    const endTimestamp = event.ends_at ? Math.floor(new Date(event.ends_at).getTime() / 1000) : null
+      const endTimestamp = event.ends_at ? Math.floor(new Date(event.ends_at).getTime() / 1000) : null
 
-    const embed = new EmbedBuilder()
-      .setColor('#9B59B6')
-      .setTitle(`🗳️ ${event.title}`)
-      .setDescription(event.description || '')
-      .addFields(
-        { name: '👥 Participants', value: `${event.current_participants}/${event.max_participants}`, inline: true },
-        { name: '✅ Min to Start', value: `${event.min_participants}`, inline: true },
-        { name: '🎁 Prize', value: `${Number(event.prize_amount || 0)} ${event.currency}`, inline: true }
-      )
-      .setFooter({ text: `Event #${eventId}` })
-      .setTimestamp()
+      // ---- Build rich multi-embed interactive post ----
+      const embeds = []
 
-    if (endTimestamp) embed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true })
-    if (images && images[0]?.image_url) embed.setImage(images[0].image_url)
-
-    const joinButton = new ButtonBuilder()
-      .setCustomId(`vote_event_join_${eventId}`)
-      .setLabel('🎫 Join Event')
-      .setStyle(ButtonStyle.Success)
-
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId(`vote_event_vote_${eventId}`)
-      .setPlaceholder('Select your favorite image to vote')
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(
-        (images || []).map(img => new StringSelectMenuOptionBuilder()
-          .setLabel(`Image ${img.upload_order}`)
-          .setValue(img.image_id)
-          .setDescription(`Vote for Image ${img.upload_order}`)
+      // Main event card
+      const mainEmbed = new EmbedBuilder()
+        .setColor('#9B59B6')
+        .setTitle(`🗳️ DCB Vote Event: ${event.title}`)
+        .setDescription(
+          (event.description || 'Vote for your favorite image!') +
+          '\n\n' +
+          '**How it works:**\n' +
+          '1️⃣ Click **Join Event** to claim a seat\n' +
+          '2️⃣ Click a **Vote** button for your favorite image\n' +
+          '3️⃣ When all seats fill, voting locks & results are revealed\n' +
+          '4️⃣ Winners who match the owner\'s pick get paid instantly! 💰'
         )
+        .addFields(
+          { name: '🪑 Seats', value: `${event.current_participants}/${event.max_participants}`, inline: true },
+          { name: '✅ Min to Start', value: `${event.min_participants}`, inline: true },
+          { name: '🎁 Prize Pool', value: `${Number(event.prize_amount || 0)} ${event.currency}`, inline: true },
+        )
+        .setFooter({ text: `DisCryptoBank • Event #${eventId} • Provably Fair` })
+        .setTimestamp()
+
+      if (endTimestamp) mainEmbed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true })
+      embeds.push(mainEmbed)
+
+      // Per-image embeds (up to 5 images, each with its own thumbnail)
+      for (const img of images.slice(0, 5)) {
+        const imgEmbed = new EmbedBuilder()
+          .setColor(img.upload_order === 1 ? '#E74C3C' : img.upload_order === 2 ? '#3498DB' : img.upload_order === 3 ? '#2ECC71' : img.upload_order === 4 ? '#F39C12' : '#9B59B6')
+          .setTitle(`📷 Image ${img.upload_order}`)
+          .setImage(img.image_url)
+          .setFooter({ text: `Image ID: ${img.image_id}` })
+        embeds.push(imgEmbed)
+      }
+
+      // ---- Build components: Join + per-image Vote buttons ----
+      const components = []
+
+      // Row 1: Join Event button
+      const joinRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`vote_event_join_${eventId}`)
+          .setLabel('🎫 Join Event')
+          .setStyle(ButtonStyle.Success)
       )
+      components.push(joinRow)
 
-    const msg = await channel.send({
-      embeds: [embed],
-      components: [
-        new ActionRowBuilder().addComponents(joinButton),
-        new ActionRowBuilder().addComponents(selectMenu),
-      ]
-    })
+      // Row 2+: Vote buttons (up to 5 per row, max 5 action rows total incl. join row)
+      const voteButtons = images.slice(0, 4).map((img, idx) => {
+        const styles = [ButtonStyle.Danger, ButtonStyle.Primary, ButtonStyle.Success, ButtonStyle.Secondary]
+        return new ButtonBuilder()
+          .setCustomId(`vote_event_imgvote_${eventId}_${img.image_id}`)
+          .setLabel(`Vote Image ${img.upload_order}`)
+          .setStyle(styles[idx % styles.length])
+      })
 
-    await db.run('UPDATE vote_events SET message_id = ?, channel_id = ? WHERE id = ?', [msg.id, String(channelId), eventId])
+      if (voteButtons.length > 0) {
+        components.push(new ActionRowBuilder().addComponents(...voteButtons))
+      }
 
-    res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
+      // Row 3: Select menu (still supported for accessibility)
+      if (images.length > 0) {
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId(`vote_event_vote_${eventId}`)
+          .setPlaceholder('Or use this dropdown to vote')
+          .setMinValues(1)
+          .setMaxValues(1)
+          .addOptions(
+            images.map(img => new StringSelectMenuOptionBuilder()
+              .setLabel(`Image ${img.upload_order}`)
+              .setValue(img.image_id)
+              .setDescription(`Vote for Image ${img.upload_order}`)
+            )
+          )
+        components.push(new ActionRowBuilder().addComponents(selectMenu))
+      }
+
+      const msg = await channel.send({ embeds, components })
+
+      await db.run('UPDATE vote_events SET message_id = ?, channel_id = ? WHERE id = ?', [msg.id, String(channelId), eventId])
+
+      res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
+    } catch (err) {
+      console.error('[vote-events] publish error:', err?.message || err)
+      res.status(500).json({ error: 'publish_failed', detail: err?.message })
+    }
   })
 
   // ---- Dashboard Stats ----

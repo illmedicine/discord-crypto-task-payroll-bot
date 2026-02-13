@@ -26,7 +26,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'bulk_tasks', label: 'Bulk Tasks', icon: '📦' },
   { id: 'contests', label: 'Contests', icon: '🏆' },
   { id: 'votes', label: 'Vote Events', icon: '🗳️' },
-  { id: 'events', label: 'Events', icon: '📅' },
+  { id: 'events', label: 'Vote Events', icon: '🗳️' },
   { id: 'history', label: 'History', icon: '📜' },
   { id: 'scheduled', label: 'Scheduled Posts', icon: '⏰' },
   { id: 'proofs', label: 'Proofs', icon: '✅' },

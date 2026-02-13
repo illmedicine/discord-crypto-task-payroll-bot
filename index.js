@@ -349,6 +349,32 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
+    // Handle per-image vote buttons (vote_event_imgvote_{eventId}_{imageId})
+    if (interaction.customId.startsWith('vote_event_imgvote_')) {
+      const voteEventCommand = client.commands.get('vote-event');
+      if (voteEventCommand && voteEventCommand.handleVoteSubmit) {
+        try {
+          // Parse eventId and imageId from customId
+          const parts = interaction.customId.split('_'); // vote_event_imgvote_{eventId}_{imageId}
+          const imageId = parts.slice(4).join('_'); // image IDs may contain underscores
+          // Emulate a select menu interaction shape so handleVoteSubmit can process it
+          interaction.values = [imageId];
+          // Re-compose a customId that handleVoteSubmit expects: vote_event_vote_{eventId}
+          interaction._originalCustomId = interaction.customId;
+          interaction.customId = `vote_event_vote_${parts[3]}`;
+          await voteEventCommand.handleVoteSubmit(interaction);
+        } catch (error) {
+          console.error('❌ Error handling image vote button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
+    }
+
     // Handle contest enter button (web-published)
     if (interaction.customId.startsWith('contest_enter_')) {
       try {
