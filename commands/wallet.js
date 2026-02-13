@@ -41,8 +41,14 @@ module.exports = {
           try {
             guild = await interaction.client.guilds.fetch(guildId);
           } catch (e) {
-            console.error('[WALLET] Could not fetch guild:', e.message);
-            return interaction.editReply({ content: '❌ This command can only be used in a server.' });
+            console.error(`[WALLET] Could not fetch guild ${guildId}:`, e.message);
+            const botId = interaction.client.user.id;
+            const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${botId}&scope=bot+applications.commands&permissions=8`;
+            return interaction.editReply({
+              content: `❌ DisCryptoBank is not a full member of this server.\n\n` +
+                `The bot needs to be re-invited with both **bot** and **applications.commands** scopes.\n` +
+                `👉 [Re-invite DisCryptoBank](${inviteUrl})`
+            });
           }
         }
         if (interaction.user.id !== guild.ownerId) {

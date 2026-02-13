@@ -157,6 +157,8 @@ client.once('clientReady', async () => {
   console.log(`   - Guilds Connected: ${client.guilds.cache.size}`);
   console.log(`   - Commands Loaded: ${client.commands.size}`);
   console.log(`   - Latest Features: ${LATEST_FEATURES.slice(0, 2).join(', ')}`);
+  console.log(`\n📋 Guild List:`);
+  client.guilds.cache.forEach(g => console.log(`   - ${g.id}: ${g.name} (owner: ${g.ownerId})`));
   console.log(`\n${'='.repeat(60)}\n`);
   
   // Re-register commands on startup to ensure they're fresh
