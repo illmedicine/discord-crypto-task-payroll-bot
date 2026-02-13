@@ -21,6 +21,17 @@ db.serialize(() => {
     )`
   )
 
+  // Command audit log (synced from bot)
+  db.run(
+    `CREATE TABLE IF NOT EXISTS command_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      discord_id TEXT NOT NULL,
+      guild_id TEXT,
+      command_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
   db.run(
     `CREATE TABLE IF NOT EXISTS contests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

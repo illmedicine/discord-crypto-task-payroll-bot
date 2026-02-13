@@ -1378,5 +1378,99 @@ module.exports = function buildApi({ discordClient }) {
     }
   })
 
+  // ---- Internal API: Bot → Backend activity sync ----
+  const INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET
+  const requireInternal = (req, res, next) => {
+    if (!INTERNAL_SECRET) return res.status(503).json({ error: 'internal_api_not_configured' })
+    const provided = req.headers['x-dcb-internal-secret']
+    if (provided !== INTERNAL_SECRET) return res.status(403).json({ error: 'forbidden' })
+    next()
+  }
+
+  // Bot pushes every command execution here
+  app.post('/api/internal/log-command', requireInternal, async (req, res) => {
+    try {
+      const { guildId, discordId, commandName, channelId, username } = req.body || {}
+      if (!guildId || !discordId || !commandName) return res.status(400).json({ error: 'missing_fields' })
+
+      // Log to command_audit (always, regardless of worker status)
+      await db.run(
+        'INSERT INTO command_audit (discord_id, guild_id, command_name) VALUES (?, ?, ?)',
+        [discordId, guildId, commandName]
+      ).catch(() => {})
+
+      // Check if user is a DCB worker in THIS (backend) database
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [guildId, discordId]
+      )
+      if (worker) {
+        const today = new Date().toISOString().slice(0, 10)
+        // Log activity
+        await db.run(
+          'INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, channel_id) VALUES (?, ?, ?, ?, ?)',
+          [guildId, discordId, 'command', `/${commandName}`, channelId || null]
+        )
+        // Upsert daily stat
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, commands_run)
+           VALUES (?, ?, ?, 1)
+           ON CONFLICT(guild_id, discord_id, stat_date)
+           DO UPDATE SET commands_run = commands_run + 1`,
+          [guildId, discordId, today]
+        )
+        // Track payout commands specifically
+        if (['pay', 'task-approve', 'approve-proof'].includes(commandName)) {
+          await db.run(
+            `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, payouts_issued)
+             VALUES (?, ?, ?, 1)
+             ON CONFLICT(guild_id, discord_id, stat_date)
+             DO UPDATE SET payouts_issued = payouts_issued + 1`,
+            [guildId, discordId, today]
+          )
+        }
+        console.log(`[internal] Logged command /${commandName} for worker ${discordId} in guild ${guildId}`)
+      } else {
+        console.log(`[internal] Command /${commandName} by ${discordId} in ${guildId} (not a worker, audit only)`)
+      }
+
+      res.json({ ok: true, isWorker: !!worker })
+    } catch (err) {
+      console.error('[internal] log-command error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes payout details here
+  app.post('/api/internal/log-payout', requireInternal, async (req, res) => {
+    try {
+      const { guildId, discordId, amount, currency, detail, channelId } = req.body || {}
+      if (!guildId || !discordId) return res.status(400).json({ error: 'missing_fields' })
+
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [guildId, discordId]
+      )
+      if (worker) {
+        const today = new Date().toISOString().slice(0, 10)
+        await db.run(
+          'INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, amount, currency, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [guildId, discordId, 'payout', detail || 'payout', amount || 0, currency || 'SOL', channelId || null]
+        )
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, payout_total)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(guild_id, discord_id, stat_date)
+           DO UPDATE SET payout_total = payout_total + ?`,
+          [guildId, discordId, today, amount || 0, amount || 0]
+        )
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] log-payout error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   return app
 }

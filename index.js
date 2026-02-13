@@ -22,6 +22,24 @@ const crypto = require('./utils/crypto');
 const db = require('./utils/db');
 const { ANCHOR_GUILD_ID, prefixLine, getTrustRisk } = require('./utils/trustRisk');
 
+// ---- Backend activity sync ----
+const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+
+function pushToBackend(endpoint, body) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
+  const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}${endpoint}`;
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+    body: JSON.stringify(body)
+  }).then(r => {
+    if (!r.ok) console.error(`[SYNC] ${endpoint} failed: ${r.status}`);
+  }).catch(err => {
+    console.error(`[SYNC] ${endpoint} error:`, err.message);
+  });
+}
+
 // Version and build info
 const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
 const BUILD_DATE = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -260,22 +278,18 @@ client.on('interactionCreate', async interaction => {
 
       const prefix = prefixLine(score.trust, score.risk);
 
-      // Log command audit
+      // Log command audit locally
       await db.logCommandAudit(interaction.user.id, interaction.guildId, interaction.commandName).catch(() => {});
 
-      // Track worker activity if user is a DCB worker
+      // Push command activity to backend API (bridges separate DBs)
       if (interaction.guildId) {
-        db.getWorker(interaction.guildId, interaction.user.id).then(worker => {
-          if (worker) {
-            const today = new Date().toISOString().slice(0, 10);
-            db.logWorkerActivity(interaction.guildId, interaction.user.id, 'command', `/${interaction.commandName}`, null, null, interaction.channelId).catch(() => {});
-            db.upsertWorkerDailyStat(interaction.guildId, interaction.user.id, today, 'commands_run', 1).catch(() => {});
-            // Track payout commands specifically
-            if (['pay', 'task-approve', 'approve-proof'].includes(interaction.commandName)) {
-              db.upsertWorkerDailyStat(interaction.guildId, interaction.user.id, today, 'payouts_issued', 1).catch(() => {});
-            }
-          }
-        }).catch(() => {});
+        pushToBackend('/api/internal/log-command', {
+          guildId: interaction.guildId,
+          discordId: interaction.user.id,
+          commandName: interaction.commandName,
+          channelId: interaction.channelId,
+          username: interaction.user.username
+        });
       }
 
       // Wrap reply/edit/followUp so every command automatically includes prefix
