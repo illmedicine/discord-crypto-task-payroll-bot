@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import Dashboard from './pages/Dashboard'
 import Tasks from './pages/Tasks'
-import VoteEvents from './pages/VoteEvents'
+// VoteEvents replaced by Events (enhanced vote event page with media picker)
 import Contests from './pages/Contests'
 import BulkTasks from './pages/BulkTasks'
 import Events from './pages/Events'
@@ -16,7 +16,7 @@ import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'tasks' | 'bulk_tasks' | 'votes' | 'contests' | 'events' | 'history' | 'treasury' | 'workers' | 'scheduled' | 'proofs'
+type Page = 'dashboard' | 'tasks' | 'bulk_tasks' | 'votes' | 'contests' | 'history' | 'treasury' | 'workers' | 'scheduled' | 'proofs'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -26,7 +26,6 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'bulk_tasks', label: 'Bulk Tasks', icon: '📦' },
   { id: 'contests', label: 'Contests', icon: '🏆' },
   { id: 'votes', label: 'Vote Events', icon: '🗳️' },
-  { id: 'events', label: 'Vote Events', icon: '🗳️' },
   { id: 'history', label: 'History', icon: '📜' },
   { id: 'scheduled', label: 'Scheduled Posts', icon: '⏰' },
   { id: 'proofs', label: 'Proofs', icon: '✅' },
@@ -296,9 +295,8 @@ export default function App() {
             {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
             {page === 'tasks' && <Tasks guildId={guildId} />}
             {page === 'bulk_tasks' && <BulkTasks guildId={guildId} />}
-            {page === 'votes' && <VoteEvents guildId={guildId} />}
+            {page === 'votes' && <Events guildId={guildId} />}
             {page === 'contests' && <Contests guildId={guildId} />}
-            {page === 'events' && <Events guildId={guildId} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} />}
             {page === 'workers' && <Workers guildId={guildId} />}
