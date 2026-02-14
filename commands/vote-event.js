@@ -742,14 +742,38 @@ module.exports = {
 
       await interaction.reply({ embeds: [successEmbed], ephemeral: false });
 
-      // After joining, check if the event is now full and notify channel that voting is locked
+      // After joining, check milestone thresholds
       try {
         const updatedEvent = await db.getVoteEvent(eventId);
+
+        // Check if we just reached min_participants — announce voting is open
+        if (updatedEvent.current_participants >= updatedEvent.min_participants &&
+            (updatedEvent.current_participants - 1) < updatedEvent.min_participants) {
+          try {
+            const channel = await interaction.client.channels.fetch(updatedEvent.channel_id);
+            if (channel) {
+              const votingOpenEmbed = new EmbedBuilder()
+                .setColor('#2ECC71')
+                .setTitle('🗳️ Voting is Now Open!')
+                .setDescription(
+                  `**${event.title}** has reached the minimum of **${event.min_participants}** participants!\n\n` +
+                  `All joined participants can now cast their votes using the buttons or dropdown above.`
+                )
+                .setFooter({ text: `Vote Event #${eventId}` })
+                .setTimestamp();
+              await channel.send({ embeds: [votingOpenEmbed] });
+            }
+          } catch (e) {
+            console.error('[VoteEvent] Could not announce voting open:', e);
+          }
+        }
+
+        // Check if the event is now full
         if (updatedEvent.current_participants >= updatedEvent.max_participants) {
           try {
             const channel = await interaction.client.channels.fetch(updatedEvent.channel_id);
             if (channel) {
-              await channel.send({ content: `🔒 **Vote Event #${eventId} is now full and voting is locked.** Voting will conclude when all participants submit their votes.` });
+              await channel.send({ content: `🔒 **Vote Event #${eventId} is now full.** Voting will conclude when all participants submit their votes.` });
             }
           } catch (e) {
             console.error('[VoteEvent] Could not notify channel about event being full:', e);
@@ -789,6 +813,14 @@ module.exports = {
       if (event.status !== 'active') {
         return interaction.reply({
           content: '❌ This vote event has ended.',
+          ephemeral: true
+        });
+      }
+
+      // Check if minimum participants reached before allowing voting
+      if (event.current_participants < event.min_participants) {
+        return interaction.reply({
+          content: `❌ **Voting is not open yet!**\n\nThis event needs at least **${event.min_participants}** participants before voting begins. Currently **${event.current_participants}** have joined.\n\nWait for more people to join, then try again.`,
           ephemeral: true
         });
       }
@@ -898,15 +930,22 @@ module.exports = {
         .setTitle('🔗 Qualification Required')
         .setDescription(
           `To qualify for **${event.title}**, you must:\n\n` +
-          `1️⃣ **Visit this URL:** [Click Here](${event.qualification_url})\n` +
+          `1️⃣ **Click the button below** to open the qualification page\n` +
           `2️⃣ **Take a screenshot** proving you visited the page\n` +
-          `3️⃣ **Upload your screenshot** as a reply to this message within 5 minutes\n\n` +
+          `3️⃣ **Upload your screenshot** in this channel within 5 minutes\n\n` +
           `⏱️ You have **5 minutes** to upload your screenshot.`
         )
         .setFooter({ text: `Event #${eventId} • Qualification Step` })
         .setTimestamp();
 
-      await interaction.reply({ embeds: [qualEmbed], ephemeral: true });
+      const urlButton = new ButtonBuilder()
+        .setLabel('🔗 Open Qualification Page')
+        .setStyle(ButtonStyle.Link)
+        .setURL(event.qualification_url);
+
+      const qualRow = new ActionRowBuilder().addComponents(urlButton);
+
+      await interaction.reply({ embeds: [qualEmbed], components: [qualRow], ephemeral: true });
 
       // Collect the user's next message in the same channel with an image attachment
       const channel = interaction.channel;
@@ -993,8 +1032,8 @@ async function createVoteEventEmbed(event, images) {
 
   const hasQualUrl = event.qualification_url;
   const howTo = hasQualUrl
-    ? '1. Click **✅ Qualify** to claim a seat\n2. Complete URL Task and Upload Screenshot\n3. Click a **Vote** button to make a selection\n4. When all seats fill, voting locks & results are revealed\n5. Winners who match the owner\'s pick get paid instantly! 💰'
-    : '1. Click **🎫 Join Event** to join\n2. Click a **Vote** button for your favorite image\n3. When all seats fill, voting locks & results are revealed\n4. Winners who match the owner\'s pick get paid instantly! 💰';
+    ? '1. Click **✅ Qualify** — opens the task URL\n2. Upload a screenshot proving you visited\n3. Click **🎫 Join Event** to claim your seat\n4. Voting opens once **minimum participants** join\n5. Vote for your favorite image — winners get paid instantly! 💰'
+    : '1. Click **🎫 Join Event** to claim a seat\n2. Voting opens once **minimum participants** join\n3. Vote for your favorite image\n4. Winners who match the owner\'s pick get paid instantly! 💰';
   embed.addFields({ name: '📋 How to Participate', value: howTo });
   if (hasQualUrl) {
     embed.addFields({ name: '🔗 Qualification URL', value: `[Visit this link](${event.qualification_url})` });

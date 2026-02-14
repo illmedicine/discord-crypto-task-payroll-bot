@@ -853,15 +853,15 @@ module.exports = function buildApi({ discordClient }) {
       // Main event card
       const howItWorks = hasQualUrl
         ? '**How it works:**\n' +
-          '1️⃣ Click **✅ Qualify** to claim a seat\n' +
-          '2️⃣ Complete URL Task and Upload Screenshot\n' +
-          '3️⃣ Click a **Vote** button to make a selection\n' +
-          '4️⃣ When all seats fill, voting locks & results are revealed\n' +
-          '5️⃣ Winners who match the owner\'s pick get paid instantly! 💰'
+          '1️⃣ Click **✅ Qualify** — opens the task URL\n' +
+          '2️⃣ Upload a screenshot proving you visited\n' +
+          '3️⃣ Click **🎫 Join Event** to claim your seat\n' +
+          '4️⃣ Voting opens once **minimum participants** join\n' +
+          '5️⃣ Vote for your favorite image — winners get paid instantly! 💰'
         : '**How it works:**\n' +
-          '1️⃣ Click **Join Event** to claim a seat\n' +
-          '2️⃣ Click a **Vote** button for your favorite image\n' +
-          '3️⃣ When all seats fill, voting locks & results are revealed\n' +
+          '1️⃣ Click **🎫 Join Event** to claim a seat\n' +
+          '2️⃣ Voting opens once **minimum participants** join\n' +
+          '3️⃣ Vote for your favorite image\n' +
           '4️⃣ Winners who match the owner\'s pick get paid instantly! 💰'
 
       const mainEmbed = new EmbedBuilder()
