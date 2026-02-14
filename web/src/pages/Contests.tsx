@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import Countdown, { useTick } from '../components/Countdown'
 
 type Contest = {
   id: number
@@ -22,16 +23,11 @@ type Props = {
   guildId: string
 }
 
-function timeLeft(dateStr?: string): string {
-  if (!dateStr) return ''
-  const diff = new Date(dateStr).getTime() - Date.now()
-  if (diff <= 0) return 'Ended'
-  const hrs = Math.floor(diff / 3600000)
-  if (hrs < 24) return `${hrs}h left`
-  return `${Math.floor(hrs / 24)}d left`
-}
+// timeLeft is now handled by the Countdown component (auto-updating)
 
 export default function Contests({ guildId }: Props) {
+  useTick(1000)
+
   const [contests, setContests] = useState<Contest[]>([])
   const [channels, setChannels] = useState<Channel[]>([])
   const [loading, setLoading] = useState(false)
@@ -177,7 +173,7 @@ export default function Contests({ guildId }: Props) {
                 <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, flexWrap: 'wrap' }}>
                   <span>🎟️ {c.current_entries || 0}/{c.max_entries} entries</span>
                   {c.num_winners && <span>👑 {c.num_winners} winner{c.num_winners > 1 ? 's' : ''}</span>}
-                  {c.ends_at && <span>⏰ {timeLeft(c.ends_at)}</span>}
+                  {c.ends_at && <Countdown endsAt={c.ends_at} prefix='⏰ ' />}
                 </div>
                 <button className="btn btn-sm btn-primary" onClick={() => publish(c.id)} disabled={!channelId} style={{ width: '100%' }}>Publish to Channel</button>
               </div>

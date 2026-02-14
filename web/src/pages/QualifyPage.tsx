@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import Countdown from '../components/Countdown'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -169,7 +170,7 @@ export default function QualifyPage({ eventId }: Props) {
             <span>🎁 <strong>{event.prize_amount} {event.currency}</strong></span>
             <span>🪑 {event.current_participants}/{event.max_participants} seats</span>
             {event.ends_at && (
-              <span>⏱️ Ends {new Date(event.ends_at).toLocaleDateString()}</span>
+              <Countdown endsAt={event.ends_at} prefix='⏱️ Ends in ' />
             )}
           </div>
         </div>

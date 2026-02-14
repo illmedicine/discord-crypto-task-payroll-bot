@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import Countdown, { useTick, formatTimeAgo } from '../components/Countdown'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -70,20 +71,15 @@ function badgeClass(status: string): string {
   }
 }
 
-function timeAgo(iso: string) {
-  const ms = Date.now() - new Date(iso).getTime()
-  const m = Math.floor(ms / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
+// timeAgo is now imported from Countdown component
 
 /* ================================================================== */
 /*  Component                                                          */
 /* ================================================================== */
 export default function Events({ guildId }: Props) {
+  /* ---- live tick for countdowns ---- */
+  useTick(1000)
+
   /* ---- data state ---- */
   const [events, setEvents] = useState<VoteEvent[]>([])
   const [channels, setChannels] = useState<Channel[]>([])
@@ -399,6 +395,7 @@ export default function Events({ guildId }: Props) {
                 <th>Prize</th>
                 <th>Participants</th>
                 <th>Status</th>
+                <th>Time Left</th>
                 <th>Created</th>
                 <th>Actions</th>
               </tr>
@@ -419,7 +416,8 @@ export default function Events({ guildId }: Props) {
                   <td><span className="sol-badge">{ev.prize_amount} {ev.currency}</span></td>
                   <td>{ev.current_participants}/{ev.max_participants}</td>
                   <td><span className={badgeClass(ev.status)}>{ev.status}</span></td>
-                  <td style={{ fontSize: 12 }}>{timeAgo(ev.created_at)}</td>
+                  <td style={{ fontSize: 12 }}><Countdown endsAt={ev.ends_at} prefix='⏱️ ' endedText='—' /></td>
+                  <td style={{ fontSize: 12 }}>{formatTimeAgo(ev.created_at)}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 4 }}>
                       {ev.status === 'active' && !ev.message_id && (
@@ -441,7 +439,7 @@ export default function Events({ guildId }: Props) {
                 {/* Expanded detail row with qualification review */}
                 {expandedId === ev.id && (
                   <tr>
-                    <td colSpan={7} style={{ padding: 0, background: 'var(--bg-secondary)' }}>
+                    <td colSpan={8} style={{ padding: 0, background: 'var(--bg-secondary)' }}>
                       <div style={{ padding: 16 }}>
                         {/* Qualification info */}
                         {ev.qualification_url ? (

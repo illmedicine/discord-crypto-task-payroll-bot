@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import Countdown, { useTick, formatTimeAgo } from '../components/Countdown'
 
 type Stats = {
   activeTasks: number
@@ -57,16 +58,7 @@ type Props = {
   onNavigate: (page: string) => void
 }
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min${mins > 1 ? 's' : ''} ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  return `${days}d ago`
-}
+// Replaced by shared formatTimeAgo + Countdown from components
 
 function badgeClass(status: string): string {
   switch (status) {
@@ -82,6 +74,8 @@ function badgeClass(status: string): string {
 }
 
 export default function Dashboard({ guildId, onNavigate }: Props) {
+  useTick(1000)
+
   const [stats, setStats] = useState<Stats>({ activeTasks: 0, pendingProofs: 0, workers: 0, liveContests: 0, activeEvents: 0 })
   const [activity, setActivity] = useState<Activity[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
@@ -276,7 +270,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
                     {a.amount >= 0 ? '+' : ''}{a.amount} {a.currency}
                   </span>
                 ) : null}
-                <span className="activity-time">{timeAgo(a.created_at)}</span>
+                <span className="activity-time">{formatTimeAgo(a.created_at)}</span>
               </div>
             ))}
           </div>
@@ -332,7 +326,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
                 <div className="item-card-desc">{c.description || 'No description'}</div>
                 <div className="item-card-meta">
                   <span>🎟️ {c.current_entries || 0}/{c.max_entries}</span>
-                  {c.ends_at && <span>Ends: {new Date(c.ends_at).toLocaleDateString()}</span>}
+                  {c.ends_at && <Countdown endsAt={c.ends_at} prefix='⏰ ' />}
                 </div>
               </div>
             ))}
@@ -362,7 +356,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
                     <div className="tx-title">
                       {tx.to_address ? `To ${tx.to_address.slice(0, 6)}...${tx.to_address.slice(-4)}` : 'Payment'}
                     </div>
-                    <div className="tx-sub">{timeAgo(tx.created_at)}</div>
+                    <div className="tx-sub">{formatTimeAgo(tx.created_at)}</div>
                   </div>
                   <div className={`tx-amount ${isOutgoing ? 'negative' : 'positive'}`}>
                     {isOutgoing ? '-' : '+'}{tx.amount} SOL
