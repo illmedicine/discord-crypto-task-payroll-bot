@@ -759,6 +759,37 @@ module.exports = function buildApi({ discordClient }) {
     }
   })
 
+  app.get('/api/admin/guilds/:guildId/vote-events/history', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const gid = req.guild.id
+      const events = await db.all(
+        `SELECT ve.*,
+          (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id) AS total_participants,
+          (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id AND voted_image_id IS NOT NULL) AS total_votes,
+          (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id AND is_winner = 1) AS total_winners
+        FROM vote_events ve
+        WHERE ve.guild_id = ? AND ve.status IN ('ended','completed','cancelled')
+        ORDER BY ve.created_at DESC LIMIT 50`,
+        [gid]
+      )
+      // Also grab aggregate stats
+      const agg = await db.get(
+        `SELECT
+          COUNT(*) AS total_events,
+          SUM(CASE WHEN status IN ('ended','completed') THEN 1 ELSE 0 END) AS completed_events,
+          SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_events,
+          SUM(CASE WHEN status IN ('ended','completed') THEN prize_amount ELSE 0 END) AS total_prize_paid,
+          SUM(current_participants) AS total_participants_all
+        FROM vote_events WHERE guild_id = ? AND status IN ('ended','completed','cancelled')`,
+        [gid]
+      )
+      res.json({ events, stats: agg || {} })
+    } catch (err) {
+      console.error('[vote-events] history error:', err?.message || err)
+      res.status(500).json({ error: 'history_failed' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
     const rows = await db.all('SELECT * FROM vote_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)

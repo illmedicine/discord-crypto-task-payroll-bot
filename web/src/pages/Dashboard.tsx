@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 import Countdown, { useTick, formatTimeAgo } from '../components/Countdown'
+import EventTicker from '../components/EventTicker'
 
 type Stats = {
   activeTasks: number
@@ -193,6 +194,9 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
           <button className="balance-btn primary" onClick={e => { e.stopPropagation(); onNavigate('history') }}>View History</button>
         </div>
       </div>
+
+      {/* Event History Ticker */}
+      <EventTicker guildId={guildId} />
 
       {/* Stats Grid */}
       <div className="stats-grid">
