@@ -111,6 +111,20 @@ db.serialize(() => {
     )`
   )
 
+  db.run(
+    `CREATE TABLE IF NOT EXISTS vote_event_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vote_event_id INTEGER NOT NULL,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      voted_image_id TEXT,
+      is_winner INTEGER DEFAULT 0,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      voted_at DATETIME,
+      UNIQUE(vote_event_id, user_id)
+    )`
+  )
+
   // Guild wallets
   db.run(
     `CREATE TABLE IF NOT EXISTS guild_wallets (

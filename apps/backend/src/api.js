@@ -1671,6 +1671,49 @@ module.exports = function buildApi({ discordClient }) {
     }
   })
 
+  // Bot fetches vote-event data it doesn't have locally (created via web UI)
+  app.get('/api/internal/vote-event/:id', requireInternal, async (req, res) => {
+    try {
+      const eventId = Number(req.params.id)
+      const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'not_found' })
+      const images = await db.all('SELECT * FROM vote_event_images WHERE vote_event_id = ? ORDER BY upload_order ASC', [eventId])
+      res.json({ event, images })
+    } catch (err) {
+      console.error('[internal] vote-event fetch error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes participant join/vote back to keep backend DB in sync
+  app.post('/api/internal/vote-event-sync', requireInternal, async (req, res) => {
+    try {
+      const { eventId, action, userId, guildId, votedImageId } = req.body || {}
+      if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
+
+      if (action === 'join' && userId && guildId) {
+        await db.run(
+          `INSERT OR IGNORE INTO vote_event_participants (vote_event_id, guild_id, user_id) VALUES (?, ?, ?)`,
+          [eventId, guildId, userId]
+        ).catch(() => {})
+        await db.run(
+          `UPDATE vote_events SET current_participants = (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ?) WHERE id = ?`,
+          [eventId, eventId]
+        ).catch(() => {})
+      } else if (action === 'vote' && userId && votedImageId) {
+        await db.run(
+          `UPDATE vote_event_participants SET voted_image_id = ?, voted_at = datetime('now') WHERE vote_event_id = ? AND user_id = ?`,
+          [votedImageId, eventId, userId]
+        ).catch(() => {})
+      }
+
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] vote-event-sync error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot pushes payout details here
   app.post('/api/internal/log-payout', requireInternal, async (req, res) => {
     try {

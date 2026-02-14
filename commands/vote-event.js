@@ -3,6 +3,55 @@ const db = require('../utils/db');
 const crypto = require('../utils/crypto');
 const { processVoteEvent } = require('../utils/voteEventProcessor');
 
+// ---- Backend fallback: fetch vote event from backend DB and cache locally ----
+const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+
+async function fetchEventFromBackend(eventId) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return null;
+  try {
+    const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/vote-event/${eventId}`;
+    const res = await fetch(url, {
+      headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
+    });
+    if (!res.ok) return null;
+    const { event, images } = await res.json();
+    if (!event) return null;
+
+    // Cache into the bot's local database so future lookups are fast
+    try {
+      await db.createVoteEventFromSync(event, images);
+      console.log(`[VoteEvent] Synced event #${eventId} from backend DB`);
+    } catch (syncErr) {
+      // May already exist or partial sync – that's fine
+      console.warn(`[VoteEvent] Sync cache warning for #${eventId}:`, syncErr.message);
+    }
+    return event;
+  } catch (err) {
+    console.error(`[VoteEvent] Backend fetch error for #${eventId}:`, err.message);
+    return null;
+  }
+}
+
+async function getVoteEventWithFallback(eventId) {
+  let event = await db.getVoteEvent(eventId);
+  if (!event) {
+    event = await fetchEventFromBackend(eventId);
+  }
+  return event;
+}
+
+// Fire-and-forget sync of participant actions back to backend DB
+function syncToBackend(body) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
+  const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/vote-event-sync`;
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+    body: JSON.stringify(body)
+  }).catch(err => console.error('[VoteEvent] Backend sync error:', err.message));
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('vote-event')
@@ -392,7 +441,7 @@ module.exports = {
 
       try {
         const eventId = interaction.options.getInteger('event_id');
-        const event = await db.getVoteEvent(eventId);
+        const event = await getVoteEventWithFallback(eventId);
 
         if (!event) {
           return interaction.editReply({
@@ -454,7 +503,7 @@ module.exports = {
         const eventId = interaction.options.getInteger('event_id');
         const reason = interaction.options.getString('reason') || 'No reason provided';
 
-        const event = await db.getVoteEvent(eventId);
+        const event = await getVoteEventWithFallback(eventId);
 
         if (!event) {
           return interaction.editReply({
@@ -550,7 +599,7 @@ module.exports = {
 
       try {
         const eventId = interaction.options.getInteger('event_id');
-        const event = await db.getVoteEvent(eventId);
+        const event = await getVoteEventWithFallback(eventId);
 
         if (!event) {
           return interaction.editReply({ content: `❌ Vote event #${eventId} not found.` });
@@ -592,7 +641,7 @@ module.exports = {
 
     try {
       // Get vote event
-      const event = await db.getVoteEvent(eventId);
+      const event = await getVoteEventWithFallback(eventId);
 
       if (!event) {
         return interaction.reply({
@@ -636,6 +685,9 @@ module.exports = {
 
       // Join the event
       await db.joinVoteEvent(eventId, guildId, userId);
+
+      // Sync join back to backend DB
+      syncToBackend({ eventId, action: 'join', userId, guildId });
 
       const successEmbed = new EmbedBuilder()
         .setColor('#00FF00')
@@ -685,7 +737,7 @@ module.exports = {
 
     try {
       // Get vote event
-      const event = await db.getVoteEvent(eventId);
+      const event = await getVoteEventWithFallback(eventId);
 
       if (!event) {
         return interaction.reply({
@@ -730,6 +782,9 @@ module.exports = {
 
       // Submit vote
       await db.submitVote(eventId, userId, votedImageId);
+
+      // Sync vote back to backend DB
+      syncToBackend({ eventId, action: 'vote', userId, votedImageId });
 
       // Get the image number for display
       const votedImage = images.find(img => img.image_id === votedImageId);

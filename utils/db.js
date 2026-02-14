@@ -1358,6 +1358,59 @@ const getVoteEvent = (voteEventId) => {
   });
 };
 
+// Insert a vote event (+ images) synced from the backend service
+const createVoteEventFromSync = (event, images) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      // Use INSERT OR IGNORE so we never fail on duplicates
+      db.run(
+        `INSERT OR IGNORE INTO vote_events
+          (id, guild_id, channel_id, message_id, title, description, prize_amount, currency,
+           min_participants, max_participants, current_participants, duration_minutes,
+           owner_favorite_image_id, created_by, status, ends_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          event.id,
+          event.guild_id,
+          event.channel_id,
+          event.message_id || null,
+          event.title,
+          event.description || '',
+          event.prize_amount || 0,
+          event.currency || 'USD',
+          event.min_participants,
+          event.max_participants,
+          event.current_participants || 0,
+          event.duration_minutes || null,
+          event.owner_favorite_image_id || null,
+          event.created_by,
+          event.status || 'active',
+          event.ends_at || null,
+          event.created_at || new Date().toISOString()
+        ],
+        function (err) {
+          if (err) return reject(err);
+        }
+      );
+
+      if (Array.isArray(images)) {
+        for (const img of images) {
+          db.run(
+            `INSERT OR IGNORE INTO vote_event_images (vote_event_id, image_id, image_url, upload_order) VALUES (?, ?, ?, ?)`,
+            [event.id, img.image_id, img.image_url, img.upload_order]
+          );
+        }
+      }
+
+      // Final no-op to capture completion
+      db.run('SELECT 1', [], function (err) {
+        if (err) reject(err);
+        else resolve(event.id);
+      });
+    });
+  });
+};
+
 const getVoteEventImages = (voteEventId) => {
   return new Promise((resolve, reject) => {
     db.all(
@@ -2096,6 +2149,7 @@ module.exports = {
   deleteContest,
   // Vote Event functions
   createVoteEvent,
+  createVoteEventFromSync,
   addVoteEventImage,
   getVoteEvent,
   getVoteEventImages,
