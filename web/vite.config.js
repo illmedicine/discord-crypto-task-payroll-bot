@@ -1,9 +1,5 @@
 import { defineConfig } from 'vite';
-import path from 'path';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const reactPlugin = require(path.resolve('node_modules/@vitejs/plugin-react/dist/index.js'));
-const react = reactPlugin.default || reactPlugin;
+import react from '@vitejs/plugin-react';
 
 // Deploy base path for GitHub Pages (update repository name if different)
 export default defineConfig({
