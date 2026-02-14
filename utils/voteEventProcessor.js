@@ -2,6 +2,21 @@
 // EmbedBuilder is required lazily inside functions to avoid heavy module load during tests
 const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 
+/** Fire-and-forget sync event status to backend */
+function syncStatusToBackend(eventId, status, guildId) {
+  try {
+    const backendUrl = process.env.DCB_BACKEND_URL;
+    const secret = process.env.DCB_INTERNAL_SECRET;
+    if (!backendUrl || !secret) return;
+    const url = `${backendUrl.replace(/\/$/, '')}/api/internal/vote-event-sync`;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-internal-secret': secret },
+      body: JSON.stringify({ eventId, action: 'status_update', status, guildId }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 /**
  * Process a vote event ending: determine winners, attempt payouts, announce results, and finalize status.
  * Safe to call multiple times; will no-op if event is already ended/cancelled/completed.
@@ -50,6 +65,7 @@ const processVoteEvent = async (eventId, client, reason = 'time', deps = {}) => 
       }
 
       await db.updateVoteEventStatus(eventId, 'cancelled');
+      syncStatusToBackend(eventId, 'cancelled', event.guild_id);
       return;
     }
 
@@ -204,6 +220,7 @@ const processVoteEvent = async (eventId, client, reason = 'time', deps = {}) => 
     }
 
     await db.updateVoteEventStatus(eventId, 'completed');
+    syncStatusToBackend(eventId, 'completed', event.guild_id);
     console.log(`[VoteEventProcessor] Vote event #${eventId} completed with ${winnerUserIds.length} winner(s)`);
   } catch (error) {
     console.error('[VoteEventProcessor] Error processing vote event:', error);

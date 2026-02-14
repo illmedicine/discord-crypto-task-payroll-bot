@@ -768,7 +768,10 @@ module.exports = function buildApi({ discordClient }) {
           (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id AND voted_image_id IS NOT NULL) AS total_votes,
           (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id AND is_winner = 1) AS total_winners
         FROM vote_events ve
-        WHERE ve.guild_id = ? AND ve.status IN ('ended','completed','cancelled')
+        WHERE ve.guild_id = ? AND (
+          ve.status IN ('ended','completed','cancelled')
+          OR (ve.ends_at IS NOT NULL AND ve.ends_at <= datetime('now'))
+        )
         ORDER BY ve.created_at DESC LIMIT 50`,
         [gid]
       )
@@ -776,11 +779,14 @@ module.exports = function buildApi({ discordClient }) {
       const agg = await db.get(
         `SELECT
           COUNT(*) AS total_events,
-          SUM(CASE WHEN status IN ('ended','completed') THEN 1 ELSE 0 END) AS completed_events,
+          SUM(CASE WHEN status IN ('ended','completed') OR (ends_at IS NOT NULL AND ends_at <= datetime('now') AND status != 'cancelled') THEN 1 ELSE 0 END) AS completed_events,
           SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_events,
-          SUM(CASE WHEN status IN ('ended','completed') THEN prize_amount ELSE 0 END) AS total_prize_paid,
+          SUM(CASE WHEN status IN ('ended','completed') OR (ends_at IS NOT NULL AND ends_at <= datetime('now') AND status != 'cancelled') THEN prize_amount ELSE 0 END) AS total_prize_paid,
           SUM(current_participants) AS total_participants_all
-        FROM vote_events WHERE guild_id = ? AND status IN ('ended','completed','cancelled')`,
+        FROM vote_events WHERE guild_id = ? AND (
+          status IN ('ended','completed','cancelled')
+          OR (ends_at IS NOT NULL AND ends_at <= datetime('now'))
+        )`,
         [gid]
       )
       res.json({ events, stats: agg || {} })
@@ -1760,6 +1766,12 @@ module.exports = function buildApi({ discordClient }) {
           `INSERT OR REPLACE INTO vote_event_qualifications (vote_event_id, user_id, username, screenshot_url, status, submitted_at) VALUES (?, ?, '', ?, 'approved', datetime('now'))`,
           [eventId, userId, screenshotUrl]
         ).catch(() => {})
+      } else if (action === 'status_update' && req.body.status) {
+        await db.run(
+          `UPDATE vote_events SET status = ? WHERE id = ?`,
+          [req.body.status, eventId]
+        ).catch(() => {})
+        console.log(`[internal] vote-event #${eventId} status → ${req.body.status}`)
       }
 
       res.json({ ok: true })
