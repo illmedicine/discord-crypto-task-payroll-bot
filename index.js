@@ -316,6 +316,19 @@ client.on('interactionCreate', async interaction => {
       console.log(`⚡ About to execute: ${interaction.commandName} (Trust: ${score.trust}, Risk: ${score.risk})`);
       await command.execute(interaction);
       console.log(`✅ Command executed successfully: ${interaction.commandName}`);
+
+      // Track event creation commands
+      if (interaction.guildId && ['event-create', 'vote-event'].includes(interaction.commandName)) {
+        const sub = interaction.options?.getSubcommand?.(false);
+        if (interaction.commandName === 'event-create' || sub === 'create') {
+          pushToBackend('/api/internal/log-event-created', {
+            guildId: interaction.guildId,
+            discordId: interaction.user.id,
+            detail: `Created ${interaction.commandName}${sub ? ` ${sub}` : ''}`,
+            channelId: interaction.channelId
+          });
+        }
+      }
     } catch (error) {
       console.error('❌ Error executing command:', error.message);
       console.error(error.stack);
@@ -631,6 +644,12 @@ client.on('interactionCreate', async interaction => {
 // Track messages from DCB workers for activity stats
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
+  // Push to backend (handles worker check there)
+  pushToBackend('/api/internal/log-message', {
+    guildId: message.guild.id,
+    discordId: message.author.id
+  });
+  // Also log locally
   try {
     const worker = await db.getWorker(message.guild.id, message.author.id);
     if (worker) {
@@ -662,6 +681,9 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
       _workerPresenceCache.delete(key);
       const mins = Math.max(1, Math.round((now - start) / 60000));
       const today = new Date().toISOString().slice(0, 10);
+      // Push to backend
+      pushToBackend('/api/internal/log-online-time', { guildId, discordId: userId, minutes: mins });
+      // Also log locally
       db.getWorker(guildId, userId).then(worker => {
         if (worker) {
           db.upsertWorkerDailyStat(guildId, userId, today, 'online_minutes', mins).catch(() => {});

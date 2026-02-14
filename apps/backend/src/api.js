@@ -774,6 +774,7 @@ module.exports = function buildApi({ discordClient }) {
       duration_minutes,
       owner_favorite_image_id,
       images,
+      qualification_url,
     } = req.body || {}
 
     if (!channel_id || !title || !description) return res.status(400).json({ error: 'missing_fields' })
@@ -783,8 +784,8 @@ module.exports = function buildApi({ discordClient }) {
     const endsAt = duration_minutes ? new Date(Date.now() + (Number(duration_minutes) * 60 * 1000)).toISOString() : null
 
     const r = await db.run(
-      `INSERT INTO vote_events (guild_id, channel_id, title, description, prize_amount, currency, min_participants, max_participants, duration_minutes, owner_favorite_image_id, created_by, ends_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO vote_events (guild_id, channel_id, title, description, prize_amount, currency, min_participants, max_participants, duration_minutes, owner_favorite_image_id, created_by, ends_at, qualification_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.guild.id,
         String(channel_id),
@@ -798,6 +799,7 @@ module.exports = function buildApi({ discordClient }) {
         owner_favorite_image_id || null,
         req.user.id,
         endsAt,
+        qualification_url || null,
       ]
     )
 
@@ -811,6 +813,22 @@ module.exports = function buildApi({ discordClient }) {
     }
 
     const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [r.lastID])
+
+    // Track event creation for worker stats
+    const canonicalId = await resolveCanonicalUserId(req.user)
+    if (canonicalId) {
+      const worker = await db.get('SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL', [req.guild.id, canonicalId])
+      if (worker) {
+        const today = new Date().toISOString().slice(0, 10)
+        await db.run('INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, channel_id) VALUES (?, ?, ?, ?, ?)',
+          [req.guild.id, canonicalId, 'event_created', `Created vote event: ${title}`, String(channel_id)]).catch(() => {})
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, events_created) VALUES (?, ?, ?, 1)
+           ON CONFLICT(guild_id, discord_id, stat_date) DO UPDATE SET events_created = events_created + 1`,
+          [req.guild.id, canonicalId, today]).catch(() => {})
+      }
+    }
+
     res.json(event)
   })
 
@@ -913,6 +931,132 @@ module.exports = function buildApi({ discordClient }) {
     } catch (err) {
       console.error('[vote-events] publish error:', err?.message || err)
       res.status(500).json({ error: 'publish_failed', detail: err?.message })
+    }
+  })
+
+  // ---- Vote Event Delete ----
+  app.delete('/api/admin/guilds/:guildId/vote-events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' })
+      await db.run('DELETE FROM vote_event_qualifications WHERE vote_event_id = ?', [eventId])
+      await db.run('DELETE FROM vote_event_images WHERE vote_event_id = ?', [eventId])
+      await db.run('DELETE FROM vote_events WHERE id = ?', [eventId])
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[vote-events] delete error:', err?.message || err)
+      res.status(500).json({ error: 'delete_failed' })
+    }
+  })
+
+  // ---- Vote Event Qualifications (Admin) ----
+  app.get('/api/admin/guilds/:guildId/vote-events/:eventId/qualifications', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' })
+      const rows = await db.all('SELECT * FROM vote_event_qualifications WHERE vote_event_id = ? ORDER BY submitted_at DESC', [eventId])
+      res.json(rows)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_qualifications' })
+    }
+  })
+
+  app.patch('/api/admin/guilds/:guildId/qualifications/:qualId/review', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const qualId = Number(req.params.qualId)
+      const { status } = req.body || {}
+      if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'invalid_status' })
+      const qual = await db.get('SELECT q.*, e.guild_id FROM vote_event_qualifications q JOIN vote_events e ON q.vote_event_id = e.id WHERE q.id = ?', [qualId])
+      if (!qual || qual.guild_id !== req.guild.id) return res.status(404).json({ error: 'qualification_not_found' })
+      const reviewerId = await resolveCanonicalUserId(req.user)
+      await db.run('UPDATE vote_event_qualifications SET status = ?, reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?',
+        [status, reviewerId || req.user.id, qualId])
+      const updated = await db.get('SELECT * FROM vote_event_qualifications WHERE id = ?', [qualId])
+      res.json(updated)
+    } catch (err) {
+      res.status(500).json({ error: 'review_failed' })
+    }
+  })
+
+  // ---- Vote Event Qualifications (Public / Participant) ----
+  // Get event info for qualification — any authenticated user
+  app.get('/api/public/vote-events/:eventId', requireAuth, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT id, title, description, prize_amount, currency, min_participants, max_participants, current_participants, status, qualification_url, ends_at, created_at FROM vote_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'not_found' })
+      const images = await db.all('SELECT image_id, image_url, upload_order FROM vote_event_images WHERE vote_event_id = ? ORDER BY upload_order ASC', [eventId])
+      res.json({ ...event, images })
+    } catch (err) {
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  // Check own qualification status
+  app.get('/api/public/vote-events/:eventId/my-qualification', requireAuth, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const userId = await resolveCanonicalUserId(req.user)
+      const qual = await db.get('SELECT * FROM vote_event_qualifications WHERE vote_event_id = ? AND user_id = ?', [eventId, userId || req.user.id])
+      res.json(qual || null)
+    } catch (err) {
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  // Submit qualification proof (screenshot URL or uploaded image)
+  app.post('/api/public/vote-events/:eventId/qualify', requireAuth, upload.single('screenshot'), async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'event_not_found' })
+      if (!event.qualification_url) return res.status(400).json({ error: 'event_has_no_qualification' })
+      if (event.status !== 'active') return res.status(400).json({ error: 'event_not_active' })
+
+      const userId = await resolveCanonicalUserId(req.user)
+      const uid = userId || req.user.id
+      const username = req.user.username || req.user.google_name || uid
+
+      // Check if already submitted
+      const existing = await db.get('SELECT * FROM vote_event_qualifications WHERE vote_event_id = ? AND user_id = ?', [eventId, uid])
+      if (existing) return res.status(409).json({ error: 'already_submitted', qualification: existing })
+
+      let screenshotUrl = req.body?.screenshot_url || ''
+
+      // If file was uploaded, send it to the event channel as an attachment and use the URL
+      if (req.file && event.channel_id) {
+        try {
+          const channel = await discordClient.channels.fetch(event.channel_id)
+          if (channel && 'send' in channel) {
+            const { AttachmentBuilder } = require('discord.js')
+            const att = new AttachmentBuilder(req.file.buffer, { name: req.file.originalname || 'screenshot.png' })
+            const msg = await channel.send({
+              content: `📸 Qualification proof from **${username}** for event **${event.title}**`,
+              files: [att]
+            })
+            if (msg.attachments.size > 0) {
+              screenshotUrl = msg.attachments.first().url
+            }
+          }
+        } catch (uploadErr) {
+          console.error('[qualify] discord upload failed:', uploadErr?.message)
+        }
+      }
+
+      if (!screenshotUrl) return res.status(400).json({ error: 'screenshot_required' })
+
+      await db.run(
+        'INSERT INTO vote_event_qualifications (vote_event_id, user_id, username, screenshot_url) VALUES (?, ?, ?, ?)',
+        [eventId, uid, username, screenshotUrl]
+      )
+      const qual = await db.get('SELECT * FROM vote_event_qualifications WHERE vote_event_id = ? AND user_id = ?', [eventId, uid])
+      res.json(qual)
+    } catch (err) {
+      console.error('[qualify] error:', err?.message || err)
+      if (err?.message?.includes('UNIQUE constraint')) return res.status(409).json({ error: 'already_submitted' })
+      res.status(500).json({ error: 'qualification_failed' })
     }
   })
 
@@ -1256,6 +1400,7 @@ module.exports = function buildApi({ discordClient }) {
            COALESCE(SUM(wds.payout_total), 0) as total_payout_amount,
            COALESCE(SUM(wds.proofs_reviewed), 0) as total_proofs_reviewed,
            COALESCE(SUM(wds.online_minutes), 0) as total_online_minutes,
+           COALESCE(SUM(wds.events_created), 0) as total_events_created,
            COUNT(DISTINCT wds.stat_date) as active_days,
            (SELECT MAX(wa2.created_at) FROM worker_activity wa2 WHERE wa2.guild_id = dw.guild_id AND wa2.discord_id = dw.discord_id) as last_active
          FROM dcb_workers dw
@@ -1330,6 +1475,7 @@ module.exports = function buildApi({ discordClient }) {
         `SELECT COALESCE(SUM(commands_run),0) as total_commands, COALESCE(SUM(messages_sent),0) as total_messages,
          COALESCE(SUM(payouts_issued),0) as total_payouts_issued, COALESCE(SUM(payout_total),0) as total_payout_amount,
          COALESCE(SUM(proofs_reviewed),0) as total_proofs_reviewed, COALESCE(SUM(online_minutes),0) as total_online_minutes,
+         COALESCE(SUM(events_created),0) as total_events_created,
          COUNT(DISTINCT stat_date) as active_days
          FROM worker_daily_stats WHERE guild_id = ? AND discord_id = ? AND stat_date >= date('now', '-30 days')`,
         [req.guild.id, req.params.discordId]
@@ -1437,6 +1583,88 @@ module.exports = function buildApi({ discordClient }) {
       res.json({ ok: true, isWorker: !!worker })
     } catch (err) {
       console.error('[internal] log-command error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes message activity here
+  app.post('/api/internal/log-message', requireInternal, async (req, res) => {
+    try {
+      const { guildId, discordId } = req.body || {}
+      if (!guildId || !discordId) return res.status(400).json({ error: 'missing_fields' })
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [guildId, discordId]
+      )
+      if (worker) {
+        const today = new Date().toISOString().slice(0, 10)
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, messages_sent)
+           VALUES (?, ?, ?, 1)
+           ON CONFLICT(guild_id, discord_id, stat_date)
+           DO UPDATE SET messages_sent = messages_sent + 1`,
+          [guildId, discordId, today]
+        )
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] log-message error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes online time here
+  app.post('/api/internal/log-online-time', requireInternal, async (req, res) => {
+    try {
+      const { guildId, discordId, minutes } = req.body || {}
+      if (!guildId || !discordId || !minutes) return res.status(400).json({ error: 'missing_fields' })
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [guildId, discordId]
+      )
+      if (worker) {
+        const today = new Date().toISOString().slice(0, 10)
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, online_minutes)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(guild_id, discord_id, stat_date)
+           DO UPDATE SET online_minutes = online_minutes + ?`,
+          [guildId, discordId, today, minutes, minutes]
+        )
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] log-online-time error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes event creation here
+  app.post('/api/internal/log-event-created', requireInternal, async (req, res) => {
+    try {
+      const { guildId, discordId, detail, channelId } = req.body || {}
+      if (!guildId || !discordId) return res.status(400).json({ error: 'missing_fields' })
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [guildId, discordId]
+      )
+      if (worker) {
+        const today = new Date().toISOString().slice(0, 10)
+        await db.run(
+          'INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, channel_id) VALUES (?, ?, ?, ?, ?)',
+          [guildId, discordId, 'event_created', detail || 'Created event', channelId || null]
+        )
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, events_created)
+           VALUES (?, ?, ?, 1)
+           ON CONFLICT(guild_id, discord_id, stat_date)
+           DO UPDATE SET events_created = events_created + 1`,
+          [guildId, discordId, today]
+        )
+      }
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] log-event-created error:', err?.message || err)
       res.status(500).json({ error: 'internal_error' })
     }
   })

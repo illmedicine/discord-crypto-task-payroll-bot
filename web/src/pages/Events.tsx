@@ -17,6 +17,7 @@ type VoteEvent = {
   status: string
   channel_id: string
   message_id: string | null
+  qualification_url: string | null
   ends_at: string | null
   created_at: string
 }
@@ -40,6 +41,18 @@ type ImageEntry = {
   url: string
   source: 'upload' | 'discord' | 'url'
   name?: string
+}
+
+type Qualification = {
+  id: number
+  vote_event_id: number
+  user_id: string
+  username: string
+  screenshot_url: string
+  status: string
+  submitted_at: string
+  reviewed_at: string | null
+  reviewed_by: string | null
 }
 
 type Props = { guildId: string }
@@ -85,6 +98,7 @@ export default function Events({ guildId }: Props) {
   const [minParticipants, setMinParticipants] = useState('2')
   const [maxParticipants, setMaxParticipants] = useState('10')
   const [durationMinutes, setDurationMinutes] = useState('')
+  const [qualificationUrl, setQualificationUrl] = useState('')
   const [images, setImages] = useState<ImageEntry[]>([])
   const [favoriteIdx, setFavoriteIdx] = useState<number | null>(null)
 
@@ -104,6 +118,11 @@ export default function Events({ guildId }: Props) {
   /* ---- publishing state ---- */
   const [publishChannelId, setPublishChannelId] = useState('')
   const [publishing, setPublishing] = useState<number | null>(null)
+
+  /* ---- qualification review state ---- */
+  const [qualifications, setQualifications] = useState<Qualification[]>([])
+  const [qualLoading, setQualLoading] = useState(false)
+  const [reviewingId, setReviewingId] = useState<number | null>(null)
 
   /* ================================================================ */
   /*  Data loading                                                     */
@@ -229,6 +248,7 @@ export default function Events({ guildId }: Props) {
       duration_minutes: durationMinutes ? Number(durationMinutes) : null,
       owner_favorite_image_id: imgPayload[favoriteIdx]?.id || null,
       images: imgPayload,
+      qualification_url: qualificationUrl || null,
     })
 
     setTitle('')
@@ -237,6 +257,7 @@ export default function Events({ guildId }: Props) {
     setMinParticipants('2')
     setMaxParticipants('10')
     setDurationMinutes('')
+    setQualificationUrl('')
     setImages([])
     setFavoriteIdx(null)
     await load()
@@ -272,6 +293,52 @@ export default function Events({ guildId }: Props) {
     } catch (_) {
       alert('Failed to delete event.')
     }
+  }
+
+  /* ================================================================ */
+  /*  Qualification management                                         */
+  /* ================================================================ */
+  const loadQualifications = async (eventId: number) => {
+    if (!guildId) return
+    setQualLoading(true)
+    try {
+      const res = await api.get(`/admin/guilds/${guildId}/vote-events/${eventId}/qualifications`)
+      setQualifications(res.data || [])
+    } catch (_) {
+      setQualifications([])
+    } finally {
+      setQualLoading(false)
+    }
+  }
+
+  const handleReview = async (qualId: number, status: 'approved' | 'rejected') => {
+    if (!guildId) return
+    setReviewingId(qualId)
+    try {
+      await api.patch(`/admin/guilds/${guildId}/qualifications/${qualId}/review`, { status })
+      // Reload qualifications for the expanded event
+      if (expandedId) await loadQualifications(expandedId)
+    } catch (_) {
+      alert('Failed to review qualification.')
+    } finally {
+      setReviewingId(null)
+    }
+  }
+
+  // Load qualifications when an event is expanded
+  useEffect(() => {
+    if (expandedId && guildId) {
+      const ev = events.find(e => e.id === expandedId)
+      if (ev?.qualification_url) loadQualifications(expandedId)
+      else setQualifications([])
+    } else {
+      setQualifications([])
+    }
+  }, [expandedId, guildId])
+
+  const getQualifyLink = (eventId: number) => {
+    const base = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''
+    return `${base}#qualify-${eventId}`
   }
 
   /* ================================================================ */
@@ -338,11 +405,13 @@ export default function Events({ guildId }: Props) {
             </thead>
             <tbody>
               {events.map(ev => (
-                <tr key={ev.id}>
+                <React.Fragment key={ev.id}>
+                <tr>
                   <td>#{ev.id}</td>
                   <td style={{ fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer' }}
                       onClick={() => setExpandedId(expandedId === ev.id ? null : ev.id)}>
                     {ev.title}
+                    {ev.qualification_url && <span style={{ fontSize: 10, marginLeft: 4, color: 'var(--accent-purple)' }}>🔗</span>}
                     <span style={{ fontSize: 10, marginLeft: 6, color: 'var(--text-secondary)' }}>
                       {expandedId === ev.id ? '▾' : '▸'}
                     </span>
@@ -369,6 +438,93 @@ export default function Events({ guildId }: Props) {
                     </div>
                   </td>
                 </tr>
+                {/* Expanded detail row with qualification review */}
+                {expandedId === ev.id && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: 0, background: 'var(--bg-secondary)' }}>
+                      <div style={{ padding: 16 }}>
+                        {/* Qualification info */}
+                        {ev.qualification_url ? (
+                          <div style={{ marginBottom: 16 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                              <strong style={{ fontSize: 14 }}>🔗 Qualification Required</strong>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => {
+                                  const link = getQualifyLink(ev.id)
+                                  navigator.clipboard?.writeText(link)
+                                  alert('Qualification link copied!\n\n' + link)
+                                }}
+                              >
+                                📋 Copy Link
+                              </button>
+                            </div>
+                            <div style={{
+                              background: 'var(--bg-tertiary)', borderRadius: 8, padding: '8px 12px',
+                              fontSize: 12, wordBreak: 'break-all', color: 'var(--text-primary)',
+                              border: '1px solid var(--border-color)', marginBottom: 12,
+                            }}>
+                              URL: {ev.qualification_url}
+                            </div>
+
+                            {/* Qualification submissions table */}
+                            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                              📸 Qualification Submissions ({qualifications.length})
+                              <button className="btn btn-secondary btn-sm" style={{ marginLeft: 8 }}
+                                      onClick={() => loadQualifications(ev.id)} disabled={qualLoading}>
+                                {qualLoading ? <span className="spinner" /> : '🔄'}
+                              </button>
+                            </div>
+                            {qualifications.length === 0 ? (
+                              <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No qualifications submitted yet.</p>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {qualifications.map(q => (
+                                  <div key={q.id} className="item-card" style={{
+                                    display: 'flex', alignItems: 'center', gap: 12,
+                                    padding: '10px 14px', margin: 0,
+                                  }}>
+                                    <img src={q.screenshot_url} alt="proof"
+                                         style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', cursor: 'pointer', border: '2px solid var(--border-color)' }}
+                                         onClick={() => window.open(q.screenshot_url, '_blank')} />
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>{q.username || q.user_id}</div>
+                                      <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                        Submitted {new Date(q.submitted_at).toLocaleString()}
+                                      </div>
+                                    </div>
+                                    <span className={`badge ${q.status === 'approved' ? 'badge-completed' : q.status === 'rejected' ? 'badge-ended' : 'badge-open'}`}>
+                                      {q.status}
+                                    </span>
+                                    {q.status === 'pending' && (
+                                      <div style={{ display: 'flex', gap: 4 }}>
+                                        <button className="btn btn-primary btn-sm"
+                                                disabled={reviewingId === q.id}
+                                                onClick={() => handleReview(q.id, 'approved')}>
+                                          ✅
+                                        </button>
+                                        <button className="btn btn-danger btn-sm"
+                                                disabled={reviewingId === q.id}
+                                                onClick={() => handleReview(q.id, 'rejected')}>
+                                          ❌
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                            No qualification required for this event. Participants can join directly on Discord.
+                          </p>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -435,6 +591,17 @@ export default function Events({ guildId }: Props) {
               <input className="form-input" type="number" min="1" value={durationMinutes}
                      onChange={e => setDurationMinutes(e.target.value)} placeholder="∞" />
             </div>
+          </div>
+
+          {/* Qualification URL */}
+          <div className="form-group">
+            <label className="form-label">Qualification URL (optional)</label>
+            <input className="form-input" type="url" value={qualificationUrl}
+                   onChange={e => setQualificationUrl(e.target.value)}
+                   placeholder="https://example.com/page-to-visit" />
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '4px 0 0' }}>
+              If set, participants must visit this URL and submit a screenshot proof before they can join the event.
+            </p>
           </div>
 
           {/* ======================================================== */}

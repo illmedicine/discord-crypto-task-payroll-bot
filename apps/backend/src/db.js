@@ -272,7 +272,30 @@ db.serialize(() => {
       payout_total REAL DEFAULT 0,
       proofs_reviewed INTEGER DEFAULT 0,
       online_minutes INTEGER DEFAULT 0,
+      events_created INTEGER DEFAULT 0,
       UNIQUE(guild_id, discord_id, stat_date)
+    )`
+  )
+
+  // Migration: add events_created if missing
+  db.run(`ALTER TABLE worker_daily_stats ADD COLUMN events_created INTEGER DEFAULT 0`, () => {})
+
+  // Migration: add qualification_url to vote_events
+  db.run(`ALTER TABLE vote_events ADD COLUMN qualification_url TEXT`, () => {})
+
+  // Vote Event Qualifications table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS vote_event_qualifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vote_event_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      username TEXT DEFAULT '',
+      screenshot_url TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at DATETIME,
+      reviewed_by TEXT,
+      UNIQUE(vote_event_id, user_id)
     )`
   )
 
