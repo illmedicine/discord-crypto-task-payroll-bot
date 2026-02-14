@@ -35,8 +35,11 @@ api.interceptors.request.use((config) => {
 
 export const getAuthUrl = (path = '/auth/discord') => {
   let base = API_BASE || ''
-  if (!base && typeof window !== 'undefined' && window.location?.hostname?.endsWith('github.io')) {
-    base = DEFAULT_PROD_API_BASE
+  if (!base && typeof window !== 'undefined') {
+    const loc = window.location
+    if (loc.hostname?.endsWith('github.io') || loc.pathname?.startsWith('/discord-crypto-task-payroll-bot')) {
+      base = DEFAULT_PROD_API_BASE
+    }
   }
   return `${base.replace(/\/$/, '')}${path}`
 }

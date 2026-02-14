@@ -21,20 +21,21 @@ module.exports = (client) => {
   const cookieSecure = isProd;
 
   // CORS - allow frontend origin and allow credentials
-  const allowedOrigin = (() => {
-    if (!uiBase) return '*';
-    try {
-      return new URL(uiBase).origin;
-    } catch (_) {
-      return uiBase;
+  const allowedOrigins = (() => {
+    const origins = [];
+    if (uiBase) {
+      try { origins.push(new URL(uiBase).origin); } catch (_) { origins.push(uiBase); }
     }
+    origins.push('https://illmedicine.github.io');
+    return origins;
   })();
 
   app.use(cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      if (allowedOrigin === '*') return cb(null, true);
-      return cb(null, origin === allowedOrigin);
+      if (allowedOrigins.length === 0) return cb(null, origin);
+      if (allowedOrigins.includes(origin)) return cb(null, origin);
+      return cb(null, false);
     },
     credentials: true,
   }));
@@ -42,6 +43,14 @@ module.exports = (client) => {
   // Basic health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  // Check which auth providers are configured
+  app.get('/api/auth/providers', (req, res) => {
+    res.json({
+      discord: !!process.env.DISCORD_CLIENT_ID,
+      google: !!process.env.GOOGLE_CLIENT_ID,
+    });
   });
 
   // Helper to compute base url for redirect URIs

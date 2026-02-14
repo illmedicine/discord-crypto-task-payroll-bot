@@ -21,20 +21,22 @@ module.exports = function buildApi({ discordClient }) {
   const cookieSameSite = process.env.DCB_COOKIE_SAMESITE || (isProd ? 'none' : 'lax')
   const cookieSecure = isProd
 
-  const allowedOrigin = (() => {
-    if (!uiBase) return '*'
-    try {
-      return new URL(uiBase).origin
-    } catch (_) {
-      return uiBase
+  const allowedOrigins = (() => {
+    const origins = []
+    if (uiBase) {
+      try { origins.push(new URL(uiBase).origin) } catch (_) { origins.push(uiBase) }
     }
+    // Always allow GitHub Pages origin
+    origins.push('https://illmedicine.github.io')
+    return origins
   })()
 
   app.use(cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true)
-      if (allowedOrigin === '*') return cb(null, true)
-      return cb(null, origin === allowedOrigin)
+      if (allowedOrigins.length === 0) return cb(null, origin) // echo origin when no restriction
+      if (allowedOrigins.includes(origin)) return cb(null, origin)
+      return cb(null, false)
     },
     credentials: true,
   }))
