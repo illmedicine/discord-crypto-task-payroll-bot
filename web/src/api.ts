@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-const ENV_API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+const ENV_API_BASE = import.meta.env.VITE_API_BASE || ''
 
 const DEFAULT_PROD_API_BASE = 'https://dcb-payroll-backend-production.up.railway.app'
 
