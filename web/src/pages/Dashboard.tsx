@@ -132,6 +132,23 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
     }).finally(() => setLoading(false))
   }, [guildId])
 
+  /* ---- Auto-poll stats & contests every 30s ---- */
+  useEffect(() => {
+    if (!guildId) return
+    const id = setInterval(() => {
+      Promise.all([
+        api.get(`/admin/guilds/${guildId}/dashboard/stats`).catch(() => ({ data: {} })),
+        api.get(`/admin/guilds/${guildId}/contests`).catch(() => ({ data: [] })),
+        api.get(`/admin/guilds/${guildId}/dashboard/activity?limit=10&type=${activityFilter}`).catch(() => ({ data: [] })),
+      ]).then(([s, c, a]) => {
+        setStats(s.data as Stats)
+        setContests((c.data || []).slice(0, 3) as Contest[])
+        setActivity(a.data as Activity[])
+      })
+    }, 30000)
+    return () => clearInterval(id)
+  }, [guildId, activityFilter])
+
   useEffect(() => {
     if (!guildId) return
     api.get(`/admin/guilds/${guildId}/dashboard/activity?limit=10&type=${activityFilter}`)

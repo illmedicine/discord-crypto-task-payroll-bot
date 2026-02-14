@@ -65,6 +65,17 @@ export default function Contests({ guildId }: Props) {
     if (guildId) load()
   }, [guildId])
 
+  /* ---- Auto-poll every 15s ---- */
+  useEffect(() => {
+    if (!guildId) return
+    const id = setInterval(() => {
+      api.get(`/admin/guilds/${guildId}/contests`)
+        .then(r => setContests(r.data || []))
+        .catch(() => {})
+    }, 15000)
+    return () => clearInterval(id)
+  }, [guildId])
+
   const handleCreate = async (ev: React.FormEvent) => {
     ev.preventDefault()
     if (!guildId) return

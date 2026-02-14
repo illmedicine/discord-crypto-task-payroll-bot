@@ -152,6 +152,17 @@ export default function Events({ guildId }: Props) {
     if (guildId) load()
   }, [guildId, load])
 
+  /* ---- Auto-poll every 15s to keep participant counts fresh ---- */
+  useEffect(() => {
+    if (!guildId) return
+    const id = setInterval(() => {
+      api.get(`/admin/guilds/${guildId}/vote-events`)
+        .then(r => setEvents(r.data || []))
+        .catch(() => {})
+    }, 15000)
+    return () => clearInterval(id)
+  }, [guildId])
+
   /* ================================================================ */
   /*  Discord media picker                                             */
   /* ================================================================ */

@@ -81,6 +81,16 @@ export default function QualifyPage({ eventId }: Props) {
 
   useEffect(() => { load() }, [load])
 
+  /* ---- Auto-poll every 10s to reflect participant/status changes ---- */
+  useEffect(() => {
+    const id = setInterval(() => {
+      api.get(`/public/vote-events/${eventId}`)
+        .then(r => setEvent(r.data))
+        .catch(() => {})
+    }, 10000)
+    return () => clearInterval(id)
+  }, [eventId])
+
   /* ---- Visit URL handler ---- */
   const handleVisitUrl = () => {
     if (!event?.qualification_url) return
