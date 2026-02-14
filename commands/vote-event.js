@@ -138,6 +138,11 @@ module.exports = {
             .setDescription('Your private favorite image ID (kept hidden from participants)')
             .setRequired(false)
         )
+        .addStringOption(option =>
+          option.setName('qualification_url')
+            .setDescription('URL participants must visit and screenshot to qualify (optional)')
+            .setRequired(false)
+        )
     )
     .addSubcommand(subcommand =>
       subcommand
@@ -228,6 +233,7 @@ module.exports = {
         const currency = interaction.options.getString('currency') || 'USD';
         const durationMinutes = interaction.options.getInteger('duration_minutes');
         const ownerFavoriteImageId = interaction.options.getString('favorite_image_id');
+        const qualificationUrl = interaction.options.getString('qualification_url') || null;
 
         // Validate min/max
         if (minParticipants > maxParticipants) {
@@ -300,7 +306,8 @@ module.exports = {
           maxParticipants,
           durationMinutes,
           ownerFavoriteImageId,
-          interaction.user.id
+          interaction.user.id,
+          qualificationUrl
         );
 
         // Add images to database
@@ -326,13 +333,24 @@ module.exports = {
           status: 'active'
         }, images);
 
-        // Create Join button and vote select menu
-        const joinButton = new ButtonBuilder()
-          .setCustomId(`vote_event_join_${eventId}`)
-          .setLabel('🎫 Join Event')
-          .setStyle(ButtonStyle.Success);
+        // Create buttons: Qualify (if URL required) + Join + Vote
+        const actionButtons = [];
+        if (qualificationUrl) {
+          actionButtons.push(
+            new ButtonBuilder()
+              .setCustomId(`vote_event_qualify_${eventId}`)
+              .setLabel('✅ Qualify')
+              .setStyle(ButtonStyle.Primary)
+          );
+        }
+        actionButtons.push(
+          new ButtonBuilder()
+            .setCustomId(`vote_event_join_${eventId}`)
+            .setLabel('🎫 Join Event')
+            .setStyle(ButtonStyle.Success)
+        );
 
-        const buttonRow = new ActionRowBuilder().addComponents(joinButton);
+        const buttonRow = new ActionRowBuilder().addComponents(...actionButtons);
 
         // Create vote select menu
         const selectMenu = new StringSelectMenuBuilder()
@@ -458,14 +476,25 @@ module.exports = {
         const images = await db.getVoteEventImages(eventId);
         const embed = await createVoteEventEmbed(event, images);
 
-        // Add join button and vote menu if event is still active
+        // Add buttons if event is still active
         if (event.status === 'active') {
-          const joinButton = new ButtonBuilder()
-            .setCustomId(`vote_event_join_${eventId}`)
-            .setLabel('🎫 Join Event')
-            .setStyle(ButtonStyle.Success);
+          const topButtons = [];
+          if (event.qualification_url) {
+            topButtons.push(
+              new ButtonBuilder()
+                .setCustomId(`vote_event_qualify_${eventId}`)
+                .setLabel('✅ Qualify')
+                .setStyle(ButtonStyle.Primary)
+            );
+          }
+          topButtons.push(
+            new ButtonBuilder()
+              .setCustomId(`vote_event_join_${eventId}`)
+              .setLabel('🎫 Join Event')
+              .setStyle(ButtonStyle.Success)
+          );
 
-          const buttonRow = new ActionRowBuilder().addComponents(joinButton);
+          const buttonRow = new ActionRowBuilder().addComponents(...topButtons);
 
           const selectMenu = new StringSelectMenuBuilder()
             .setCustomId(`vote_event_vote_${eventId}`)
@@ -683,6 +712,17 @@ module.exports = {
         });
       }
 
+      // Gate: if event has a qualification_url, require qualification first
+      if (event.qualification_url) {
+        const qual = await db.getVoteEventQualification(eventId, userId);
+        if (!qual) {
+          return interaction.reply({
+            content: '❌ **Qualification Required!**\n\nThis event requires prequalification. Click the **✅ Qualify** button first, visit the URL, and upload a screenshot to prove you completed the task.',
+            ephemeral: true
+          });
+        }
+      }
+
       // Join the event
       await db.joinVoteEvent(eventId, guildId, userId);
 
@@ -822,6 +862,107 @@ module.exports = {
         ephemeral: true
       });
     }
+  },
+
+  // Handle qualify button — prompts user to visit URL then upload screenshot
+  handleQualifyButton: async (interaction) => {
+    const parts = interaction.customId.split('_');
+    const eventId = parseInt(parts[3]);
+    const userId = interaction.user.id;
+
+    try {
+      const event = await getVoteEventWithFallback(eventId);
+      if (!event) {
+        return interaction.reply({ content: '❌ This vote event no longer exists.', ephemeral: true });
+      }
+      if (event.status !== 'active') {
+        return interaction.reply({ content: '❌ This vote event has ended.', ephemeral: true });
+      }
+      if (!event.qualification_url) {
+        return interaction.reply({ content: '❌ This event does not require qualification. Click **🎫 Join Event** directly.', ephemeral: true });
+      }
+
+      // Check if already qualified
+      const existingQual = await db.getVoteEventQualification(eventId, userId);
+      if (existingQual) {
+        return interaction.reply({ content: '✅ You are already qualified for this event! Click **🎫 Join Event** to join and then vote.', ephemeral: true });
+      }
+
+      // Check if event is full
+      if (event.current_participants >= event.max_participants) {
+        return interaction.reply({ content: '❌ This vote event is full. No more participants allowed.', ephemeral: true });
+      }
+
+      const qualEmbed = new EmbedBuilder()
+        .setColor('#3498DB')
+        .setTitle('🔗 Qualification Required')
+        .setDescription(
+          `To qualify for **${event.title}**, you must:\n\n` +
+          `1️⃣ **Visit this URL:** [Click Here](${event.qualification_url})\n` +
+          `2️⃣ **Take a screenshot** proving you visited the page\n` +
+          `3️⃣ **Upload your screenshot** as a reply to this message within 5 minutes\n\n` +
+          `⏱️ You have **5 minutes** to upload your screenshot.`
+        )
+        .setFooter({ text: `Event #${eventId} • Qualification Step` })
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [qualEmbed], ephemeral: true });
+
+      // Collect the user's next message in the same channel with an image attachment
+      const channel = interaction.channel;
+      if (!channel) return;
+
+      const filter = (msg) => {
+        if (msg.author.id !== userId) return false;
+        if (msg.attachments.size === 0) return false;
+        // Must have at least one image attachment
+        return msg.attachments.some(att => att.contentType && att.contentType.startsWith('image/'));
+      };
+
+      try {
+        const collected = await channel.awaitMessages({ filter, max: 1, time: 300000, errors: ['time'] });
+        const msg = collected.first();
+        const screenshotAttachment = msg.attachments.find(att => att.contentType && att.contentType.startsWith('image/'));
+
+        if (!screenshotAttachment) {
+          await interaction.followUp({ content: '❌ No valid screenshot image found. Please click **✅ Qualify** again and upload an image.', ephemeral: true });
+          return;
+        }
+
+        // Save qualification
+        await db.addVoteEventQualification(eventId, userId, interaction.user.username, screenshotAttachment.url);
+
+        // Sync to backend
+        syncToBackend({ eventId, action: 'qualify', userId, screenshotUrl: screenshotAttachment.url });
+
+        const successEmbed = new EmbedBuilder()
+          .setColor('#2ECC71')
+          .setTitle('✅ Qualification Complete!')
+          .setDescription(
+            `<@${userId}> has been qualified for **${event.title}**!\n\n` +
+            `You can now click **🎫 Join Event** to claim your seat and vote.`
+          )
+          .setThumbnail(screenshotAttachment.url)
+          .setFooter({ text: `Event #${eventId}` })
+          .setTimestamp();
+
+        await msg.reply({ embeds: [successEmbed] });
+
+        // Try to delete the user's screenshot message to keep channel clean (optional)
+        try { await msg.delete(); } catch (_) {}
+
+      } catch (timeoutErr) {
+        await interaction.followUp({ content: '⏱️ Qualification timed out. Click **✅ Qualify** again to restart.', ephemeral: true });
+      }
+
+    } catch (error) {
+      console.error('Vote event qualify error:', error);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: `❌ Error: ${error.message}`, ephemeral: true });
+      } else {
+        await interaction.reply({ content: `❌ Error: ${error.message}`, ephemeral: true });
+      }
+    }
   }
 };
 
@@ -850,7 +991,14 @@ async function createVoteEventEmbed(event, images) {
     embed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R> (at <t:${endTimestamp}:t>)` });
   }
 
-  embed.addFields({ name: '📋 How to Participate', value: '1. Click "🎫 Join Event" to join\n2. Use the dropdown menu to vote for your favorite image\n3. Wait for results when event ends' });
+  const hasQualUrl = event.qualification_url;
+  const howTo = hasQualUrl
+    ? '1. Click **✅ Qualify** to claim a seat\n2. Complete URL Task and Upload Screenshot\n3. Click a **Vote** button to make a selection\n4. When all seats fill, voting locks & results are revealed\n5. Winners who match the owner\'s pick get paid instantly! 💰'
+    : '1. Click **🎫 Join Event** to join\n2. Click a **Vote** button for your favorite image\n3. When all seats fill, voting locks & results are revealed\n4. Winners who match the owner\'s pick get paid instantly! 💰';
+  embed.addFields({ name: '📋 How to Participate', value: howTo });
+  if (hasQualUrl) {
+    embed.addFields({ name: '🔗 Qualification URL', value: `[Visit this link](${event.qualification_url})` });
+  }
 
   // Add images
   if (images && images.length > 0) {

@@ -125,6 +125,24 @@ db.serialize(() => {
     )`
   )
 
+  db.run(
+    `CREATE TABLE IF NOT EXISTS vote_event_qualifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vote_event_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      username TEXT DEFAULT '',
+      screenshot_url TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at DATETIME,
+      reviewed_by TEXT,
+      UNIQUE(vote_event_id, user_id)
+    )`
+  )
+
+  // Migration: add qualification_url to vote_events
+  db.run(`ALTER TABLE vote_events ADD COLUMN qualification_url TEXT`, () => {})
+
   // Guild wallets
   db.run(
     `CREATE TABLE IF NOT EXISTS guild_wallets (

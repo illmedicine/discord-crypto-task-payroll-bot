@@ -847,20 +847,29 @@ module.exports = function buildApi({ discordClient }) {
       const endTimestamp = event.ends_at ? Math.floor(new Date(event.ends_at).getTime() / 1000) : null
 
       // ---- Build rich multi-embed interactive post ----
+      const hasQualUrl = !!event.qualification_url
       const embeds = []
 
       // Main event card
+      const howItWorks = hasQualUrl
+        ? '**How it works:**\n' +
+          '1️⃣ Click **✅ Qualify** to claim a seat\n' +
+          '2️⃣ Complete URL Task and Upload Screenshot\n' +
+          '3️⃣ Click a **Vote** button to make a selection\n' +
+          '4️⃣ When all seats fill, voting locks & results are revealed\n' +
+          '5️⃣ Winners who match the owner\'s pick get paid instantly! 💰'
+        : '**How it works:**\n' +
+          '1️⃣ Click **Join Event** to claim a seat\n' +
+          '2️⃣ Click a **Vote** button for your favorite image\n' +
+          '3️⃣ When all seats fill, voting locks & results are revealed\n' +
+          '4️⃣ Winners who match the owner\'s pick get paid instantly! 💰'
+
       const mainEmbed = new EmbedBuilder()
         .setColor('#9B59B6')
         .setTitle(`🗳️ DCB Vote Event: ${event.title}`)
         .setDescription(
           (event.description || 'Vote for your favorite image!') +
-          '\n\n' +
-          '**How it works:**\n' +
-          '1️⃣ Click **Join Event** to claim a seat\n' +
-          '2️⃣ Click a **Vote** button for your favorite image\n' +
-          '3️⃣ When all seats fill, voting locks & results are revealed\n' +
-          '4️⃣ Winners who match the owner\'s pick get paid instantly! 💰'
+          '\n\n' + howItWorks
         )
         .addFields(
           { name: '🪑 Seats', value: `${event.current_participants}/${event.max_participants}`, inline: true },
@@ -870,6 +879,7 @@ module.exports = function buildApi({ discordClient }) {
         .setFooter({ text: `DisCryptoBank • Event #${eventId} • Provably Fair` })
         .setTimestamp()
 
+      if (hasQualUrl) mainEmbed.addFields({ name: '🔗 Qualification URL', value: `[Visit this link](${event.qualification_url})`, inline: true })
       if (endTimestamp) mainEmbed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true })
       embeds.push(mainEmbed)
 
@@ -883,17 +893,26 @@ module.exports = function buildApi({ discordClient }) {
         embeds.push(imgEmbed)
       }
 
-      // ---- Build components: Join + per-image Vote buttons ----
+      // ---- Build components: Qualify (if needed) + Join + per-image Vote buttons ----
       const components = []
 
-      // Row 1: Join Event button
-      const joinRow = new ActionRowBuilder().addComponents(
+      // Row 1: Qualify + Join Event buttons
+      const topButtons = []
+      if (hasQualUrl) {
+        topButtons.push(
+          new ButtonBuilder()
+            .setCustomId(`vote_event_qualify_${eventId}`)
+            .setLabel('✅ Qualify')
+            .setStyle(ButtonStyle.Primary)
+        )
+      }
+      topButtons.push(
         new ButtonBuilder()
           .setCustomId(`vote_event_join_${eventId}`)
           .setLabel('🎫 Join Event')
           .setStyle(ButtonStyle.Success)
       )
-      components.push(joinRow)
+      components.push(new ActionRowBuilder().addComponents(...topButtons))
 
       // Row 2+: Vote buttons (up to 5 per row, max 5 action rows total incl. join row)
       const voteButtons = images.slice(0, 4).map((img, idx) => {
@@ -1688,7 +1707,7 @@ module.exports = function buildApi({ discordClient }) {
   // Bot pushes participant join/vote back to keep backend DB in sync
   app.post('/api/internal/vote-event-sync', requireInternal, async (req, res) => {
     try {
-      const { eventId, action, userId, guildId, votedImageId } = req.body || {}
+      const { eventId, action, userId, guildId, votedImageId, screenshotUrl } = req.body || {}
       if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
 
       if (action === 'join' && userId && guildId) {
@@ -1704,6 +1723,11 @@ module.exports = function buildApi({ discordClient }) {
         await db.run(
           `UPDATE vote_event_participants SET voted_image_id = ?, voted_at = datetime('now') WHERE vote_event_id = ? AND user_id = ?`,
           [votedImageId, eventId, userId]
+        ).catch(() => {})
+      } else if (action === 'qualify' && userId && screenshotUrl) {
+        await db.run(
+          `INSERT OR REPLACE INTO vote_event_qualifications (vote_event_id, user_id, username, screenshot_url, status, submitted_at) VALUES (?, ?, '', ?, 'approved', datetime('now'))`,
+          [eventId, userId, screenshotUrl]
         ).catch(() => {})
       }
 

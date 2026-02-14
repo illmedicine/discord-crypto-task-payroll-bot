@@ -360,6 +360,24 @@ client.on('interactionCreate', async interaction => {
       return;
     }
     
+    // Handle vote event qualify button
+    if (interaction.customId.startsWith('vote_event_qualify_')) {
+      const voteEventCommand = client.commands.get('vote-event');
+      if (voteEventCommand && voteEventCommand.handleQualifyButton) {
+        try {
+          await voteEventCommand.handleQualifyButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling vote event qualify button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
+    }
+
     // Handle vote event join button
     if (interaction.customId.startsWith('vote_event_join_')) {
       const voteEventCommand = client.commands.get('vote-event');

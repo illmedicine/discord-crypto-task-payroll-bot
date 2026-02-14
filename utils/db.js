@@ -1311,14 +1311,14 @@ const deleteContest = (contestId) => {
 
 // ==================== VOTE EVENT OPERATIONS ====================
 
-const createVoteEvent = (guildId, channelId, title, description, prizeAmount, currency, minParticipants, maxParticipants, durationMinutes, ownerFavoriteImageId, createdBy) => {
+const createVoteEvent = (guildId, channelId, title, description, prizeAmount, currency, minParticipants, maxParticipants, durationMinutes, ownerFavoriteImageId, createdBy, qualificationUrl) => {
   return new Promise((resolve, reject) => {
     const endsAt = durationMinutes ? new Date(Date.now() + (durationMinutes * 60 * 1000)).toISOString() : null;
     console.log(`[db.createVoteEvent] Creating vote event for guild ${guildId}: ${title}`);
     db.run(
-      `INSERT INTO vote_events (guild_id, channel_id, title, description, prize_amount, currency, min_participants, max_participants, duration_minutes, owner_favorite_image_id, created_by, ends_at) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [guildId, channelId, title, description, prizeAmount || 0, currency || 'USD', minParticipants, maxParticipants, durationMinutes, ownerFavoriteImageId, createdBy, endsAt],
+      `INSERT INTO vote_events (guild_id, channel_id, title, description, prize_amount, currency, min_participants, max_participants, duration_minutes, owner_favorite_image_id, created_by, ends_at, qualification_url) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, channelId, title, description, prizeAmount || 0, currency || 'USD', minParticipants, maxParticipants, durationMinutes, ownerFavoriteImageId, createdBy, endsAt, qualificationUrl || null],
       function (err) {
         if (err) {
           console.error(`[db.createVoteEvent] Error:`, err);
@@ -1340,6 +1340,33 @@ const addVoteEventImage = (voteEventId, imageId, imageUrl, uploadOrder) => {
       function (err) {
         if (err) reject(err);
         else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const addVoteEventQualification = (voteEventId, userId, username, screenshotUrl) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT OR REPLACE INTO vote_event_qualifications (vote_event_id, user_id, username, screenshot_url, status, submitted_at)
+       VALUES (?, ?, ?, ?, 'approved', datetime('now'))`,
+      [voteEventId, userId, username || '', screenshotUrl],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getVoteEventQualification = (voteEventId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM vote_event_qualifications WHERE vote_event_id = ? AND user_id = ?`,
+      [voteEventId, userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
       }
     );
   });
@@ -1367,8 +1394,8 @@ const createVoteEventFromSync = (event, images) => {
         `INSERT OR IGNORE INTO vote_events
           (id, guild_id, channel_id, message_id, title, description, prize_amount, currency,
            min_participants, max_participants, current_participants, duration_minutes,
-           owner_favorite_image_id, created_by, status, ends_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           owner_favorite_image_id, created_by, status, ends_at, created_at, qualification_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           event.id,
           event.guild_id,
@@ -1386,7 +1413,8 @@ const createVoteEventFromSync = (event, images) => {
           event.created_by,
           event.status || 'active',
           event.ends_at || null,
-          event.created_at || new Date().toISOString()
+          event.created_at || new Date().toISOString(),
+          event.qualification_url || null
         ],
         function (err) {
           if (err) return reject(err);
@@ -2164,6 +2192,8 @@ module.exports = {
   getVoteResults,
   setVoteEventWinners,
   deleteVoteEvent,
+  addVoteEventQualification,
+  getVoteEventQualification,
   // Trust/Risk functions
   touchUserStats,
   getUserStats,
