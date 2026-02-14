@@ -6,7 +6,12 @@ const DEFAULT_PROD_API_BASE = 'https://dcb-payroll-backend-production.up.railway
 
 export const API_BASE = (() => {
   if (ENV_API_BASE) return ENV_API_BASE
-  if (typeof window !== 'undefined' && window.location?.hostname?.endsWith('github.io')) return DEFAULT_PROD_API_BASE
+  if (typeof window !== 'undefined') {
+    const loc = window.location
+    if (loc.hostname?.endsWith('github.io') || loc.pathname?.startsWith('/discord-crypto-task-payroll-bot')) {
+      return DEFAULT_PROD_API_BASE
+    }
+  }
   return ''
 })()
 const API_PREFIX = API_BASE ? `${API_BASE.replace(/\/$/, '')}/api` : '/api'
