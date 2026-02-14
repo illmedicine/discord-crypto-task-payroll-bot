@@ -78,7 +78,6 @@ export default function App() {
     } else if (hash && NAV_ITEMS.some(n => n.id === hash)) {
       setPage(hash as Page)
     }
-    if (hash && NAV_ITEMS.some(n => n.id === hash)) setPage(hash)
 
     try {
       const url = new URL(window.location.href)
