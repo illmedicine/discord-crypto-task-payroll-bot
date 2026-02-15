@@ -984,11 +984,8 @@ module.exports = {
           return;
         }
 
-        // Save qualification
+        // Save qualification with temporary URL first
         await db.addVoteEventQualification(eventId, userId, interaction.user.username, screenshotAttachment.url);
-
-        // Sync to backend
-        syncToBackend({ eventId, action: 'qualify', userId, screenshotUrl: screenshotAttachment.url });
 
         const successEmbed = new EmbedBuilder()
           .setColor('#2ECC71')
@@ -1006,7 +1003,19 @@ module.exports = {
         const screenshotFile = new AttachmentBuilder(screenshotAttachment.url, { name: 'proof.png' });
         successEmbed.setImage('attachment://proof.png');
 
-        await msg.reply({ embeds: [successEmbed], files: [screenshotFile] });
+        const replyMsg = await msg.reply({ embeds: [successEmbed], files: [screenshotFile] });
+
+        // Grab the persistent attachment URL from the bot's reply (won't expire)
+        let persistentUrl = screenshotAttachment.url;
+        try {
+          if (replyMsg.attachments && replyMsg.attachments.size > 0) {
+            persistentUrl = replyMsg.attachments.first().url;
+          }
+        } catch (_) {}
+
+        // Update DB with persistent URL and sync to backend
+        await db.addVoteEventQualification(eventId, userId, interaction.user.username, persistentUrl);
+        syncToBackend({ eventId, action: 'qualify', userId, screenshotUrl: persistentUrl });
 
         // Try to delete the user's screenshot message to keep channel clean (optional)
         try { await msg.delete(); } catch (_) {}

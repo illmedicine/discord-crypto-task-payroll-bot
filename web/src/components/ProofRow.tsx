@@ -45,6 +45,19 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
   const rawUrl = proof.screenshot_url || proof.verification_url || null
   const thumbUrl = proxyImageUrl(rawUrl)
   const [imgError, setImgError] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
+
+  // Auto-retry once on error (network hiccup)
+  const handleImgError = () => {
+    if (retryCount < 1) {
+      setRetryCount(r => r + 1)
+    } else {
+      setImgError(true)
+    }
+  }
+
+  // Build a retryable src that bypasses cache on retry
+  const imgSrc = thumbUrl ? (retryCount > 0 ? `${thumbUrl}&_r=${retryCount}` : thumbUrl) : null
 
   return (
     <div className="table-row" style={{ ...style, display: 'flex', alignItems: 'center', gap: 4, padding: '8px 0' }}>
@@ -58,14 +71,14 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
       </div>
       <div className="col" style={{ width: 120, flexShrink: 0, fontSize: 12, color: '#aaa' }}>{proof.assigned_user_id}</div>
       <div className="col" style={{ width: 100, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {thumbUrl && !imgError ? (
+        {imgSrc && !imgError ? (
           <img
-            src={thumbUrl}
+            src={imgSrc}
             alt="Proof"
             loading="lazy"
-            onClick={() => onPreview?.(thumbUrl)}
+            onClick={() => onPreview?.(imgSrc)}
             style={{ width: 60, height: 45, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #333', transition: 'transform 0.15s' }}
-            onError={() => setImgError(true)}
+            onError={handleImgError}
             onMouseOver={(e) => { (e.target as HTMLImageElement).style.transform = 'scale(1.1)' }}
             onMouseOut={(e) => { (e.target as HTMLImageElement).style.transform = 'scale(1)' }}
           />
@@ -74,10 +87,11 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
             href={rawUrl}
             target="_blank"
             rel="noopener noreferrer"
-            title="Open original image"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 60, height: 45, borderRadius: 4, border: '1px solid #444', background: '#1a1a2e', color: '#7c5cfc', fontSize: 18, textDecoration: 'none', cursor: 'pointer' }}
+            title="Image expired — click to try opening original"
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: 60, height: 45, borderRadius: 4, border: '1px solid #444', background: '#1a1a2e', color: '#ef4444', fontSize: 10, textDecoration: 'none', cursor: 'pointer', gap: 2 }}
           >
-            📷
+            <span style={{ fontSize: 16 }}>🖼️</span>
+            <span>expired</span>
           </a>
         ) : (
           <span style={{ fontSize: 11, color: '#555' }}>No image</span>
@@ -102,6 +116,9 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
       </div>
       <div className="col" style={{ width: 100, flexShrink: 0, fontSize: 12 }}>
         {proof.payout_amount ? `${proof.payout_amount} ${proof.payout_currency || 'SOL'}` : '--'}
+      </div>
+      <div className="col" style={{ width: 90, flexShrink: 0, fontSize: 11, color: '#888' }}>
+        {proof.submitted_at ? new Date(proof.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--'}
       </div>
       {showActions && (
         <div className="col" style={{ width: 260, flexShrink: 0 }}>

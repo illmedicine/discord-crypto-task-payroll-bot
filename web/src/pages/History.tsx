@@ -27,6 +27,14 @@ type Proof = {
   source?: 'task' | 'qualification'
 }
 
+type HistoryStats = {
+  transactions: { total_count: number; total_amount: number; confirmed_count: number; pending_count: number; week_amount: number; week_count: number; month_amount: number }
+  proofs: { total: number; pending: number; approved: number; rejected: number; week_submissions: number }
+  qualifications: { total: number; approved: number; pending: number; rejected: number }
+  voteEvents: { total: number; active: number; completed: number; total_participants: number }
+  lastTransaction: Transaction | null
+}
+
 type Tab = 'proofs' | 'transactions'
 type Props = { guildId: string }
 
@@ -41,6 +49,10 @@ function timeAgo(dateStr: string): string {
   return `${days}d ago`
 }
 
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
 export default function History({ guildId }: Props) {
   const [tab, setTab] = useState<Tab>('proofs')
 
@@ -53,6 +65,9 @@ export default function History({ guildId }: Props) {
   const [proofsLoading, setProofsLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+
+  // KPI stats
+  const [stats, setStats] = useState<HistoryStats | null>(null)
 
   const loadTransactions = async () => {
     if (!guildId) return
@@ -79,12 +94,24 @@ export default function History({ guildId }: Props) {
     }
   }
 
+  const loadStats = async () => {
+    if (!guildId) return
+    try {
+      const r = await api.get(`/admin/guilds/${guildId}/history/stats`)
+      setStats(r.data || null)
+    } catch (err) {
+      console.error('[History] Stats error:', err)
+    }
+  }
+
   useEffect(() => {
     setTransactions([])
     setProofs([])
+    setStats(null)
     if (guildId) {
       loadTransactions()
       loadProofs()
+      loadStats()
     }
   }, [guildId])
 
@@ -104,6 +131,7 @@ export default function History({ guildId }: Props) {
         await api.post(`/admin/guilds/${guildId}/proofs/${id}/reject`, { reason })
       }
       loadProofs()
+      loadStats()
     } catch (err) {
       console.error(`[Proofs] ${action} error:`, err)
     }
@@ -120,14 +148,32 @@ export default function History({ guildId }: Props) {
     )
   }
 
-  // Summary stats
-  const totalOut = transactions.reduce((sum, tx) => sum + tx.amount, 0)
-  const totalTx = transactions.length
-  const pendingProofs = proofs.filter(p => p.status === 'pending').length
-  const approvedProofs = proofs.filter(p => p.status === 'approved').length
+  // Derived stats from the KPI endpoint or fallback to local data
+  const tx = stats?.transactions
+  const pr = stats?.proofs
+  const qu = stats?.qualifications
+  const ve = stats?.voteEvents
+
+  const totalSent = tx?.total_amount ?? transactions.reduce((s, t) => s + t.amount, 0)
+  const totalTxCount = tx?.total_count ?? transactions.length
+  const weekAmount = tx?.week_amount ?? 0
+  const weekTxCount = tx?.week_count ?? 0
+  const monthAmount = tx?.month_amount ?? 0
+  const pendingProofs = pr?.pending ?? proofs.filter(p => p.status === 'pending').length
+  const approvedProofs = pr?.approved ?? proofs.filter(p => p.status === 'approved').length
+  const rejectedProofs = pr?.rejected ?? 0
+  const totalProofs = pr?.total ?? proofs.length
+  const weekSubmissions = pr?.week_submissions ?? 0
+  const qualTotal = qu?.total ?? 0
+  const qualApproved = qu?.approved ?? 0
+  const qualPending = qu?.pending ?? 0
+  const voteEventsCompleted = ve?.completed ?? 0
+  const voteEventsActive = ve?.active ?? 0
+  const totalParticipants = ve?.total_participants ?? 0
+  const approvalRate = totalProofs > 0 ? Math.round((approvedProofs / totalProofs) * 100) : 0
 
   const loading = tab === 'transactions' ? txLoading : proofsLoading
-  const refresh = tab === 'transactions' ? loadTransactions : loadProofs
+  const refresh = () => { (tab === 'transactions' ? loadTransactions : loadProofs)(); loadStats() }
 
   return (
     <div className="container">
@@ -138,36 +184,85 @@ export default function History({ guildId }: Props) {
         </button>
       </div>
 
-      {/* Summary Stats */}
-      <div className="stats-grid" style={{ marginBottom: 20 }}>
+      {/* ── KPI Cards ── */}
+      <div className="stats-grid" style={{ marginBottom: 8 }}>
         <div className="stat-card">
           <div className="stat-icon green">💸</div>
           <div className="stat-info">
-            <div className="stat-label">Total Sent</div>
-            <div className="stat-value">{totalOut.toFixed(2)} SOL</div>
+            <div className="stat-label">Total Payouts</div>
+            <div className="stat-value">{totalSent.toFixed(2)} <span style={{ fontSize: 12, color: '#888' }}>SOL</span></div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{totalTxCount} transaction{totalTxCount !== 1 ? 's' : ''}</div>
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon blue">📊</div>
+          <div className="stat-icon blue">📅</div>
           <div className="stat-info">
-            <div className="stat-label">Transactions</div>
-            <div className="stat-value">{totalTx}</div>
+            <div className="stat-label">This Week</div>
+            <div className="stat-value">{weekAmount.toFixed(2)} <span style={{ fontSize: 12, color: '#888' }}>SOL</span></div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{weekTxCount} tx &bull; 30d: {monthAmount.toFixed(2)} SOL</div>
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{ color: '#f59e0b' }}>⏳</div>
           <div className="stat-info">
-            <div className="stat-label">Pending Proofs</div>
-            <div className="stat-value">{pendingProofs}</div>
+            <div className="stat-label">Pending Review</div>
+            <div className="stat-value">{pendingProofs + qualPending}</div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{pendingProofs} proof{pendingProofs !== 1 ? 's' : ''} &bull; {qualPending} qual</div>
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-icon" style={{ color: '#22c55e' }}>✅</div>
           <div className="stat-info">
-            <div className="stat-label">Approved</div>
-            <div className="stat-value">{approvedProofs}</div>
+            <div className="stat-label">Approval Rate</div>
+            <div className="stat-value">{approvalRate}%</div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{approvedProofs} approved &bull; {rejectedProofs} rejected</div>
           </div>
         </div>
+      </div>
+      <div className="stats-grid" style={{ marginBottom: 20 }}>
+        <div className="stat-card">
+          <div className="stat-icon" style={{ color: '#a78bfa' }}>🎫</div>
+          <div className="stat-info">
+            <div className="stat-label">Qualifications</div>
+            <div className="stat-value">{qualApproved}<span style={{ fontSize: 12, color: '#888' }}>/{qualTotal}</span></div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{qualTotal - qualApproved} pending/rejected</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{ color: '#3b82f6' }}>🗳️</div>
+          <div className="stat-info">
+            <div className="stat-label">Vote Events</div>
+            <div className="stat-value">{voteEventsActive} <span style={{ fontSize: 12, color: '#888' }}>active</span></div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{voteEventsCompleted} completed &bull; {totalParticipants} participants</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon" style={{ color: '#06b6d4' }}>📥</div>
+          <div className="stat-info">
+            <div className="stat-label">This Week</div>
+            <div className="stat-value">{weekSubmissions} <span style={{ fontSize: 12, color: '#888' }}>submissions</span></div>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{totalProofs} all-time proofs</div>
+          </div>
+        </div>
+        {stats?.lastTransaction ? (
+          <div className="stat-card">
+            <div className="stat-icon" style={{ color: '#f97316' }}>🕰️</div>
+            <div className="stat-info">
+              <div className="stat-label">Last Payout</div>
+              <div className="stat-value">{stats.lastTransaction.amount} <span style={{ fontSize: 12, color: '#888' }}>SOL</span></div>
+              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{timeAgo(stats.lastTransaction.created_at)}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="stat-card">
+            <div className="stat-icon" style={{ color: '#f97316' }}>🕰️</div>
+            <div className="stat-info">
+              <div className="stat-label">Last Payout</div>
+              <div className="stat-value">--</div>
+              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>No payouts yet</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tab Switcher */}
@@ -181,7 +276,7 @@ export default function History({ guildId }: Props) {
             marginBottom: -2, transition: 'all 0.15s',
           }}
         >
-          Proofs &amp; Qualifications
+          Proofs &amp; Qualifications {pendingProofs > 0 && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 9999, background: '#f59e0b33', color: '#f59e0b' }}>{pendingProofs}</span>}
         </button>
         <button
           onClick={() => setTab('transactions')}
@@ -228,6 +323,7 @@ export default function History({ guildId }: Props) {
                 <div className="col" style={{ width: 100 }}>Screenshot</div>
                 <div className="col" style={{ width: 80 }}>Status</div>
                 <div className="col" style={{ width: 100 }}>Payout</div>
+                <div className="col" style={{ width: 90 }}>Submitted</div>
                 {statusFilter === 'pending' && <div className="col" style={{ width: 260 }}>Actions</div>}
               </div>
               <List
@@ -274,7 +370,7 @@ export default function History({ guildId }: Props) {
                       To {tx.to_address ? `${tx.to_address.slice(0, 8)}...${tx.to_address.slice(-6)}` : 'Unknown'}
                     </div>
                     <div className="tx-sub">
-                      From {tx.from_address ? `${tx.from_address.slice(0, 8)}...${tx.from_address.slice(-6)}` : 'Treasury'} &bull; {timeAgo(tx.created_at)}
+                      From {tx.from_address ? `${tx.from_address.slice(0, 8)}...${tx.from_address.slice(-6)}` : 'Treasury'} &bull; {formatDate(tx.created_at)}
                     </div>
                   </div>
                   <div className="tx-amount negative">-{tx.amount} SOL</div>
