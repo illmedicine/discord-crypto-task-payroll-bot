@@ -2124,6 +2124,94 @@ const getGuildWorkersSummary = (guildId, days = 30) => {
   });
 };
 
+// ==================== GLOBAL STATS AGGREGATION ====================
+
+const getGlobalStats = () => {
+  return new Promise((resolve, reject) => {
+    const stats = {};
+    let pending = 7;
+    let failed = false;
+
+    const done = () => {
+      if (failed) return;
+      pending--;
+      if (pending === 0) {
+        resolve({
+          totalTransactions: stats.totalTransactions || 0,
+          eventsHosted: stats.eventsHosted || 0,
+          tasksCreated: stats.tasksCreated || 0,
+          totalPaidOut: stats.totalPaidOut || 0,
+          activeServers: stats.activeServers || 0,
+          totalPayouts: stats.totalPayouts || 0,
+          totalUsers: stats.totalUsers || 0,
+          lastUpdated: new Date().toISOString()
+        });
+      }
+    };
+
+    const fail = (err) => {
+      if (!failed) { failed = true; reject(err); }
+    };
+
+    // 1. Total on-chain transactions
+    db.get(`SELECT COUNT(*) as count FROM transactions`, (err, row) => {
+      if (err) return fail(err);
+      stats.totalTransactions = row ? row.count : 0;
+      done();
+    });
+
+    // 2. Events hosted (contests + vote events + scheduled events)
+    db.get(`SELECT
+      (SELECT COUNT(*) FROM contests) +
+      (SELECT COUNT(*) FROM vote_events) +
+      (SELECT COUNT(*) FROM events) as count`, (err, row) => {
+      if (err) return fail(err);
+      stats.eventsHosted = row ? row.count : 0;
+      done();
+    });
+
+    // 3. Tasks created (bulk tasks + legacy tasks)
+    db.get(`SELECT
+      (SELECT COUNT(*) FROM bulk_tasks) +
+      (SELECT COUNT(*) FROM tasks) as count`, (err, row) => {
+      if (err) return fail(err);
+      stats.tasksCreated = row ? row.count : 0;
+      done();
+    });
+
+    // 4. Total paid out (sum of all transaction amounts in SOL)
+    db.get(`SELECT COALESCE(SUM(amount), 0) as total FROM transactions`, (err, row) => {
+      if (err) return fail(err);
+      stats.totalPaidOut = row ? row.total : 0;
+      done();
+    });
+
+    // 5. Active servers (distinct guilds with configured wallets)
+    db.get(`SELECT COUNT(DISTINCT guild_id) as count FROM guild_wallets`, (err, row) => {
+      if (err) return fail(err);
+      stats.activeServers = row ? row.count : 0;
+      done();
+    });
+
+    // 6. Total payouts (contest winners + vote winners + approved proofs)
+    db.get(`SELECT
+      (SELECT COUNT(*) FROM contest_entries WHERE is_winner = 1) +
+      (SELECT COUNT(*) FROM vote_event_participants WHERE is_winner = 1) +
+      (SELECT COUNT(*) FROM proof_submissions WHERE status = 'approved') as count`, (err, row) => {
+      if (err) return fail(err);
+      stats.totalPayouts = row ? row.count : 0;
+      done();
+    });
+
+    // 7. Total registered users
+    db.get(`SELECT COUNT(*) as count FROM users`, (err, row) => {
+      if (err) return fail(err);
+      stats.totalUsers = row ? row.count : 0;
+      done();
+    });
+  });
+};
+
 module.exports = {
   db,
   initDb,
@@ -2231,4 +2319,6 @@ module.exports = {
   upsertWorkerDailyStat,
   getWorkerStats,
   getGuildWorkersSummary,
+  // Global stats (public API)
+  getGlobalStats,
 };

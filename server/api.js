@@ -45,6 +45,60 @@ module.exports = (client) => {
     res.json({ status: 'ok' });
   });
 
+  // ==================== GLOBAL STATS (public, for website ticker) ====================
+  app.get('/api/stats', async (req, res) => {
+    res.set('Cache-Control', 'public, max-age=60');
+    try {
+      const stats = await db.getGlobalStats();
+
+      // Fetch live wallet balances (treasury + user wallets)
+      let treasuryWalletValue = 0;
+      let userWalletValue = 0;
+      try {
+        const crypto = require('../utils/crypto');
+        const solPrice = await crypto.getSolanaPrice() || 0;
+
+        // Get all guild treasury wallets
+        const guildWallets = await new Promise((resolve, reject) => {
+          db.db.all(`SELECT DISTINCT wallet_address FROM guild_wallets`, (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+          });
+        });
+        const treasuryBalances = await Promise.allSettled(
+          guildWallets.map(w => crypto.getBalance(w.wallet_address))
+        );
+        const treasurySolTotal = treasuryBalances.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value : 0), 0);
+        treasuryWalletValue = treasurySolTotal * solPrice;
+
+        // Get all user wallets
+        const userWallets = await new Promise((resolve, reject) => {
+          db.db.all(`SELECT DISTINCT solana_address FROM users WHERE solana_address IS NOT NULL`, (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+          });
+        });
+        const userBalances = await Promise.allSettled(
+          userWallets.map(u => crypto.getBalance(u.solana_address))
+        );
+        const userSolTotal = userBalances.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value : 0), 0);
+        userWalletValue = userSolTotal * solPrice;
+      } catch (walletErr) {
+        console.error('[API] Stats wallet balance error:', walletErr.message);
+      }
+
+      res.json({
+        ...stats,
+        treasuryWalletValue,
+        userWalletValue,
+        totalWalletValue: treasuryWalletValue + userWalletValue
+      });
+    } catch (e) {
+      console.error('[API] Stats error:', e.message);
+      res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+  });
+
   // Check which auth providers are configured
   app.get('/api/auth/providers', (req, res) => {
     res.json({
