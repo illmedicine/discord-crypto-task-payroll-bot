@@ -35,8 +35,12 @@ async function fetchEventFromBackend(eventId) {
 
 async function getVoteEventWithFallback(eventId) {
   let event = await db.getVoteEvent(eventId);
-  if (!event) {
-    event = await fetchEventFromBackend(eventId);
+  // Always try to refresh from the backend so we get the authoritative
+  // status & ends_at (the web-UI backend is the source of truth for events
+  // created via the dashboard — its DB may differ from the bot's local DB).
+  const backendEvent = await fetchEventFromBackend(eventId);
+  if (backendEvent) {
+    event = backendEvent;
   }
   return event;
 }

@@ -1435,9 +1435,9 @@ const getVoteEvent = (voteEventId) => {
 const createVoteEventFromSync = (event, images) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
-      // Use INSERT OR IGNORE so we never fail on duplicates
+      // Use INSERT OR REPLACE so re-synced data actually updates status, ends_at, etc.
       db.run(
-        `INSERT OR IGNORE INTO vote_events
+        `INSERT OR REPLACE INTO vote_events
           (id, guild_id, channel_id, message_id, title, description, prize_amount, currency,
            min_participants, max_participants, current_participants, duration_minutes,
            owner_favorite_image_id, created_by, status, ends_at, created_at, qualification_url)

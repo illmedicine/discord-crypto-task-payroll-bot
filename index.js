@@ -221,11 +221,43 @@ client.once('clientReady', async () => {
 
   // Vote Event end checker - runs every 30 seconds
   const { processVoteEvent } = require('./utils/voteEventProcessor');
+  const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+  const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
   console.log('🗳️ Starting vote event end checker...');
   setInterval(async () => {
     try {
       const expiredVoteEvents = await db.getExpiredVoteEvents();
       for (const event of expiredVoteEvents) {
+        // --- Guard: verify against backend before ending ---
+        // The backend DB is the source of truth for web-created events.
+        // The bot's local copy may have a stale ends_at (e.g. from creation
+        // time rather than publish time).  Refresh before processing.
+        if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+          try {
+            const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/vote-event/${event.id}`;
+            const res = await fetch(url, {
+              headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
+            });
+            if (res.ok) {
+              const { event: backendEvent } = await res.json();
+              if (backendEvent) {
+                // If backend still considers the event active and ends_at is
+                // in the future, update local DB and skip processing.
+                const endsAtMs = backendEvent.ends_at
+                  ? new Date(backendEvent.ends_at).getTime()
+                  : 0;
+                if (backendEvent.status === 'active' && endsAtMs > Date.now()) {
+                  // Refresh local cache with correct data
+                  try { await db.createVoteEventFromSync(backendEvent, []); } catch (_) {}
+                  console.log(`[VoteEvent] Skipping premature expiry for #${event.id} — backend says still active until ${backendEvent.ends_at}`);
+                  continue;
+                }
+              }
+            }
+          } catch (backendErr) {
+            console.warn(`[VoteEvent] Backend check failed for #${event.id}, proceeding with local data:`, backendErr.message);
+          }
+        }
         await processVoteEvent(event.id, client, 'time');
       }
     } catch (error) {
