@@ -6,13 +6,11 @@ import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
 import QualifyPage from './pages/QualifyPage'
 
-const Proofs = React.lazy(() => import('./pages/Proofs'))
-
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'votes' | 'history' | 'treasury' | 'workers' | 'proofs' | 'qualify'
+type Page = 'dashboard' | 'votes' | 'history' | 'treasury' | 'workers' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -20,7 +18,6 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'workers', label: 'Workers', icon: '👥' },
   { id: 'votes', label: 'Vote Events', icon: '🗳️' },
   { id: 'history', label: 'History', icon: '📜' },
-  { id: 'proofs', label: 'Proofs', icon: '✅' },
 ]
 
 export default function App() {
@@ -302,7 +299,6 @@ export default function App() {
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} />}
             {page === 'workers' && <Workers guildId={guildId} />}
-            {page === 'proofs' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><Proofs guildId={guildId} /></React.Suspense>}
           </ProfilerLogger>
         </main>
 
