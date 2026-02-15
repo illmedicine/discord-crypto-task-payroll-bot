@@ -120,7 +120,37 @@ module.exports = function buildApi({ discordClient }) {
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId || discordId !== guild.ownerId) return res.status(403).json({ error: 'forbidden_not_guild_owner' })
       req.guild = guild
+      req.userRole = 'owner'
       return next()
+    } catch (_) {
+      return res.status(404).json({ error: 'guild_not_found' })
+    }
+  }
+
+  // Like requireGuildOwner but allows any guild member (for read-only endpoints)
+  async function requireGuildMember(req, res, next) {
+    try {
+      const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
+      if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
+      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
+      if (!guild) return res.status(404).json({ error: 'guild_not_found' })
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.status(403).json({ error: 'forbidden_no_discord_id' })
+      // Owner always passes
+      if (discordId === guild.ownerId) {
+        req.guild = guild
+        req.userRole = 'owner'
+        return next()
+      }
+      // Check if user is a guild member
+      try {
+        await guild.members.fetch(discordId)
+        req.guild = guild
+        req.userRole = 'member'
+        return next()
+      } catch (_) {
+        return res.status(403).json({ error: 'forbidden_not_guild_member' })
+      }
     } catch (_) {
       return res.status(404).json({ error: 'guild_not_found' })
     }
@@ -592,14 +622,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     for (const g of discordClient.guilds.cache.values()) {
       try {
         const guild = await g.fetch()
-        if (guild.ownerId === discordId) results.push({ id: guild.id, name: guild.name })
+        if (guild.ownerId === discordId) {
+          results.push({ id: guild.id, name: guild.name, role: 'owner' })
+        } else if (discordId) {
+          // Check if user is a member of this guild
+          try {
+            await guild.members.fetch(discordId)
+            results.push({ id: guild.id, name: guild.name, role: 'member' })
+          } catch (_) { /* not a member */ }
+        }
       } catch (_) {
       }
     }
     res.json(results)
   })
 
-  app.get('/api/admin/guilds/:guildId/channels', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/channels', requireAuth, requireGuildMember, async (req, res) => {
     const channels = await req.guild.channels.fetch()
     const out = []
     for (const c of channels.values()) {
@@ -609,7 +647,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(out)
   })
 
-  app.get('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM tasks WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)
   })
@@ -625,7 +663,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(task)
   })
 
-  app.get('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM contests WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)
   })
@@ -716,7 +754,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
   })
 
-  app.get('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM bulk_tasks WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)
   })
@@ -772,7 +810,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Discord Channel Media (images previously posted) ----
-  app.get('/api/admin/guilds/:guildId/channels/:channelId/media', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/channels/:channelId/media', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const channel = await fetchTextChannel(req.guild.id, req.params.channelId)
       const limit = Math.min(Number(req.query.limit) || 50, 100)
@@ -841,7 +879,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/vote-events/history', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/vote-events/history', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const gid = req.guild.id
       const events = await db.all(
@@ -878,7 +916,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM vote_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)
   })
@@ -1142,7 +1180,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Vote Event Qualifications (Admin) ----
-  app.get('/api/admin/guilds/:guildId/vote-events/:eventId/qualifications', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/vote-events/:eventId/qualifications', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
@@ -1252,7 +1290,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Dashboard Stats ----
-  app.get('/api/admin/guilds/:guildId/dashboard/stats', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/dashboard/stats', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const gid = req.guild.id
       const [activeTasks, pendingProofs, workers, liveContests, activeEvents] = await Promise.all([
@@ -1274,7 +1312,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/dashboard/activity', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/dashboard/activity', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const limit = Number(req.query.limit) || 20
       const type = req.query.type || null
@@ -1291,7 +1329,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Completed Contests (contests + vote events + bulk tasks) ----
-  app.get('/api/admin/guilds/:guildId/dashboard/completed-contests', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/dashboard/completed-contests', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const limit = Math.min(Number(req.query.limit) || 20, 100)
       const rows = await db.all(
@@ -1318,7 +1356,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       let sol_balance = null
@@ -1353,7 +1391,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Guild Treasury Wallet Management ----
-  app.get('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       res.json(wallet || null)
@@ -1448,7 +1486,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Transaction History ----
-  app.get('/api/admin/guilds/:guildId/transactions', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/transactions', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const limit = Number(req.query.limit) || 50
       const rows = await db.all('SELECT * FROM transactions WHERE guild_id = ? ORDER BY created_at DESC LIMIT ?', [req.guild.id, limit])
@@ -1459,7 +1497,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- History KPI Stats ----
-  app.get('/api/admin/guilds/:guildId/history/stats', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/history/stats', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const gid = req.guild.id
       const [txStats, proofStats, qualStats, voteEventStats, recentTx] = await Promise.all([
@@ -1509,7 +1547,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Events (Scheduled Events) ----
-  app.get('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/events', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const rows = await db.all('SELECT * FROM events WHERE guild_id = ? ORDER BY created_at DESC', [req.guild.id])
       res.json(rows || [])
@@ -1583,7 +1621,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // ---- Workers / DCB Roles ----
 
   // ---- Proof Submissions (includes vote event qualifications) ----
-  app.get('/api/admin/guilds/:guildId/proofs', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/proofs', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const status = req.query.status || 'pending'
       const limit = Math.min(Number(req.query.limit) || 100, 500)
@@ -1623,7 +1661,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/proofs/:proofId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/proofs/:proofId', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const proof = await db.get(
         `SELECT ps.*, ta.assigned_user_id, ta.bulk_task_id, bt.title, bt.payout_amount, bt.payout_currency
@@ -1688,7 +1726,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const days = Number(req.query.days) || 30
       const rows = await db.all(
@@ -1767,7 +1805,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const worker = await db.get('SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL', [req.guild.id, req.params.discordId])
       if (!worker) return res.status(404).json({ error: 'worker_not_found' })
@@ -1796,7 +1834,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/workers-activity', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/workers-activity', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const limit = Math.min(Number(req.query.limit) || 100, 500)
       const rows = await db.all(
@@ -1811,7 +1849,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.get('/api/admin/guilds/:guildId/members', requireAuth, requireGuildOwner, async (req, res) => {
+  app.get('/api/admin/guilds/:guildId/members', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const members = await req.guild.members.fetch({ limit: 100 })
       const list = members.filter(m => !m.user.bot).map(m => ({

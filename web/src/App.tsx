@@ -23,7 +23,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
   const [user, setUser] = useState<{ id: string; username: string; discriminator: string; avatar?: string; auth_provider?: string; google_email?: string; google_picture?: string; google_id?: string } | null>(null)
-  const [guilds, setGuilds] = useState<{ id: string; name: string }[]>([])
+  const [guilds, setGuilds] = useState<{ id: string; name: string; role?: string }[]>([])
   const [guildId, setGuildId] = useState<string>('')
   const [accountInfo, setAccountInfo] = useState<{ discord_linked: boolean; google_linked: boolean; google_email?: string } | null>(null)
   const [authProviders, setAuthProviders] = useState<{ discord: boolean; google: boolean }>({ discord: true, google: false })
@@ -102,7 +102,7 @@ export default function App() {
         } catch (_) {}
 
         return api.get('/admin/guilds').then(r2 => {
-          const gs = (r2.data || []) as { id: string; name: string }[]
+          const gs = (r2.data || []) as { id: string; name: string; role?: string }[]
           setGuilds(gs)
           // Restore saved guild if it still exists, otherwise pick first
           const restored = savedGuild && gs.some(g => g.id === savedGuild) ? savedGuild : (gs[0]?.id || '')
@@ -133,6 +133,9 @@ export default function App() {
     setGuildId(newGuildId)
     if (prefsLoaded) savePrefs(newGuildId, page)
   }
+
+  const userRole = guilds.find(g => g.id === guildId)?.role || 'member'
+  const isOwner = userRole === 'owner'
 
   // Not logged in - show login screen
   if (!user) {
@@ -280,7 +283,7 @@ export default function App() {
           >
             {guilds.length === 0 && <option value="">No servers</option>}
             {guilds.map(g => (
-              <option key={g.id} value={g.id}>{g.name}</option>
+              <option key={g.id} value={g.id}>{g.name}{g.role === 'member' ? ' (member)' : ''}</option>
             ))}
           </select>
           <div className="top-bar-actions">
@@ -295,7 +298,7 @@ export default function App() {
           <ProfilerLogger id="App">
             {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
             {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
-            {page === 'votes' && <Events guildId={guildId} />}
+            {page === 'votes' && <Events guildId={guildId} isOwner={isOwner} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} />}
             {page === 'workers' && <Workers guildId={guildId} />}

@@ -56,7 +56,7 @@ type Qualification = {
   reviewed_by: string | null
 }
 
-type Props = { guildId: string }
+type Props = { guildId: string; isOwner?: boolean }
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -76,7 +76,7 @@ function badgeClass(status: string): string {
 /* ================================================================== */
 /*  Component                                                          */
 /* ================================================================== */
-export default function Events({ guildId }: Props) {
+export default function Events({ guildId, isOwner = true }: Props) {
   /* ---- live tick for countdowns ---- */
   useTick(1000)
 
@@ -431,7 +431,7 @@ export default function Events({ guildId }: Props) {
                   <td style={{ fontSize: 12 }}>{formatTimeAgo(ev.created_at)}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 4 }}>
-                      {ev.status === 'active' && !ev.message_id && (
+                      {isOwner && ev.status === 'active' && !ev.message_id && (
                         <button className="btn btn-primary btn-sm"
                                 disabled={publishing === ev.id}
                                 onClick={() => handlePublish(ev.id)}>
@@ -441,9 +441,11 @@ export default function Events({ guildId }: Props) {
                       {ev.message_id && (
                         <span style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '4px 6px' }}>✅ Published</span>
                       )}
-                      <button className="btn btn-danger btn-sm" onClick={() => handleDelete(ev.id)}>
-                        Delete
-                      </button>
+                      {isOwner && (
+                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(ev.id)}>
+                          Delete
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -505,7 +507,7 @@ export default function Events({ guildId }: Props) {
                                     <span className={`badge ${q.status === 'approved' ? 'badge-completed' : q.status === 'rejected' ? 'badge-ended' : 'badge-open'}`}>
                                       {q.status}
                                     </span>
-                                    {q.status === 'pending' && (
+                                    {q.status === 'pending' && isOwner && (
                                       <div style={{ display: 'flex', gap: 4 }}>
                                         <button className="btn btn-primary btn-sm"
                                                 disabled={reviewingId === q.id}
@@ -541,9 +543,9 @@ export default function Events({ guildId }: Props) {
       </div>
 
       {/* ============================================================ */}
-      {/*  Create Vote Event Form                                       */}
+      {/*  Create Vote Event Form (owner only)                          */}
       {/* ============================================================ */}
-      <div className="card">
+      {isOwner && <div className="card">
         <div className="card-header">
           <div className="card-title">Create New Vote Event</div>
         </div>
@@ -717,7 +719,7 @@ export default function Events({ guildId }: Props) {
             </span>
           </div>
         </form>
-      </div>
+      </div>}
 
       {/* ============================================================ */}
       {/*  How DCB Events Work                                          */}
