@@ -1172,6 +1172,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
       if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' })
+
+      // Delete the Discord message if one was published
+      if (event.message_id && event.channel_id) {
+        try {
+          const channel = await discordClient.channels.fetch(event.channel_id)
+          if (channel) {
+            const msg = await channel.messages.fetch(event.message_id)
+            if (msg) await msg.delete()
+          }
+        } catch (discordErr) {
+          console.warn(`[vote-events] Could not delete Discord message for event #${eventId}:`, discordErr?.message || discordErr)
+        }
+      }
+
       await db.run('DELETE FROM vote_event_qualifications WHERE vote_event_id = ?', [eventId])
       await db.run('DELETE FROM vote_event_images WHERE vote_event_id = ?', [eventId])
       await db.run('DELETE FROM vote_events WHERE id = ?', [eventId])
@@ -1179,6 +1193,34 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     } catch (err) {
       console.error('[vote-events] delete error:', err?.message || err)
       res.status(500).json({ error: 'delete_failed' })
+    }
+  })
+
+  // ---- Vote Event Cancel ----
+  app.patch('/api/admin/guilds/:guildId/vote-events/:eventId/cancel', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'vote_event_not_found' })
+
+      // Delete the Discord message if one was published
+      if (event.message_id && event.channel_id) {
+        try {
+          const channel = await discordClient.channels.fetch(event.channel_id)
+          if (channel) {
+            const msg = await channel.messages.fetch(event.message_id)
+            if (msg) await msg.delete()
+          }
+        } catch (discordErr) {
+          console.warn(`[vote-events] Could not delete Discord message for cancelled event #${eventId}:`, discordErr?.message || discordErr)
+        }
+      }
+
+      await db.run('UPDATE vote_events SET status = ? WHERE id = ?', ['cancelled', eventId])
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[vote-events] cancel error:', err?.message || err)
+      res.status(500).json({ error: 'cancel_failed' })
     }
   })
 

@@ -108,6 +108,20 @@ export default function VoteEvents({ guildId }: Props) {
     await load()
   }
 
+  const deleteEvent = async (eventId: number) => {
+    if (!guildId) return
+    if (!confirm('Delete this event? This will also remove the Discord post if published.')) return
+    await api.delete(`/admin/guilds/${guildId}/vote-events/${eventId}`)
+    await load()
+  }
+
+  const cancelEvent = async (eventId: number) => {
+    if (!guildId) return
+    if (!confirm('Cancel this event? This will also remove the Discord post if published.')) return
+    await api.patch(`/admin/guilds/${guildId}/vote-events/${eventId}/cancel`)
+    await load()
+  }
+
   return (
     <div className="container">
       <h2>Vote Events</h2>
@@ -146,8 +160,10 @@ export default function VoteEvents({ guildId }: Props) {
               {({ index, style }: { index: number, style: React.CSSProperties }) => (
                 <div style={style}>
                   <VoteEventRow event={events[index]} />
-                  <div style={{ paddingLeft: 8, paddingBottom: 8 }}>
+                  <div style={{ paddingLeft: 8, paddingBottom: 8, display: 'flex', gap: 6 }}>
                     <button onClick={() => publish(events[index].id)} disabled={!channelId}>Publish</button>
+                    <button onClick={() => cancelEvent(events[index].id)} style={{ background: '#f0ad4e', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', cursor: 'pointer' }}>Cancel</button>
+                    <button onClick={() => deleteEvent(events[index].id)} style={{ background: '#d9534f', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', cursor: 'pointer' }}>Delete</button>
                   </div>
                 </div>
               )}
