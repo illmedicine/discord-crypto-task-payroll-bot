@@ -1290,6 +1290,34 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ---- Completed Contests (contests + vote events + bulk tasks) ----
+  app.get('/api/admin/guilds/:guildId/dashboard/completed-contests', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 20, 100)
+      const rows = await db.all(
+        `SELECT * FROM (
+          SELECT id, guild_id, title, description, prize_amount, currency, status,
+                 current_entries AS entries, max_entries, ends_at, created_at, 'contest' AS source_type
+          FROM contests WHERE guild_id = ? AND status IN ('completed', 'ended')
+          UNION ALL
+          SELECT id, guild_id, title, description, prize_amount, currency, status,
+                 current_participants AS entries, max_participants AS max_entries, ends_at, created_at, 'vote_event' AS source_type
+          FROM vote_events WHERE guild_id = ? AND status IN ('completed', 'ended')
+          UNION ALL
+          SELECT id, guild_id, title, description, payout_amount AS prize_amount,
+                 payout_currency AS currency, status,
+                 filled_slots AS entries, total_slots AS max_entries, NULL AS ends_at, created_at, 'bulk_task' AS source_type
+          FROM bulk_tasks WHERE guild_id = ? AND (status = 'completed' OR (filled_slots >= total_slots AND total_slots > 0))
+        ) ORDER BY created_at DESC LIMIT ?`,
+        [req.guild.id, req.guild.id, req.guild.id, limit]
+      )
+      res.json(rows || [])
+    } catch (err) {
+      console.error('[completed-contests] error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_get_completed_contests' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
@@ -1488,10 +1516,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const url = req.query.url
       if (!url || typeof url !== 'string') return res.status(400).json({ error: 'missing_url' })
-      // Only proxy Discord CDN domains
       const parsed = new URL(url)
-      const allowed = ['cdn.discordapp.com', 'media.discordapp.net']
-      if (!allowed.includes(parsed.hostname)) return res.status(403).json({ error: 'domain_not_allowed' })
+      // Allow Discord CDN and any HTTPS image URL
+      if (parsed.protocol !== 'https:') return res.status(403).json({ error: 'https_only' })
       const upstream = await axios.get(url, { responseType: 'stream', timeout: 10000 })
       const ct = upstream.headers['content-type']
       if (ct) res.setHeader('Content-Type', ct)

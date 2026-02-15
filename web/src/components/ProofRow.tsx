@@ -21,12 +21,13 @@ const statusColors: Record<string, string> = {
   rejected: '#ef4444',
 }
 
-/** Proxy Discord CDN URLs through the backend to avoid expired token 404s */
+/** Proxy image URLs through the backend to avoid expired Discord attachment tokens */
 function proxyImageUrl(url: string | null | undefined): string | null {
   if (!url) return null
   try {
     const parsed = new URL(url)
-    if (parsed.hostname === 'cdn.discordapp.com' || parsed.hostname === 'media.discordapp.net') {
+    // Proxy any HTTPS image URL (Discord CDN tokens expire, deleted-message attachments die)
+    if (parsed.protocol === 'https:') {
       const base = API_BASE ? `${API_BASE.replace(/\/$/, '')}/api` : '/api'
       return `${base}/image-proxy?url=${encodeURIComponent(url)}`
     }
