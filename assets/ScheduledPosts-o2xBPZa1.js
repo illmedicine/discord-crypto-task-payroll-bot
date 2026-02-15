@@ -1,0 +1,1 @@
+import{j as e}from"./index-s5WUKNjP.js";function n(){return e.jsxs("div",{className:"container",children:[e.jsx("h2",{children:"Scheduled Posts"}),e.jsx("p",{style:{color:"#888",marginTop:16},children:"Coming soon — scheduled post management will be available in a future update."})]})}export{n as default};
