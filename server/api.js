@@ -398,7 +398,16 @@ module.exports = (client) => {
       const channel = await fetchTextChannel(req.guild.id, channelId);
       const images = await db.getVoteEventImages(eventId);
 
-      const endTimestamp = event.ends_at ? Math.floor(new Date(event.ends_at).getTime() / 1000) : null;
+      // Recalculate ends_at from NOW so the timer starts at publish time, not creation time
+      let endTimestamp = null;
+      if (event.duration_minutes) {
+        const newEndsAt = new Date(Date.now() + event.duration_minutes * 60 * 1000).toISOString();
+        await db.updateVoteEventEndsAt(eventId, newEndsAt);
+        event.ends_at = newEndsAt;
+        endTimestamp = Math.floor(new Date(newEndsAt).getTime() / 1000);
+      } else if (event.ends_at) {
+        endTimestamp = Math.floor(new Date(event.ends_at).getTime() / 1000);
+      }
 
       const embed = new EmbedBuilder()
         .setColor('#9B59B6')

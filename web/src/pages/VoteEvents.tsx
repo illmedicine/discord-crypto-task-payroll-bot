@@ -9,6 +9,9 @@ type VoteEvent = {
   prize_amount: number
   currency: string
   status: string
+  ends_at?: string | null
+  current_participants?: number
+  max_participants?: number
 }
 
 type Channel = { id: string, name: string }
@@ -129,6 +132,8 @@ export default function VoteEvents({ guildId }: Props) {
               <div className="col col-title">Title</div>
               <div className="col col-prize">Prize</div>
               <div className="col col-status">Status</div>
+              <div className="col">Participants</div>
+              <div className="col">Time Left</div>
               <div className="col col-actions">Actions</div>
             </div>
             <List

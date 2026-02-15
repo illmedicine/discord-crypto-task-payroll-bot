@@ -1550,6 +1550,19 @@ const updateVoteEventMessageId = (voteEventId, messageId) => {
   });
 };
 
+const updateVoteEventEndsAt = (voteEventId, endsAt) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE vote_events SET ends_at = ? WHERE id = ?`,
+      [endsAt, voteEventId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
 const joinVoteEvent = (voteEventId, guildId, userId) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
@@ -2362,6 +2375,7 @@ module.exports = {
   getExpiredVoteEvents,
   updateVoteEventStatus,
   updateVoteEventMessageId,
+  updateVoteEventEndsAt,
   joinVoteEvent,
   getVoteEventParticipant,
   getVoteEventParticipants,

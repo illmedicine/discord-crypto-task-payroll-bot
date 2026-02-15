@@ -1046,7 +1046,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const channel = await fetchTextChannel(req.guild.id, channelId)
       const images = await db.all('SELECT * FROM vote_event_images WHERE vote_event_id = ? ORDER BY upload_order ASC', [eventId])
 
-      const endTimestamp = event.ends_at ? Math.floor(new Date(event.ends_at).getTime() / 1000) : null
+      // Recalculate ends_at from NOW so the timer starts at publish time, not creation time
+      let endTimestamp = null
+      if (event.duration_minutes) {
+        const newEndsAt = new Date(Date.now() + event.duration_minutes * 60 * 1000).toISOString()
+        await db.run('UPDATE vote_events SET ends_at = ? WHERE id = ?', [newEndsAt, eventId])
+        event.ends_at = newEndsAt
+        endTimestamp = Math.floor(new Date(newEndsAt).getTime() / 1000)
+      } else if (event.ends_at) {
+        endTimestamp = Math.floor(new Date(event.ends_at).getTime() / 1000)
+      }
 
       // ---- Build rich multi-embed interactive post ----
       const hasQualUrl = !!event.qualification_url
