@@ -98,6 +98,14 @@ body {
   box-shadow: 0 4px 12px rgba(99,140,255,0.3);
 }
 
+.sidebar-brand-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  box-shadow: 0 4px 12px rgba(99,140,255,0.3);
+}
+
 .sidebar-brand-text {
   font-size: 17px;
   font-weight: 700;

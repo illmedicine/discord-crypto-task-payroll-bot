@@ -152,9 +152,9 @@ export default function App() {
       <div className="login-container">
         <div className="login-card">
           <div style={{ marginBottom: 20 }}>
-            <div className="sidebar-brand-icon" style={{ width: 60, height: 60, fontSize: 30, margin: '0 auto 14px', boxShadow: '0 8px 24px rgba(99,140,255,0.3)' }}>D</div>
+            <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover', margin: '0 auto 14px', display: 'block', boxShadow: '0 8px 24px rgba(99,140,255,0.3)' }} />
           </div>
-          <h1>DiscryptoBank</h1>
+          <h1>DCB Event Manager</h1>
           <p>Discord Crypto Task & Payroll Manager</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 8, width: '100%', maxWidth: 300, margin: '0 auto' }}>
             {API_BASE ? (
@@ -193,8 +193,8 @@ export default function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="sidebar-brand-icon">D</div>
-          <span className="sidebar-brand-text">DiscryptoBank</span>
+          <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" className="sidebar-brand-logo" />
+          <span className="sidebar-brand-text">DCB Event Manager</span>
         </div>
 
         <nav className="sidebar-nav">
