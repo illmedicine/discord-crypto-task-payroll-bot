@@ -138,6 +138,89 @@ module.exports = function buildApi({ discordClient }) {
 
   app.get('/api/health', (req, res) => res.json({ ok: true }))
 
+  // ==================== SITE TRACKING (public, fire-and-forget) ====================
+  app.post('/api/track', async (req, res) => {
+    try {
+      const { event } = req.body
+      const allowed = ['site_visitors', 'discord_clicks', 'manager_clicks']
+      if (!event || !allowed.includes(event)) {
+        return res.status(400).json({ error: 'Invalid event. Allowed: ' + allowed.join(', ') })
+      }
+      await db.run(
+        `INSERT INTO site_analytics (metric, count, updated_at) VALUES (?, 1, CURRENT_TIMESTAMP)
+         ON CONFLICT(metric) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP`,
+        [event]
+      )
+      res.json({ success: true })
+    } catch (e) {
+      console.error('[API] Track error:', e.message)
+      res.status(500).json({ error: 'Tracking failed' })
+    }
+  })
+
+  // ==================== GLOBAL STATS (public, for website ticker) ====================
+  app.get('/api/stats', async (req, res) => {
+    res.set('Cache-Control', 'public, max-age=60')
+    try {
+      // Run all aggregation queries in parallel (catch individually for resilience)
+      const safe = (promise) => promise.catch(() => null)
+      const [txCount, eventsCount, tasksCount, paidTotal, serversCount, payoutsCount, usersCount, analytics] = await Promise.all([
+        safe(db.get(`SELECT COUNT(*) as c FROM transactions`)),
+        safe(db.get(`SELECT (SELECT COUNT(*) FROM contests) + (SELECT COUNT(*) FROM vote_events) as c`)),
+        safe(db.get(`SELECT (SELECT COUNT(*) FROM bulk_tasks) + (SELECT COUNT(*) FROM tasks) as c`)),
+        safe(db.get(`SELECT COALESCE(SUM(amount), 0) as c FROM transactions`)),
+        safe(db.get(`SELECT COUNT(DISTINCT guild_id) as c FROM guild_wallets`)),
+        safe(db.get(`SELECT
+          (SELECT COUNT(*) FROM contest_entries WHERE is_winner = 1) +
+          (SELECT COUNT(*) FROM vote_event_participants WHERE is_winner = 1) +
+          (SELECT COUNT(*) FROM proof_submissions WHERE status = 'approved') as c`)),
+        safe(db.get(`SELECT COUNT(*) as c FROM users`)),
+        safe(db.all(`SELECT metric, count FROM site_analytics`)),
+      ])
+
+      const analyticsMap = {}
+      ;(analytics || []).forEach(r => { analyticsMap[r.metric] = r.count })
+
+      // Wallet balances (best-effort)
+      let treasuryWalletValue = 0
+      let userWalletValue = 0
+      try {
+        const cryptoUtils = require('../../../utils/crypto')
+        const solPrice = await cryptoUtils.getSolanaPrice() || 0
+
+        const guildWallets = await db.all(`SELECT DISTINCT wallet_address FROM guild_wallets`)
+        const tBals = await Promise.allSettled(guildWallets.map(w => cryptoUtils.getBalance(w.wallet_address)))
+        treasuryWalletValue = tBals.reduce((s, r) => s + (r.status === 'fulfilled' ? r.value : 0), 0) * solPrice
+
+        const userWallets = await db.all(`SELECT DISTINCT solana_address FROM users WHERE solana_address IS NOT NULL`)
+        const uBals = await Promise.allSettled(userWallets.map(u => cryptoUtils.getBalance(u.solana_address)))
+        userWalletValue = uBals.reduce((s, r) => s + (r.status === 'fulfilled' ? r.value : 0), 0) * solPrice
+      } catch (walletErr) {
+        console.error('[API] Stats wallet error:', walletErr.message)
+      }
+
+      res.json({
+        totalTransactions: txCount?.c || 0,
+        eventsHosted: eventsCount?.c || 0,
+        tasksCreated: tasksCount?.c || 0,
+        totalPaidOut: paidTotal?.c || 0,
+        activeServers: serversCount?.c || 0,
+        totalPayouts: payoutsCount?.c || 0,
+        totalUsers: usersCount?.c || 0,
+        siteVisitors: analyticsMap.site_visitors || 0,
+        discordClicks: analyticsMap.discord_clicks || 0,
+        managerClicks: analyticsMap.manager_clicks || 0,
+        treasuryWalletValue,
+        userWalletValue,
+        totalWalletValue: treasuryWalletValue + userWalletValue,
+        lastUpdated: new Date().toISOString(),
+      })
+    } catch (e) {
+      console.error('[API] Stats error:', e.message)
+      res.status(500).json({ error: 'Failed to fetch stats' })
+    }
+  })
+
   // Check which auth providers are configured
   app.get('/api/auth/providers', (req, res) => {
     res.json({

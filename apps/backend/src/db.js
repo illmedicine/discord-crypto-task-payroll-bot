@@ -10,7 +10,29 @@ const dbPath = process.env.DCB_DB_PATH
 console.log(`[backend-db] Using database: ${dbPath}`)
 const db = new sqlite3.Database(dbPath)
 
-db.serialize(() => {
+db.serialize(() => {  // Users table (may be created by bot, ensure it exists for stats queries)
+  db.run(
+    `CREATE TABLE IF NOT EXISTS users (
+      discord_id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      solana_address TEXT UNIQUE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
+  // Contest entries
+  db.run(
+    `CREATE TABLE IF NOT EXISTS contest_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contest_id INTEGER NOT NULL,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      screenshot_url TEXT,
+      is_winner INTEGER DEFAULT 0,
+      entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(contest_id, user_id)
+    )`
+  )
   db.run(
     `CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -346,6 +368,18 @@ db.serialize(() => {
       UNIQUE(google_id)
     )`
   )
+
+  // Site analytics counters (global website tracking)
+  db.run(
+    `CREATE TABLE IF NOT EXISTS site_analytics (
+      metric TEXT PRIMARY KEY,
+      count INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+  db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('site_visitors', 0)`)
+  db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('discord_clicks', 0)`)
+  db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('manager_clicks', 0)`)
 
   // User preferences – persists selected guild, page, etc. across sessions
   db.run(
