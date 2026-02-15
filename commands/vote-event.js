@@ -997,11 +997,16 @@ module.exports = {
             `<@${userId}> has been qualified for **${event.title}**!\n\n` +
             `You can now click **🎫 Join Event** to claim your seat and vote.`
           )
-          .setThumbnail(screenshotAttachment.url)
+          .setThumbnail(interaction.user.displayAvatarURL({ size: 128 }))
           .setFooter({ text: `Event #${eventId}` })
           .setTimestamp();
 
-        await msg.reply({ embeds: [successEmbed] });
+        // Attach the screenshot so it persists after the user's message is deleted
+        const { AttachmentBuilder } = require('discord.js');
+        const screenshotFile = new AttachmentBuilder(screenshotAttachment.url, { name: 'proof.png' });
+        successEmbed.setImage('attachment://proof.png');
+
+        await msg.reply({ embeds: [successEmbed], files: [screenshotFile] });
 
         // Try to delete the user's screenshot message to keep channel clean (optional)
         try { await msg.delete(); } catch (_) {}
