@@ -45,6 +45,22 @@ module.exports = (client) => {
     res.json({ status: 'ok' });
   });
 
+  // ==================== SITE TRACKING (public, fire-and-forget) ====================
+  app.post('/api/track', async (req, res) => {
+    try {
+      const { event } = req.body;
+      const allowed = ['site_visitors', 'discord_clicks', 'manager_clicks'];
+      if (!event || !allowed.includes(event)) {
+        return res.status(400).json({ error: 'Invalid event. Allowed: ' + allowed.join(', ') });
+      }
+      await db.incrementSiteAnalytic(event);
+      res.json({ success: true });
+    } catch (e) {
+      console.error('[API] Track error:', e.message);
+      res.status(500).json({ error: 'Tracking failed' });
+    }
+  });
+
   // ==================== GLOBAL STATS (public, for website ticker) ====================
   app.get('/api/stats', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=60');

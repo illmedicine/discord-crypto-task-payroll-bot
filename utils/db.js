@@ -468,6 +468,20 @@ const initDb = () => {
       )
     `);
 
+    // Site analytics counters (global website tracking)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS site_analytics (
+        metric TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Seed default analytics rows
+    db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('site_visitors', 0)`);
+    db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('discord_clicks', 0)`);
+    db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('manager_clicks', 0)`);
+
     // Worker daily snapshots (aggregated stats per day for fast dashboard queries)
     db.run(`
       CREATE TABLE IF NOT EXISTS worker_daily_stats (
@@ -2124,12 +2138,41 @@ const getGuildWorkersSummary = (guildId, days = 30) => {
   });
 };
 
+// ==================== SITE ANALYTICS ====================
+
+const incrementSiteAnalytic = (metric) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO site_analytics (metric, count, updated_at) VALUES (?, 1, CURRENT_TIMESTAMP)
+       ON CONFLICT(metric) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP`,
+      [metric],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.changes);
+      }
+    );
+  });
+};
+
+const getSiteAnalytics = () => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT metric, count FROM site_analytics`, (err, rows) => {
+      if (err) reject(err);
+      else {
+        const result = {};
+        (rows || []).forEach(r => { result[r.metric] = r.count; });
+        resolve(result);
+      }
+    });
+  });
+};
+
 // ==================== GLOBAL STATS AGGREGATION ====================
 
 const getGlobalStats = () => {
   return new Promise((resolve, reject) => {
     const stats = {};
-    let pending = 7;
+    let pending = 8; // 7 bot stats + 1 site analytics
     let failed = false;
 
     const done = () => {
@@ -2144,6 +2187,9 @@ const getGlobalStats = () => {
           activeServers: stats.activeServers || 0,
           totalPayouts: stats.totalPayouts || 0,
           totalUsers: stats.totalUsers || 0,
+          siteVisitors: stats.siteVisitors || 0,
+          discordClicks: stats.discordClicks || 0,
+          managerClicks: stats.managerClicks || 0,
           lastUpdated: new Date().toISOString()
         });
       }
@@ -2207,6 +2253,17 @@ const getGlobalStats = () => {
     db.get(`SELECT COUNT(*) as count FROM users`, (err, row) => {
       if (err) return fail(err);
       stats.totalUsers = row ? row.count : 0;
+      done();
+    });
+
+    // 8. Site analytics (visitors, clicks)
+    db.all(`SELECT metric, count FROM site_analytics`, (err, rows) => {
+      if (err) return fail(err);
+      (rows || []).forEach(r => {
+        if (r.metric === 'site_visitors') stats.siteVisitors = r.count;
+        if (r.metric === 'discord_clicks') stats.discordClicks = r.count;
+        if (r.metric === 'manager_clicks') stats.managerClicks = r.count;
+      });
       done();
     });
   });
@@ -2321,4 +2378,7 @@ module.exports = {
   getGuildWorkersSummary,
   // Global stats (public API)
   getGlobalStats,
+  // Site analytics
+  incrementSiteAnalytic,
+  getSiteAnalytics,
 };
