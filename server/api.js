@@ -671,6 +671,17 @@ app.listen(port, () => {
     }
   });
 
+  // ---- Completed Contests (contests + vote events + bulk tasks) ----
+  app.get('/api/admin/guilds/:guildId/dashboard/completed-contests', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 20;
+      const rows = await db.getCompletedContestsAll(req.guild.id, limit);
+      return res.json(rows);
+    } catch (err) {
+      return res.status(500).json({ error: 'failed_to_get_completed_contests' });
+    }
+  });
+
   app.get('/api/admin/guilds/:guildId/dashboard/balance', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const wallet = await db.getGuildWallet(req.guild.id);
@@ -932,6 +943,25 @@ app.listen(port, () => {
       return res.json(activity);
     } catch (err) {
       return res.status(500).json({ error: 'failed_to_get_activity' });
+    }
+  });
+
+  // ---- Image proxy for Discord CDN (attachment URLs expire) ----
+  app.get('/api/image-proxy', requireAuth, async (req, res) => {
+    try {
+      const url = req.query.url;
+      if (!url || typeof url !== 'string') return res.status(400).json({ error: 'missing_url' });
+      const parsed = new URL(url);
+      const allowed = ['cdn.discordapp.com', 'media.discordapp.net'];
+      if (!allowed.includes(parsed.hostname)) return res.status(403).json({ error: 'domain_not_allowed' });
+      const upstream = await axios.get(url, { responseType: 'stream', timeout: 10000 });
+      const ct = upstream.headers['content-type'];
+      if (ct) res.setHeader('Content-Type', ct);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      upstream.data.pipe(res);
+    } catch (err) {
+      const status = err?.response?.status || 502;
+      res.status(status).json({ error: 'proxy_failed', status });
     }
   });
 

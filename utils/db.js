@@ -1161,6 +1161,38 @@ const getExpiredContests = () => {
   });
 };
 
+const getCompletedContestsAll = (guildId, limit = 20) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT id, guild_id, title, description, prize_amount, currency, status,
+              current_entries AS entries, max_entries AS max_entries, ends_at,
+              created_at, 'contest' AS source_type
+       FROM contests
+       WHERE guild_id = ? AND status IN ('completed', 'ended')
+       UNION ALL
+       SELECT id, guild_id, title, description, prize_amount, currency, status,
+              current_participants AS entries, max_participants AS max_entries, ends_at,
+              created_at, 'vote_event' AS source_type
+       FROM vote_events
+       WHERE guild_id = ? AND status IN ('completed', 'ended')
+       UNION ALL
+       SELECT id, guild_id, title, description, payout_amount AS prize_amount,
+              payout_currency AS currency, status,
+              filled_slots AS entries, total_slots AS max_entries, NULL AS ends_at,
+              created_at, 'bulk_task' AS source_type
+       FROM bulk_tasks
+       WHERE guild_id = ? AND (status = 'completed' OR (filled_slots >= total_slots AND total_slots > 0))
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [guildId, guildId, guildId, limit],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
 const updateContestStatus = (contestId, status) => {
   return new Promise((resolve, reject) => {
     db.run(
@@ -2364,6 +2396,7 @@ module.exports = {
   // Dashboard
   getDashboardStats,
   getRecentTransactions,
+  getCompletedContestsAll,
   // Worker / Staff management
   addWorker,
   removeWorker,

@@ -34,7 +34,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
-  const [user, setUser] = useState<{ id: string; username: string; discriminator: string; auth_provider?: string; google_email?: string; google_picture?: string; google_id?: string } | null>(null)
+  const [user, setUser] = useState<{ id: string; username: string; discriminator: string; avatar?: string; auth_provider?: string; google_email?: string; google_picture?: string; google_id?: string } | null>(null)
   const [guilds, setGuilds] = useState<{ id: string; name: string }[]>([])
   const [guildId, setGuildId] = useState<string>('')
   const [accountInfo, setAccountInfo] = useState<{ discord_linked: boolean; google_linked: boolean; google_email?: string } | null>(null)
@@ -213,7 +213,9 @@ export default function App() {
         <div className="sidebar-user-wrapper" ref={profileRef}>
           <button className="sidebar-user" onClick={() => setProfileMenuOpen(v => !v)}>
             <div className="sidebar-user-avatar" title={user.auth_provider === 'google' ? `Google: ${user.google_email || ''}` : `Discord: ${user.username}`}>
-              {user.google_picture ? (
+              {user.auth_provider !== 'google' && user.avatar ? (
+                <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+              ) : user.google_picture ? (
                 <img src={user.google_picture} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
               ) : (
                 user.username.charAt(0).toUpperCase()
@@ -233,7 +235,9 @@ export default function App() {
             <div className="profile-menu">
               <div className="profile-menu-header">
                 <div className="profile-menu-avatar">
-                  {user.google_picture ? (
+                  {user.auth_provider !== 'google' && user.avatar ? (
+                    <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128`} alt="" />
+                  ) : user.google_picture ? (
                     <img src={user.google_picture} alt="" />
                   ) : (
                     user.username.charAt(0).toUpperCase()

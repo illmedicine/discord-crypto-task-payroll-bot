@@ -712,12 +712,24 @@ module.exports = {
         });
       }
 
-      // Gate: if event has a qualification_url, require qualification first
+      // Gate: if event has a qualification_url, require approved qualification first
       if (event.qualification_url) {
         const qual = await db.getVoteEventQualification(eventId, userId);
         if (!qual) {
           return interaction.reply({
             content: '❌ **Qualification Required!**\n\nThis event requires prequalification. Click the **✅ Qualify** button first, visit the URL, and upload a screenshot to prove you completed the task.',
+            ephemeral: true
+          });
+        }
+        if (qual.status === 'pending') {
+          return interaction.reply({
+            content: '⏳ **Qualification Pending**\n\nYour qualification screenshot has been submitted but is still awaiting admin review. Please wait for approval before joining.',
+            ephemeral: true
+          });
+        }
+        if (qual.status === 'rejected') {
+          return interaction.reply({
+            content: '❌ **Qualification Rejected**\n\nYour qualification was rejected by an admin. Please re-submit your qualification proof by clicking the **✅ Qualify** button again.',
             ephemeral: true
           });
         }

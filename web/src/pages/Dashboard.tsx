@@ -45,6 +45,20 @@ type Contest = {
   ends_at: string
 }
 
+type CompletedContest = {
+  id: number
+  title: string
+  description: string
+  prize_amount: number
+  currency: string
+  status: string
+  entries: number
+  max_entries: number
+  ends_at: string | null
+  created_at: string
+  source_type: 'contest' | 'vote_event' | 'bulk_task'
+}
+
 type Transaction = {
   id: number
   from_address: string
@@ -82,6 +96,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [contests, setContests] = useState<Contest[]>([])
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [completedContests, setCompletedContests] = useState<CompletedContest[]>([])
   const [activityFilter, setActivityFilter] = useState('all')
   const [loading, setLoading] = useState(false)
   const [walletAddress, setWalletAddress] = useState<string | null>(null)
@@ -101,12 +116,14 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
       api.get(`/admin/guilds/${guildId}/contests`).catch(() => ({ data: [] })),
       api.get(`/admin/guilds/${guildId}/transactions?limit=5`).catch(() => ({ data: [] })),
       api.get(`/admin/guilds/${guildId}/dashboard/balance`).catch(() => ({ data: {} })),
-    ]).then(([statsRes, actRes, tasksRes, contestsRes, txRes, balRes]) => {
+      api.get(`/admin/guilds/${guildId}/dashboard/completed-contests?limit=6`).catch(() => ({ data: [] })),
+    ]).then(([statsRes, actRes, tasksRes, contestsRes, txRes, balRes, completedRes]) => {
       setStats(statsRes.data as Stats)
       setActivity(actRes.data as Activity[])
       setTasks((tasksRes.data || []).slice(0, 3) as Task[])
       setContests((contestsRes.data || []).slice(0, 3) as Contest[])
       setTransactions((txRes.data || []) as Transaction[])
+      setCompletedContests((completedRes.data || []).slice(0, 6) as CompletedContest[])
       setWalletAddress(balRes.data?.wallet_address || null)
       const w = balRes.data?.wallet
       if (w) {
@@ -348,6 +365,39 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
                 <div className="item-card-meta">
                   <span>🎟️ {c.current_entries || 0}/{c.max_entries}</span>
                   {c.ends_at && <Countdown endsAt={c.ends_at} prefix='⏰ ' />}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Completed Contests */}
+        <div className="card">
+          <div className="card-header">
+            <div className="card-title">Completed Contests</div>
+            <button className="view-all" onClick={() => onNavigate('contests')}>View All</button>
+          </div>
+          <div className="item-cards">
+            {completedContests.length === 0 && (
+              <div className="empty-state" style={{ padding: 20 }}>
+                <div className="empty-state-text">No completed contests yet</div>
+              </div>
+            )}
+            {completedContests.map(cc => (
+              <div key={`${cc.source_type}-${cc.id}`} className="item-card">
+                <div className="item-card-header">
+                  <span className={badgeClass(cc.status)}>{cc.status}</span>
+                  <span className="sol-badge">
+                    {cc.source_type === 'contest' ? '🏆' : cc.source_type === 'vote_event' ? '🗳️' : '📋'}
+                    {' '}{cc.source_type === 'contest' ? 'Contest' : cc.source_type === 'vote_event' ? 'Vote Event' : 'Task'}
+                  </span>
+                </div>
+                <div className="item-card-title">{cc.title}</div>
+                <div className="item-card-desc">{cc.description || 'No description'}</div>
+                <div className="item-card-meta">
+                  <span>💰 {cc.prize_amount} {cc.currency}</span>
+                  <span>🎟️ {cc.entries || 0}/{cc.max_entries}</span>
+                  {cc.ends_at && <span>📅 {formatTimeAgo(cc.ends_at)}</span>}
                 </div>
               </div>
             ))}

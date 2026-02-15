@@ -1,4 +1,5 @@
-import React from 'react'
+import React, { useState } from 'react'
+import { API_BASE } from '../api'
 
 type Proof = {
   id: number
@@ -19,6 +20,19 @@ const statusColors: Record<string, string> = {
   rejected: '#ef4444',
 }
 
+/** Proxy Discord CDN URLs through the backend to avoid expired token 404s */
+function proxyImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname === 'cdn.discordapp.com' || parsed.hostname === 'media.discordapp.net') {
+      const base = API_BASE ? `${API_BASE.replace(/\/$/, '')}/api` : '/api'
+      return `${base}/image-proxy?url=${encodeURIComponent(url)}`
+    }
+  } catch (_) {}
+  return url
+}
+
 export default React.memo(function ProofRow({ proof, style, showActions = true, onAction, onPreview }: {
   proof: Proof,
   style?: React.CSSProperties,
@@ -26,7 +40,9 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
   onAction?: (action: string, id: number) => void,
   onPreview?: (url: string) => void,
 }) {
-  const thumbUrl = proof.screenshot_url || proof.verification_url || null
+  const rawUrl = proof.screenshot_url || proof.verification_url || null
+  const thumbUrl = proxyImageUrl(rawUrl)
+  const [imgError, setImgError] = useState(false)
 
   return (
     <div className="table-row" style={{ ...style, display: 'flex', alignItems: 'center', gap: 4, padding: '8px 0' }}>
@@ -37,17 +53,27 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
       </div>
       <div className="col" style={{ width: 120, flexShrink: 0, fontSize: 12, color: '#aaa' }}>{proof.assigned_user_id}</div>
       <div className="col" style={{ width: 100, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {thumbUrl ? (
+        {thumbUrl && !imgError ? (
           <img
             src={thumbUrl}
             alt="Proof"
             loading="lazy"
             onClick={() => onPreview?.(thumbUrl)}
             style={{ width: 60, height: 45, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #333', transition: 'transform 0.15s' }}
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+            onError={() => setImgError(true)}
             onMouseOver={(e) => { (e.target as HTMLImageElement).style.transform = 'scale(1.1)' }}
             onMouseOut={(e) => { (e.target as HTMLImageElement).style.transform = 'scale(1)' }}
           />
+        ) : rawUrl ? (
+          <a
+            href={rawUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open original image"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 60, height: 45, borderRadius: 4, border: '1px solid #444', background: '#1a1a2e', color: '#7c5cfc', fontSize: 18, textDecoration: 'none', cursor: 'pointer' }}
+          >
+            📷
+          </a>
         ) : (
           <span style={{ fontSize: 11, color: '#555' }}>No image</span>
         )}

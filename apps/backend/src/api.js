@@ -246,73 +246,150 @@ module.exports = function buildApi({ discordClient }) {
   })
 
   app.get('/auth/discord/callback', async (req, res) => {
+    const diag = []                      // diagnostic breadcrumbs
+    const ok  = (step) => diag.push({ step, ok: true })
+    const fail = (step, detail) => { diag.push({ step, ok: false, detail: String(detail).slice(0, 400) }) }
+
+    // ---- helper: render a styled HTML diagnostic page ----
+    const renderDiagPage = (status, headline) => {
+      const rows = diag.map(d =>
+        `<tr><td style="padding:6px 12px">${d.ok ? '✅' : '❌'} ${d.step}</td><td style="padding:6px 12px;color:${d.ok ? '#4ade80' : '#f87171'}">${d.detail || 'OK'}</td></tr>`
+      ).join('')
+      res.status(status).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>DCB OAuth Diagnostic</title>
+<style>body{background:#111;color:#e5e5e5;font-family:system-ui,sans-serif;padding:40px;max-width:800px;margin:auto}
+h1{color:#f87171}table{border-collapse:collapse;width:100%;margin-top:24px}tr:nth-child(even){background:#1a1a2e}
+td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;border-radius:8px;word-break:break-all;font-size:13px}</style></head>
+<body><h1>${headline}</h1><table><tr><th style="padding:6px 12px;text-align:left">Step</th><th style="padding:6px 12px;text-align:left">Result</th></tr>${rows}</table>
+<div class="info"><b>Callback URI used:</b> ${diag._callbackUri || 'N/A'}<br><b>Has code:</b> ${!!req.query.code}<br><b>State match:</b> ${req.query.state === req.cookies?.dcb_oauth_state}<br>
+<b>DB_PATH:</b> ${process.env.DCB_DB_PATH || '(default)'}<br><b>UI_BASE:</b> ${uiBase || '(none)'}<br><b>Time:</b> ${new Date().toISOString()}</div></body></html>`)
+    }
+
     const { code, state } = req.query
     const savedState = req.cookies?.dcb_oauth_state
 
-    if (!code) return res.status(400).send('Missing code')
-    if (!state || !savedState || state !== savedState) return res.status(400).send('Invalid OAuth state')
+    console.log('[OAuth Discord] callback hit, state match:', state === savedState, 'has code:', !!code)
+
+    if (!code) { fail('params', 'Missing code query param'); return renderDiagPage(400, 'OAuth Error — Missing code') }
+    if (!state || !savedState || state !== savedState) {
+      fail('state', `saved=${savedState} received=${state}`)
+      console.error('[OAuth Discord] state mismatch — saved:', savedState, 'received:', state)
+      return renderDiagPage(400, 'OAuth Error — State mismatch')
+    }
+    ok('state')
 
     const clientId = process.env.DISCORD_CLIENT_ID
     const clientSecret = process.env.DISCORD_CLIENT_SECRET
-    if (!clientId || !clientSecret) return res.status(500).send('OAuth not configured on server')
+    if (!clientId || !clientSecret) { fail('config', 'DISCORD_CLIENT_ID or SECRET missing'); return renderDiagPage(500, 'OAuth Error — Not configured') }
+    ok('config')
+
+    const callbackUri = `${baseUrl(req)}/auth/discord/callback`
+    diag._callbackUri = callbackUri
+    console.log('[OAuth Discord] token exchange redirect_uri:', callbackUri)
 
     try {
-      const tokenResp = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: `${baseUrl(req)}/auth/discord/callback`
-      }).toString(), {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-      })
+      // Step 1: Exchange code for token
+      let tokenResp
+      try {
+        tokenResp = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: callbackUri
+        }).toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        })
+        ok('token_exchange')
+      } catch (tokenErr) {
+        const detail = tokenErr?.response?.data || tokenErr?.message || tokenErr
+        console.error('[OAuth Discord] token exchange failed:', detail)
+        fail('token_exchange', JSON.stringify(detail))
+        return renderDiagPage(502, 'OAuth Error — Token exchange failed')
+      }
 
+      // Step 2: Fetch user info
       const accessToken = tokenResp.data.access_token
-      const userResp = await axios.get('https://discord.com/api/users/@me', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      })
+      if (!accessToken) {
+        console.error('[OAuth Discord] no access_token in response:', tokenResp.data)
+        fail('access_token', 'No access_token in Discord response: ' + JSON.stringify(tokenResp.data))
+        return renderDiagPage(502, 'OAuth Error — No access token')
+      }
+      ok('access_token')
 
-      // Ensure user_accounts row exists for Discord user
+      let userResp
+      try {
+        userResp = await axios.get('https://discord.com/api/users/@me', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        })
+        ok('user_fetch')
+      } catch (userErr) {
+        console.error('[OAuth Discord] user fetch failed:', userErr?.response?.data || userErr?.message)
+        fail('user_fetch', JSON.stringify(userErr?.response?.data || userErr?.message))
+        return renderDiagPage(502, 'OAuth Error — User fetch failed')
+      }
+
       const discordId = userResp.data.id
-      await db.run(
-        `INSERT INTO user_accounts (discord_id, last_login_at) VALUES (?, CURRENT_TIMESTAMP)
-         ON CONFLICT(discord_id) DO UPDATE SET last_login_at = CURRENT_TIMESTAMP`,
-        [discordId]
-      )
+      console.log('[OAuth Discord] user fetched:', discordId, userResp.data.username)
 
-      // Check if this Discord user has a linked Google account
-      const linkedAccount = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
+      // Step 3: Upsert user_accounts row
+      try {
+        await db.run(
+          `INSERT INTO user_accounts (discord_id, last_login_at) VALUES (?, CURRENT_TIMESTAMP)
+           ON CONFLICT(discord_id) DO UPDATE SET last_login_at = CURRENT_TIMESTAMP`,
+          [discordId]
+        )
+        ok('db_upsert')
+      } catch (dbErr) {
+        console.error('[OAuth Discord] db upsert failed:', dbErr?.message || dbErr)
+        fail('db_upsert', dbErr?.message || String(dbErr))
+        return renderDiagPage(500, 'OAuth Error — Database error')
+      }
+
+      // Step 4: Check linked Google account
+      let linkedAccount = null
+      try {
+        linkedAccount = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
+        ok('linked_check')
+      } catch (e) {
+        fail('linked_check', e?.message)
+      }
 
       // If linking a Google-first user to this Discord account
       const linkingGoogleId = req.cookies?.dcb_linking_google_id
       if (linkingGoogleId) {
-        const googleAccount = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [linkingGoogleId])
-        if (googleAccount) {
-          if (!googleAccount.discord_id) {
-            // Merge: set Google info on the Discord row, delete the orphan Google-only row
-            await db.run('UPDATE user_accounts SET google_id = ?, google_email = ?, google_name = ?, google_picture = ?, last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?',
-              [linkingGoogleId, googleAccount.google_email, googleAccount.google_name, googleAccount.google_picture, discordId])
-            await db.run('DELETE FROM user_accounts WHERE id = ? AND discord_id IS NULL', [googleAccount.id])
-          } else if (googleAccount.discord_id === discordId) {
-            // Already linked — just update login time
-            await db.run('UPDATE user_accounts SET last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?', [discordId])
+        try {
+          const googleAccount = await db.get('SELECT * FROM user_accounts WHERE google_id = ?', [linkingGoogleId])
+          if (googleAccount) {
+            if (!googleAccount.discord_id) {
+              await db.run('UPDATE user_accounts SET google_id = ?, google_email = ?, google_name = ?, google_picture = ?, last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?',
+                [linkingGoogleId, googleAccount.google_email, googleAccount.google_name, googleAccount.google_picture, discordId])
+              await db.run('DELETE FROM user_accounts WHERE id = ? AND discord_id IS NULL', [googleAccount.id])
+            } else if (googleAccount.discord_id === discordId) {
+              await db.run('UPDATE user_accounts SET last_login_at = CURRENT_TIMESTAMP WHERE discord_id = ?', [discordId])
+            }
+            await migratePreferences(`google:${linkingGoogleId}`, discordId)
           }
-          // Migrate any preferences saved under google:xxx to the Discord ID
-          await migratePreferences(`google:${linkingGoogleId}`, discordId)
+          ok('account_link')
+        } catch (linkErr) {
+          console.error('[OAuth Discord] account linking error (non-fatal):', linkErr?.message)
+          fail('account_link', linkErr?.message)
         }
         res.clearCookie('dcb_linking_google_id')
-        // Re-fetch linked info after merge
-        const updated = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
-        if (updated) {
-          linkedAccount.google_id = updated.google_id
-          linkedAccount.google_email = updated.google_email
-          linkedAccount.google_picture = updated.google_picture
-        }
+        try {
+          linkedAccount = await db.get('SELECT google_id, google_email, google_picture FROM user_accounts WHERE discord_id = ?', [discordId])
+        } catch (_) {}
       }
 
-      // Also migrate any orphaned google preferences if this Discord user has a linked Google
+      // Migrate orphaned google preferences
       if (linkedAccount?.google_id) {
-        await migratePreferences(`google:${linkedAccount.google_id}`, discordId)
+        await migratePreferences(`google:${linkedAccount.google_id}`, discordId).catch(() => {})
+      }
+
+      // Step 5: Build JWT
+      if (!sessionSecret) {
+        console.error('[OAuth Discord] DCB_SESSION_SECRET is not set!')
+        fail('jwt', 'DCB_SESSION_SECRET is empty/null')
+        return renderDiagPage(500, 'OAuth Error — Session secret missing')
       }
 
       const payload = {
@@ -326,7 +403,8 @@ module.exports = function buildApi({ discordClient }) {
         google_picture: linkedAccount?.google_picture || null,
       }
 
-      const jwtToken = jwt.sign(payload, sessionSecret, { expiresIn: 60 * 60 * 24 * 30 }) // 30 days
+      const jwtToken = jwt.sign(payload, sessionSecret, { expiresIn: 60 * 60 * 24 * 30 })
+      ok('jwt')
 
       res.cookie('dcb_session', jwtToken, {
         httpOnly: true,
@@ -337,14 +415,18 @@ module.exports = function buildApi({ discordClient }) {
 
       res.clearCookie('dcb_oauth_state')
 
+      console.log('[OAuth Discord] login success for', userResp.data.username, '— redirecting')
+
       if (uiBase) {
         const u = new URL(uiBase)
         u.searchParams.set('dcb_token', jwtToken)
         return res.redirect(u.toString())
       }
       return res.json({ ok: true })
-    } catch (_) {
-      return res.status(500).send('OAuth exchange failed')
+    } catch (err) {
+      console.error('[OAuth Discord] unexpected callback error:', err?.stack || err?.message || err)
+      fail('unexpected', (err?.stack || err?.message || String(err)))
+      return renderDiagPage(500, 'OAuth Error — Unexpected failure')
     }
   })
 
@@ -1430,6 +1512,26 @@ module.exports = function buildApi({ discordClient }) {
       res.json({ ok: true })
     } catch (err) {
       res.status(500).json({ error: 'failed_to_delete_event' })
+    }
+  })
+
+  // ---- Image proxy for Discord CDN (attachment URLs expire) ----
+  app.get('/api/image-proxy', requireAuth, async (req, res) => {
+    try {
+      const url = req.query.url
+      if (!url || typeof url !== 'string') return res.status(400).json({ error: 'missing_url' })
+      // Only proxy Discord CDN domains
+      const parsed = new URL(url)
+      const allowed = ['cdn.discordapp.com', 'media.discordapp.net']
+      if (!allowed.includes(parsed.hostname)) return res.status(403).json({ error: 'domain_not_allowed' })
+      const upstream = await axios.get(url, { responseType: 'stream', timeout: 10000 })
+      const ct = upstream.headers['content-type']
+      if (ct) res.setHeader('Content-Type', ct)
+      res.setHeader('Cache-Control', 'public, max-age=86400')
+      upstream.data.pipe(res)
+    } catch (err) {
+      const status = err?.response?.status || 502
+      res.status(status).json({ error: 'proxy_failed', status })
     }
   })
 
