@@ -1986,7 +1986,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try { return await promise; } catch (e) { console.warn('[stats] query failed:', e.message); return fallback; }
   }
 
-  router.get('/api/stats', async (_req, res) => {
+  app.get('/api/stats', async (_req, res) => {
     try {
       // Run all aggregation queries in parallel for speed
       const [
@@ -2063,7 +2063,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   });
 
   // ── Site analytics tracking (visitors / clicks) ────────────────────
-  router.post('/api/track', async (req, res) => {
+  app.post('/api/track', async (req, res) => {
     try {
       const { metric } = req.body;
       const allowed = ['site_visitors', 'discord_clicks', 'manager_clicks'];
