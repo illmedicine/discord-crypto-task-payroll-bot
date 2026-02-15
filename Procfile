@@ -1,1 +1,1 @@
-worker: bash scripts/start.sh
+web: node index.js

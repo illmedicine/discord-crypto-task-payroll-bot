@@ -1051,5 +1051,10 @@ app.listen(port, () => {
     }
   });
 
-return app;
+  // ── START HTTP SERVER ──────────────────────────────────────────────
+  app.listen(port, () => {
+    console.log(`[API] Server listening on port ${port}`);
+  });
+
+  return app;
 };
