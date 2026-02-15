@@ -4,6 +4,13 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+// Suppress discord.js v14→v15 'ready' rename deprecation (we already use 'clientReady')
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = (warning, ...args) => {
+  if (typeof warning === 'string' && warning.includes('ready event has been renamed')) return;
+  originalEmitWarning.call(process, warning, ...args);
+};
+
 // Better runtime logging for debugging deploy issues
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
