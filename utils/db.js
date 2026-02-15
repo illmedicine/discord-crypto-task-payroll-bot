@@ -468,20 +468,6 @@ const initDb = () => {
       )
     `);
 
-    // Site analytics counters (global website tracking)
-    db.run(`
-      CREATE TABLE IF NOT EXISTS site_analytics (
-        metric TEXT PRIMARY KEY,
-        count INTEGER DEFAULT 0,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Seed default analytics rows
-    db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('site_visitors', 0)`);
-    db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('discord_clicks', 0)`);
-    db.run(`INSERT OR IGNORE INTO site_analytics (metric, count) VALUES ('manager_clicks', 0)`);
-
     // Worker daily snapshots (aggregated stats per day for fast dashboard queries)
     db.run(`
       CREATE TABLE IF NOT EXISTS worker_daily_stats (
@@ -497,6 +483,15 @@ const initDb = () => {
         online_minutes INTEGER DEFAULT 0,
         UNIQUE(guild_id, discord_id, stat_date),
         FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
+      )
+    `);
+
+    // Site analytics (website visitor / click counters)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS site_analytics (
+        metric TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
   });
@@ -1161,38 +1156,6 @@ const getExpiredContests = () => {
   });
 };
 
-const getCompletedContestsAll = (guildId, limit = 20) => {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT id, guild_id, title, description, prize_amount, currency, status,
-              current_entries AS entries, max_entries AS max_entries, ends_at,
-              created_at, 'contest' AS source_type
-       FROM contests
-       WHERE guild_id = ? AND status IN ('completed', 'ended')
-       UNION ALL
-       SELECT id, guild_id, title, description, prize_amount, currency, status,
-              current_participants AS entries, max_participants AS max_entries, ends_at,
-              created_at, 'vote_event' AS source_type
-       FROM vote_events
-       WHERE guild_id = ? AND status IN ('completed', 'ended')
-       UNION ALL
-       SELECT id, guild_id, title, description, payout_amount AS prize_amount,
-              payout_currency AS currency, status,
-              filled_slots AS entries, total_slots AS max_entries, NULL AS ends_at,
-              created_at, 'bulk_task' AS source_type
-       FROM bulk_tasks
-       WHERE guild_id = ? AND (status = 'completed' OR (filled_slots >= total_slots AND total_slots > 0))
-       ORDER BY created_at DESC
-       LIMIT ?`,
-      [guildId, guildId, guildId, limit],
-      (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      }
-    );
-  });
-};
-
 const updateContestStatus = (contestId, status) => {
   return new Promise((resolve, reject) => {
     db.run(
@@ -1435,9 +1398,9 @@ const getVoteEvent = (voteEventId) => {
 const createVoteEventFromSync = (event, images) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
-      // Use INSERT OR REPLACE so re-synced data actually updates status, ends_at, etc.
+      // Use INSERT OR IGNORE so we never fail on duplicates
       db.run(
-        `INSERT OR REPLACE INTO vote_events
+        `INSERT OR IGNORE INTO vote_events
           (id, guild_id, channel_id, message_id, title, description, prize_amount, currency,
            min_participants, max_participants, current_participants, duration_minutes,
            owner_favorite_image_id, created_by, status, ends_at, created_at, qualification_url)
@@ -1542,19 +1505,6 @@ const updateVoteEventMessageId = (voteEventId, messageId) => {
     db.run(
       `UPDATE vote_events SET message_id = ? WHERE id = ?`,
       [messageId, voteEventId],
-      (err) => {
-        if (err) reject(err);
-        else resolve();
-      }
-    );
-  });
-};
-
-const updateVoteEventEndsAt = (voteEventId, endsAt) => {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `UPDATE vote_events SET ends_at = ? WHERE id = ?`,
-      [endsAt, voteEventId],
       (err) => {
         if (err) reject(err);
         else resolve();
@@ -2183,137 +2133,6 @@ const getGuildWorkersSummary = (guildId, days = 30) => {
   });
 };
 
-// ==================== SITE ANALYTICS ====================
-
-const incrementSiteAnalytic = (metric) => {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO site_analytics (metric, count, updated_at) VALUES (?, 1, CURRENT_TIMESTAMP)
-       ON CONFLICT(metric) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP`,
-      [metric],
-      function (err) {
-        if (err) reject(err);
-        else resolve(this.changes);
-      }
-    );
-  });
-};
-
-const getSiteAnalytics = () => {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT metric, count FROM site_analytics`, (err, rows) => {
-      if (err) reject(err);
-      else {
-        const result = {};
-        (rows || []).forEach(r => { result[r.metric] = r.count; });
-        resolve(result);
-      }
-    });
-  });
-};
-
-// ==================== GLOBAL STATS AGGREGATION ====================
-
-const getGlobalStats = () => {
-  return new Promise((resolve, reject) => {
-    const stats = {};
-    let pending = 8; // 7 bot stats + 1 site analytics
-    let failed = false;
-
-    const done = () => {
-      if (failed) return;
-      pending--;
-      if (pending === 0) {
-        resolve({
-          totalTransactions: stats.totalTransactions || 0,
-          eventsHosted: stats.eventsHosted || 0,
-          tasksCreated: stats.tasksCreated || 0,
-          totalPaidOut: stats.totalPaidOut || 0,
-          activeServers: stats.activeServers || 0,
-          totalPayouts: stats.totalPayouts || 0,
-          totalUsers: stats.totalUsers || 0,
-          siteVisitors: stats.siteVisitors || 0,
-          discordClicks: stats.discordClicks || 0,
-          managerClicks: stats.managerClicks || 0,
-          lastUpdated: new Date().toISOString()
-        });
-      }
-    };
-
-    const fail = (err) => {
-      if (!failed) { failed = true; reject(err); }
-    };
-
-    // 1. Total on-chain transactions
-    db.get(`SELECT COUNT(*) as count FROM transactions`, (err, row) => {
-      if (err) return fail(err);
-      stats.totalTransactions = row ? row.count : 0;
-      done();
-    });
-
-    // 2. Events hosted (contests + vote events + scheduled events)
-    db.get(`SELECT
-      (SELECT COUNT(*) FROM contests) +
-      (SELECT COUNT(*) FROM vote_events) +
-      (SELECT COUNT(*) FROM events) as count`, (err, row) => {
-      if (err) return fail(err);
-      stats.eventsHosted = row ? row.count : 0;
-      done();
-    });
-
-    // 3. Tasks created (bulk tasks + legacy tasks)
-    db.get(`SELECT
-      (SELECT COUNT(*) FROM bulk_tasks) +
-      (SELECT COUNT(*) FROM tasks) as count`, (err, row) => {
-      if (err) return fail(err);
-      stats.tasksCreated = row ? row.count : 0;
-      done();
-    });
-
-    // 4. Total paid out (sum of all transaction amounts in SOL)
-    db.get(`SELECT COALESCE(SUM(amount), 0) as total FROM transactions`, (err, row) => {
-      if (err) return fail(err);
-      stats.totalPaidOut = row ? row.total : 0;
-      done();
-    });
-
-    // 5. Active servers (distinct guilds with configured wallets)
-    db.get(`SELECT COUNT(DISTINCT guild_id) as count FROM guild_wallets`, (err, row) => {
-      if (err) return fail(err);
-      stats.activeServers = row ? row.count : 0;
-      done();
-    });
-
-    // 6. Total payouts (contest winners + vote winners + approved proofs)
-    db.get(`SELECT
-      (SELECT COUNT(*) FROM contest_entries WHERE is_winner = 1) +
-      (SELECT COUNT(*) FROM vote_event_participants WHERE is_winner = 1) +
-      (SELECT COUNT(*) FROM proof_submissions WHERE status = 'approved') as count`, (err, row) => {
-      if (err) return fail(err);
-      stats.totalPayouts = row ? row.count : 0;
-      done();
-    });
-
-    // 7. Total registered users
-    db.get(`SELECT COUNT(*) as count FROM users`, (err, row) => {
-      if (err) return fail(err);
-      stats.totalUsers = row ? row.count : 0;
-      done();
-    });
-
-    // 8. Site analytics (visitors, clicks)
-    db.all(`SELECT metric, count FROM site_analytics`, (err, rows) => {
-      if (err) return fail(err);
-      (rows || []).forEach(r => {
-        if (r.metric === 'site_visitors') stats.siteVisitors = r.count;
-        if (r.metric === 'discord_clicks') stats.discordClicks = r.count;
-        if (r.metric === 'manager_clicks') stats.managerClicks = r.count;
-      });
-      done();
-    });
-  });
-};
-
 module.exports = {
   db,
   initDb,
@@ -2375,7 +2194,6 @@ module.exports = {
   getExpiredVoteEvents,
   updateVoteEventStatus,
   updateVoteEventMessageId,
-  updateVoteEventEndsAt,
   joinVoteEvent,
   getVoteEventParticipant,
   getVoteEventParticipants,
@@ -2410,7 +2228,6 @@ module.exports = {
   // Dashboard
   getDashboardStats,
   getRecentTransactions,
-  getCompletedContestsAll,
   // Worker / Staff management
   addWorker,
   removeWorker,
@@ -2423,9 +2240,4 @@ module.exports = {
   upsertWorkerDailyStat,
   getWorkerStats,
   getGuildWorkersSummary,
-  // Global stats (public API)
-  getGlobalStats,
-  // Site analytics
-  incrementSiteAnalytic,
-  getSiteAnalytics,
 };

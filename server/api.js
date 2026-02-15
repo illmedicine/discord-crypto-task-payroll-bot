@@ -45,76 +45,6 @@ module.exports = (client) => {
     res.json({ status: 'ok' });
   });
 
-  // ==================== SITE TRACKING (public, fire-and-forget) ====================
-  app.post('/api/track', async (req, res) => {
-    try {
-      const { event } = req.body;
-      const allowed = ['site_visitors', 'discord_clicks', 'manager_clicks'];
-      if (!event || !allowed.includes(event)) {
-        return res.status(400).json({ error: 'Invalid event. Allowed: ' + allowed.join(', ') });
-      }
-      await db.incrementSiteAnalytic(event);
-      res.json({ success: true });
-    } catch (e) {
-      console.error('[API] Track error:', e.message);
-      res.status(500).json({ error: 'Tracking failed' });
-    }
-  });
-
-  // ==================== GLOBAL STATS (public, for website ticker) ====================
-  app.get('/api/stats', async (req, res) => {
-    res.set('Cache-Control', 'public, max-age=60');
-    try {
-      const stats = await db.getGlobalStats();
-
-      // Fetch live wallet balances (treasury + user wallets)
-      let treasuryWalletValue = 0;
-      let userWalletValue = 0;
-      try {
-        const crypto = require('../utils/crypto');
-        const solPrice = await crypto.getSolanaPrice() || 0;
-
-        // Get all guild treasury wallets
-        const guildWallets = await new Promise((resolve, reject) => {
-          db.db.all(`SELECT DISTINCT wallet_address FROM guild_wallets`, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows || []);
-          });
-        });
-        const treasuryBalances = await Promise.allSettled(
-          guildWallets.map(w => crypto.getBalance(w.wallet_address))
-        );
-        const treasurySolTotal = treasuryBalances.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value : 0), 0);
-        treasuryWalletValue = treasurySolTotal * solPrice;
-
-        // Get all user wallets
-        const userWallets = await new Promise((resolve, reject) => {
-          db.db.all(`SELECT DISTINCT solana_address FROM users WHERE solana_address IS NOT NULL`, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows || []);
-          });
-        });
-        const userBalances = await Promise.allSettled(
-          userWallets.map(u => crypto.getBalance(u.solana_address))
-        );
-        const userSolTotal = userBalances.reduce((sum, r) => sum + (r.status === 'fulfilled' ? r.value : 0), 0);
-        userWalletValue = userSolTotal * solPrice;
-      } catch (walletErr) {
-        console.error('[API] Stats wallet balance error:', walletErr.message);
-      }
-
-      res.json({
-        ...stats,
-        treasuryWalletValue,
-        userWalletValue,
-        totalWalletValue: treasuryWalletValue + userWalletValue
-      });
-    } catch (e) {
-      console.error('[API] Stats error:', e.message);
-      res.status(500).json({ error: 'Failed to fetch stats' });
-    }
-  });
-
   // Check which auth providers are configured
   app.get('/api/auth/providers', (req, res) => {
     res.json({
@@ -991,5 +921,116 @@ app.listen(port, () => {
       return res.status(500).json({ error: 'failed_to_list_members' });
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  PUBLIC STATS — website ticker (no auth required)
+  // ══════════════════════════════════════════════════════════════════
+
+  // Promisified wrappers around the raw sqlite3 handle (db.db)
+  const rawDb = db.db;
+  const dbGet = (sql, params = []) => new Promise((resolve, reject) => {
+    rawDb.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
+  });
+  const dbAll = (sql, params = []) => new Promise((resolve, reject) => {
+    rawDb.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
+  });
+  const dbRun = (sql, params = []) => new Promise((resolve, reject) => {
+    rawDb.run(sql, params, function(err) { err ? reject(err) : resolve(this); });
+  });
+
+  /** safe wrapper – returns fallback on DB error so one bad query doesn't sink the whole response */
+  async function safe(promise, fallback = null) {
+    try { return await promise; } catch (e) { console.warn('[stats] query failed:', e.message); return fallback; }
+  }
+
+  app.get('/api/stats', async (_req, res) => {
+    try {
+      const [
+        txRow, contestRow, voteEventRow, eventRow,
+        bulkTaskRow, taskRow, paidRow, serversRow,
+        contestWinners, voteWinners, proofPayouts,
+        usersRow, siteVisitors, discordClicks, managerClicks
+      ] = await Promise.all([
+        safe(dbGet('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM contests'), { c: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM vote_events'), { c: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM events'), { c: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM bulk_tasks'), { c: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM tasks'), { c: 0 }),
+        safe(dbGet('SELECT COALESCE(SUM(amount), 0) AS total FROM transactions'), { total: 0 }),
+        safe(dbGet('SELECT COUNT(DISTINCT guild_id) AS c FROM guild_wallets'), { c: 0 }),
+        safe(dbGet("SELECT COUNT(*) AS c FROM contest_entries WHERE status = 'winner'"), { c: 0 }),
+        safe(dbGet("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
+        safe(dbGet("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM users'), { c: 0 }),
+        safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
+        safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'discord_clicks'"), { count: 0 }),
+        safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
+      ]);
+
+      const totalPaidOutSOL = paidRow.total || 0;
+
+      // Fetch SOL price + wallet balances (best-effort)
+      let solPrice = 0;
+      let treasuryBalanceSOL = 0;
+      try {
+        const cryptoUtils = require('../utils/crypto');
+        solPrice = await cryptoUtils.getSolanaPrice().catch(() => 0);
+        const wallets = await safe(dbAll('SELECT wallet_address FROM guild_wallets WHERE wallet_address IS NOT NULL'), []);
+        const balances = await Promise.all(
+          wallets.map(w => cryptoUtils.getBalance(w.wallet_address).catch(() => 0))
+        );
+        treasuryBalanceSOL = balances.reduce((s, b) => s + b, 0);
+      } catch (e) {
+        console.warn('[stats] wallet/price fetch failed:', e.message);
+      }
+
+      const treasuryWalletValue = treasuryBalanceSOL * solPrice;
+
+      res.json({
+        totalTransactions: txRow.c,
+        eventsHosted: (contestRow.c || 0) + (voteEventRow.c || 0) + (eventRow.c || 0),
+        tasksCreated: (bulkTaskRow.c || 0) + (taskRow.c || 0),
+        totalPaidOut: totalPaidOutSOL * solPrice,
+        totalPaidOutSOL,
+        treasuryWalletValue,
+        userWalletValue: 0,
+        totalWalletValue: treasuryWalletValue,
+        totalWalletValueSOL: treasuryBalanceSOL,
+        activeServers: serversRow.c,
+        totalPayouts: (contestWinners.c || 0) + (voteWinners.c || 0) + (proofPayouts.c || 0),
+        totalUsers: usersRow.c,
+        siteVisitors: siteVisitors?.count || 0,
+        discordClicks: discordClicks?.count || 0,
+        managerClicks: managerClicks?.count || 0,
+        lastUpdated: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('[stats] error:', err);
+      res.status(500).json({ error: 'stats_error' });
+    }
+  });
+
+  // ── Site analytics tracking (visitors / clicks) ────────────────────
+  app.post('/api/track', async (req, res) => {
+    try {
+      const { metric } = req.body;
+      const allowed = ['site_visitors', 'discord_clicks', 'manager_clicks'];
+      if (!metric || !allowed.includes(metric)) {
+        return res.status(400).json({ error: 'invalid_metric' });
+      }
+      await dbRun(
+        `INSERT INTO site_analytics (metric, count, updated_at)
+         VALUES (?, 1, CURRENT_TIMESTAMP)
+         ON CONFLICT(metric) DO UPDATE SET count = count + 1, updated_at = CURRENT_TIMESTAMP`,
+        [metric]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[track] error:', err);
+      res.status(500).json({ error: 'track_error' });
+    }
+  });
+
 return app;
 };
