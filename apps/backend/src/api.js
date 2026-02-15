@@ -1588,27 +1588,39 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // ---- Workers / DCB Roles ----
 
-  // ---- Proof Submissions ----
+  // ---- Proof Submissions (includes vote event qualifications) ----
   app.get('/api/admin/guilds/:guildId/proofs', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const status = req.query.status || 'pending'
       const limit = Math.min(Number(req.query.limit) || 100, 500)
-      let sql, params
-      if (status === 'all') {
-        sql = `SELECT ps.*, ta.assigned_user_id, bt.title, bt.payout_amount, bt.payout_currency
-               FROM proof_submissions ps
-               LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
-               LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
-               WHERE ps.guild_id = ? ORDER BY ps.submitted_at DESC LIMIT ?`
-        params = [req.guild.id, limit]
-      } else {
-        sql = `SELECT ps.*, ta.assigned_user_id, bt.title, bt.payout_amount, bt.payout_currency
-               FROM proof_submissions ps
-               LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
-               LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
-               WHERE ps.guild_id = ? AND ps.status = ? ORDER BY ps.submitted_at DESC LIMIT ?`
-        params = [req.guild.id, status, limit]
-      }
+
+      // Build WHERE fragment for the status filter
+      const statusWhere = status === 'all' ? '' : `WHERE combined.status = ?`
+      const statusParams = status === 'all' ? [] : [status]
+
+      const sql = `
+        SELECT * FROM (
+          SELECT ps.id, bt.title, ta.assigned_user_id, ps.screenshot_url, ps.verification_url,
+                 ps.notes, ps.status, bt.payout_amount, bt.payout_currency, ps.submitted_at,
+                 'task' as source
+          FROM proof_submissions ps
+          LEFT JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+          LEFT JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+          WHERE ps.guild_id = ?
+          UNION ALL
+          SELECT q.id, ve.title, q.user_id as assigned_user_id, q.screenshot_url, NULL as verification_url,
+                 NULL as notes, q.status, ve.prize_amount as payout_amount, ve.currency as payout_currency,
+                 q.submitted_at,
+                 'qualification' as source
+          FROM vote_event_qualifications q
+          JOIN vote_events ve ON q.vote_event_id = ve.id
+          WHERE ve.guild_id = ?
+        ) combined
+        ${statusWhere}
+        ORDER BY combined.submitted_at DESC
+        LIMIT ?`
+
+      const params = [req.guild.id, req.guild.id, ...statusParams, limit]
       const rows = await db.all(sql, params)
       res.json(rows || [])
     } catch (err) {

@@ -14,6 +14,7 @@ type Proof = {
   payout_amount: number
   payout_currency: string
   submitted_at: string
+  source?: 'task' | 'qualification'
 }
 
 interface Props { guildId: string }
@@ -21,7 +22,7 @@ interface Props { guildId: string }
 export default function Proofs({ guildId }: Props) {
   const [proofs, setProofs] = useState<Proof[]>([])
   const [loading, setLoading] = useState(false)
-  const [statusFilter, setStatusFilter] = useState<string>('pending')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
   useEffect(() => { if (guildId) load() }, [guildId, statusFilter])

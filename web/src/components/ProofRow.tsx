@@ -12,6 +12,7 @@ type Proof = {
   payout_amount: number
   payout_currency: string
   submitted_at: string
+  source?: 'task' | 'qualification'
 }
 
 const statusColors: Record<string, string> = {
@@ -48,7 +49,10 @@ export default React.memo(function ProofRow({ proof, style, showActions = true, 
     <div className="table-row" style={{ ...style, display: 'flex', alignItems: 'center', gap: 4, padding: '8px 0' }}>
       <div className="col" style={{ width: 50, flexShrink: 0 }}>{proof.id}</div>
       <div className="col" style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{proof.title || '(untitled)'}</div>
+        <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {proof.source === 'qualification' && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: '#7c5cfc33', color: '#a78bfa', marginRight: 6 }}>Qualification</span>}
+          {proof.title || '(untitled)'}
+        </div>
         {proof.notes && <div style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{proof.notes}</div>}
       </div>
       <div className="col" style={{ width: 120, flexShrink: 0, fontSize: 12, color: '#aaa' }}>{proof.assigned_user_id}</div>
