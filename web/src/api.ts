@@ -40,6 +40,24 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Track consecutive 401s to prevent infinite polling
+let consecutive401s = 0
+api.interceptors.response.use(
+  (response) => { consecutive401s = 0; return response },
+  (error) => {
+    if (error?.response?.status === 401) {
+      consecutive401s++
+      // After 3 consecutive 401s, clear token to force re-login
+      if (consecutive401s >= 3) {
+        try { window.localStorage.removeItem('dcb_token') } catch (_) {}
+      }
+    } else {
+      consecutive401s = 0
+    }
+    return Promise.reject(error)
+  }
+)
+
 export const getAuthUrl = (path = '/auth/discord') => {
   const base = API_BASE || resolveApiBase()
   return `${base.replace(/\/$/, '')}${path}`

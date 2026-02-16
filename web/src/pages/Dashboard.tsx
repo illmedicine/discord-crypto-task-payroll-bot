@@ -150,16 +150,20 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
     }).finally(() => setLoading(false))
   }, [guildId])
 
-  /* ---- Auto-poll stats, contests & balance every 30s ---- */
+  /* ---- Auto-poll stats, contests & balance every 60s (backs off on error) ---- */
   useEffect(() => {
     if (!guildId) return
+    let errorCount = 0
     const id = setInterval(() => {
+      // Back off if repeated errors (server may be restarting)
+      if (errorCount > 3) return
       Promise.all([
         api.get(`/admin/guilds/${guildId}/dashboard/stats`).catch(() => ({ data: {} })),
         api.get(`/admin/guilds/${guildId}/contests`).catch(() => ({ data: [] })),
         api.get(`/admin/guilds/${guildId}/dashboard/activity?limit=10&type=${activityFilter}`).catch(() => ({ data: [] })),
         api.get(`/admin/guilds/${guildId}/dashboard/balance`).catch(() => ({ data: {} })),
       ]).then(([s, c, a, balRes]) => {
+        errorCount = 0
         setStats(s.data as Stats)
         setContests((c.data || []).slice(0, 3) as Contest[])
         setActivity(a.data as Activity[])
@@ -176,8 +180,8 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
             setBudgetCurrency(w.budget_currency || 'SOL')
           }
         }
-      })
-    }, 30000)
+      }).catch(() => { errorCount++ })
+    }, 60000)
     return () => clearInterval(id)
   }, [guildId, activityFilter])
 

@@ -1591,38 +1591,41 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/admin/guilds/:guildId/history/stats', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const gid = req.guild.id
+      const safeQuery = async (label, query, params) => {
+        try { return await db.get(query, params) } catch (e) { console.error(`[history/stats] ${label} query failed:`, e?.message); return null }
+      }
       const [txStats, proofStats, qualStats, voteEventStats, recentTx] = await Promise.all([
-        // Transaction aggregates
-        db.get(`SELECT COUNT(*) as total_count, COALESCE(SUM(amount), 0) as total_amount,
+        safeQuery('transactions',
+          `SELECT COUNT(*) as total_count, COALESCE(SUM(amount), 0) as total_amount,
                 COUNT(CASE WHEN status='confirmed' THEN 1 END) as confirmed_count,
                 COUNT(CASE WHEN status='pending' THEN 1 END) as pending_count,
                 COALESCE(SUM(CASE WHEN created_at > datetime('now', '-7 days') THEN amount ELSE 0 END), 0) as week_amount,
                 COUNT(CASE WHEN created_at > datetime('now', '-7 days') THEN 1 END) as week_count,
                 COALESCE(SUM(CASE WHEN created_at > datetime('now', '-30 days') THEN amount ELSE 0 END), 0) as month_amount
                 FROM transactions WHERE guild_id = ?`, [gid]),
-        // Proof aggregates
-        db.get(`SELECT COUNT(*) as total,
+        safeQuery('proofs',
+          `SELECT COUNT(*) as total,
                 COUNT(CASE WHEN status='pending' THEN 1 END) as pending,
                 COUNT(CASE WHEN status='approved' THEN 1 END) as approved,
                 COUNT(CASE WHEN status='rejected' THEN 1 END) as rejected,
                 COUNT(CASE WHEN submitted_at > datetime('now', '-7 days') THEN 1 END) as week_submissions
                 FROM proof_submissions WHERE guild_id = ?`, [gid]),
-        // Qualification aggregates
-        db.get(`SELECT COUNT(*) as total,
-                COUNT(CASE WHEN status='approved' THEN 1 END) as approved,
-                COUNT(CASE WHEN status='pending' THEN 1 END) as pending,
-                COUNT(CASE WHEN status='rejected' THEN 1 END) as rejected
+        safeQuery('qualifications',
+          `SELECT COUNT(*) as total,
+                COUNT(CASE WHEN q.status='approved' THEN 1 END) as approved,
+                COUNT(CASE WHEN q.status='pending' THEN 1 END) as pending,
+                COUNT(CASE WHEN q.status='rejected' THEN 1 END) as rejected
                 FROM vote_event_qualifications q
                 JOIN vote_events ve ON q.vote_event_id = ve.id
                 WHERE ve.guild_id = ?`, [gid]),
-        // Vote event aggregates
-        db.get(`SELECT COUNT(*) as total,
+        safeQuery('voteEvents',
+          `SELECT COUNT(*) as total,
                 COUNT(CASE WHEN status='active' THEN 1 END) as active,
                 COUNT(CASE WHEN status IN ('completed','ended') THEN 1 END) as completed,
                 COALESCE(SUM(current_participants), 0) as total_participants
                 FROM vote_events WHERE guild_id = ?`, [gid]),
-        // Most recent transaction
-        db.get(`SELECT * FROM transactions WHERE guild_id = ? ORDER BY created_at DESC LIMIT 1`, [gid]),
+        safeQuery('recentTx',
+          `SELECT * FROM transactions WHERE guild_id = ? ORDER BY created_at DESC LIMIT 1`, [gid]),
       ])
       res.json({
         transactions: txStats || {},
@@ -2288,6 +2291,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.status(500).json({ error: 'track_error' });
     }
   });
+
+  // Global error handler — prevents unhandled errors from crashing the server
+  app.use((err, req, res, _next) => {
+    console.error('[express] Unhandled error:', err?.message || err)
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'internal_server_error' })
+    }
+  })
 
   return app
 }
