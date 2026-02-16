@@ -253,21 +253,17 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
           <div className="card-title">Quick Actions</div>
         </div>
         <div className="quick-actions">
-          <button className="quick-action-btn" onClick={() => onNavigate('tasks')}>
-            <span className="qa-icon">📋</span>
-            Create Task
+          <button className="quick-action-btn" onClick={() => onNavigate('workers')}>
+            <span className="qa-icon">👥</span>
+            Workers
+          </button>
+          <button className="quick-action-btn" onClick={() => onNavigate('votes')}>
+            <span className="qa-icon">🗳️</span>
+            Vote Events
           </button>
           <button className="quick-action-btn" onClick={() => onNavigate('history')}>
-            <span className="qa-icon">💸</span>
-            Send Payment
-          </button>
-          <button className="quick-action-btn" onClick={() => onNavigate('contests')}>
-            <span className="qa-icon">🏆</span>
-            Start Contest
-          </button>
-          <button className="quick-action-btn" onClick={() => onNavigate('events')}>
-            <span className="qa-icon">📅</span>
-            Schedule Event
+            <span className="qa-icon">📜</span>
+            History
           </button>
         </div>
       </div>

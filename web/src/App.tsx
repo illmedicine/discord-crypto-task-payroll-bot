@@ -29,6 +29,7 @@ export default function App() {
   const [authProviders, setAuthProviders] = useState<{ discord: boolean; google: boolean }>({ discord: true, google: false })
   const [prefsLoaded, setPrefsLoaded] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [qualifyEventId, setQualifyEventId] = useState<number | null>(null)
   const profileRef = useRef<HTMLDivElement>(null)
 
@@ -126,6 +127,7 @@ export default function App() {
   const navigate = (p: Page) => {
     setPage(p)
     window.location.hash = p
+    setSidebarOpen(false)
     if (prefsLoaded) savePrefs(guildId, p)
   }
 
@@ -181,8 +183,11 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {/* Mobile overlay */}
+      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
+
       {/* Sidebar */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
           <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" className="sidebar-brand-logo" />
           <span className="sidebar-brand-text">DCB Event Manager</span>
@@ -276,6 +281,9 @@ export default function App() {
       {/* Main Content */}
       <div className="main-content">
         <div className="top-bar">
+          <button className="hamburger-btn" onClick={() => setSidebarOpen(v => !v)} aria-label="Toggle menu">
+            <span /><span /><span />
+          </button>
           <select
             className="top-bar-guild-select"
             value={guildId}
