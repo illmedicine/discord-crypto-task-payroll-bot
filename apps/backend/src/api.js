@@ -2206,6 +2206,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         serversRow,
         contestWinners, voteWinners, proofPayouts,
         usersRow,
+        treasuryWalletCount, userWalletCount,
         siteVisitors, discordClicks, managerClicks
       ] = await Promise.all([
         safe(db.get('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
@@ -2220,6 +2221,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM users'), { c: 0 }),
+        // Wallet counts
+        safe(db.get('SELECT COUNT(*) AS c FROM guild_wallets WHERE wallet_address IS NOT NULL'), { c: 0 }),
+        safe(db.get('SELECT COUNT(*) AS c FROM users WHERE solana_address IS NOT NULL'), { c: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'discord_clicks'"), { count: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
@@ -2234,12 +2238,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       try {
         const cryptoUtils = require('../../../utils/crypto');
         solPrice = await cryptoUtils.getSolanaPrice().catch(() => 0);
-        // Sum all guild treasury wallets
-        const wallets = await safe(db.all('SELECT wallet_address FROM guild_wallets WHERE wallet_address IS NOT NULL'), []);
-        const balances = await Promise.all(
-          wallets.map(w => cryptoUtils.getBalance(w.wallet_address).catch(() => 0))
+
+        // Treasury wallets
+        const treasuryWallets = await safe(db.all('SELECT wallet_address FROM guild_wallets WHERE wallet_address IS NOT NULL'), []);
+        const treasuryBalances = await Promise.all(
+          treasuryWallets.map(w => cryptoUtils.getBalance(w.wallet_address).catch(() => 0))
         );
-        treasuryBalanceSOL = balances.reduce((s, b) => s + b, 0);
+        treasuryBalanceSOL = treasuryBalances.reduce((s, b) => s + b, 0);
+
+        // User wallets
+        const userWallets = await safe(db.all('SELECT solana_address FROM users WHERE solana_address IS NOT NULL'), []);
+        const userBalances = await Promise.all(
+          userWallets.map(w => cryptoUtils.getBalance(w.solana_address).catch(() => 0))
+        );
+        userBalanceSOL = userBalances.reduce((s, b) => s + b, 0);
       } catch (e) {
         console.warn('[stats] wallet/price fetch failed:', e.message);
       }
@@ -2254,9 +2266,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         totalPaidOut: totalPaidOutSOL * solPrice,
         totalPaidOutSOL,
         treasuryWalletValue,
+        treasuryWalletValueSOL: treasuryBalanceSOL,
         userWalletValue,
+        userWalletValueSOL: userBalanceSOL,
         totalWalletValue: treasuryWalletValue + userWalletValue,
         totalWalletValueSOL: treasuryBalanceSOL + userBalanceSOL,
+        treasuryWalletsConnected: treasuryWalletCount.c,
+        userWalletsConnected: userWalletCount.c,
         activeServers: serversRow.c,
         totalPayouts: (contestWinners.c || 0) + (voteWinners.c || 0) + (proofPayouts.c || 0),
         totalUsers: usersRow.c,
