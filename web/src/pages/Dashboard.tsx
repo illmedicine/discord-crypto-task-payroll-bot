@@ -150,7 +150,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
     }).finally(() => setLoading(false))
   }, [guildId])
 
-  /* ---- Auto-poll stats & contests every 30s ---- */
+  /* ---- Auto-poll stats, contests & balance every 30s ---- */
   useEffect(() => {
     if (!guildId) return
     const id = setInterval(() => {
@@ -158,10 +158,24 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
         api.get(`/admin/guilds/${guildId}/dashboard/stats`).catch(() => ({ data: {} })),
         api.get(`/admin/guilds/${guildId}/contests`).catch(() => ({ data: [] })),
         api.get(`/admin/guilds/${guildId}/dashboard/activity?limit=10&type=${activityFilter}`).catch(() => ({ data: [] })),
-      ]).then(([s, c, a]) => {
+        api.get(`/admin/guilds/${guildId}/dashboard/balance`).catch(() => ({ data: {} })),
+      ]).then(([s, c, a, balRes]) => {
         setStats(s.data as Stats)
         setContests((c.data || []).slice(0, 3) as Contest[])
         setActivity(a.data as Activity[])
+        // Update balance if available
+        if (balRes.data?.wallet_address) {
+          setWalletAddress(balRes.data.wallet_address)
+          if (balRes.data?.sol_balance !== null && balRes.data?.sol_balance !== undefined) {
+            setSolBalance(balRes.data.sol_balance)
+          }
+          const w = balRes.data?.wallet
+          if (w) {
+            setBudgetTotal(w.budget_total || 0)
+            setBudgetSpent(w.budget_spent || 0)
+            setBudgetCurrency(w.budget_currency || 'SOL')
+          }
+        }
       })
     }, 30000)
     return () => clearInterval(id)

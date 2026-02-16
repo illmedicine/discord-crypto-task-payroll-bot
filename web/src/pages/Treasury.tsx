@@ -26,6 +26,7 @@ type Transaction = {
 
 type Props = {
   guildId: string
+  isOwner?: boolean
 }
 
 function shortAddr(addr: string): string {
@@ -33,13 +34,14 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
-export default function Treasury({ guildId }: Props) {
+export default function Treasury({ guildId, isOwner = true }: Props) {
   const [wallet, setWallet] = useState<Wallet | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [solBalance, setSolBalance] = useState<number | null>(null)
   const [balLoading, setBalLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   // Form state for connecting wallet
   const [inputAddr, setInputAddr] = useState('')
@@ -53,12 +55,20 @@ export default function Treasury({ guildId }: Props) {
   const load = async () => {
     if (!guildId) return
     setLoading(true)
+    setLoadError(null)
     try {
       const [walletRes, txRes] = await Promise.all([
-        api.get(`/admin/guilds/${guildId}/wallet`),
-        api.get(`/admin/guilds/${guildId}/transactions?limit=10`),
+        api.get(`/admin/guilds/${guildId}/wallet`).catch((err) => {
+          console.error('[Treasury] wallet fetch failed:', err?.response?.status, err?.response?.data || err?.message)
+          return { data: null }
+        }),
+        api.get(`/admin/guilds/${guildId}/transactions?limit=10`).catch((err) => {
+          console.error('[Treasury] transactions fetch failed:', err?.response?.status, err?.response?.data || err?.message)
+          return { data: [] }
+        }),
       ])
       const w = walletRes.data as Wallet | null
+      console.log('[Treasury] wallet data:', w ? `${w.wallet_address} (${w.network})` : 'none')
       setWallet(w)
       setTransactions((txRes.data || []) as Transaction[])
       if (w) {
@@ -68,7 +78,9 @@ export default function Treasury({ guildId }: Props) {
       } else {
         setSolBalance(null)
       }
-    } catch {
+    } catch (err: any) {
+      console.error('[Treasury] load error:', err?.message || err)
+      setLoadError('Failed to load treasury data. Please try refreshing.')
       setWallet(null)
     } finally {
       setLoading(false)
@@ -80,13 +92,19 @@ export default function Treasury({ guildId }: Props) {
       setBalLoading(true)
       // Try backend first (server-side RPC, no CORS issues)
       try {
+        console.log('[Treasury] Fetching balance from backend for', address)
         const balRes = await api.get(`/admin/guilds/${guildId}/dashboard/balance`)
         console.log('[Treasury] Balance API response:', JSON.stringify(balRes.data))
         if (balRes.data?.sol_balance !== null && balRes.data?.sol_balance !== undefined) {
           setSolBalance(balRes.data.sol_balance)
           return
         }
-      } catch (_) { /* fall through to client-side */ }
+        if (balRes.data?.debug?.rpc_error) {
+          console.warn('[Treasury] RPC error from backend:', balRes.data.debug.rpc_error)
+        }
+      } catch (err: any) {
+        console.warn('[Treasury] Backend balance failed:', err?.response?.status, err?.response?.data || err?.message, '— falling back to client-side RPC')
+      }
       // Fallback: client-side RPC
       const defaultRpc = network === 'devnet'
         ? 'https://api.devnet.solana.com'
@@ -104,11 +122,14 @@ export default function Treasury({ guildId }: Props) {
       })
       const data = await resp.json()
       if (data?.result?.value !== undefined) {
+        console.log('[Treasury] Client-side RPC balance:', data.result.value / 1e9, 'SOL')
         setSolBalance(data.result.value / 1e9)
       } else {
+        console.warn('[Treasury] Client-side RPC returned no value:', JSON.stringify(data))
         setSolBalance(null)
       }
-    } catch {
+    } catch (err: any) {
+      console.error('[Treasury] Balance fetch completely failed:', err?.message || err)
       setSolBalance(null)
     } finally {
       setBalLoading(false)
@@ -119,6 +140,7 @@ export default function Treasury({ guildId }: Props) {
     setWallet(null)
     setSolBalance(null)
     setTransactions([])
+    setLoadError(null)
     if (guildId) load()
   }, [guildId])
 
@@ -207,14 +229,21 @@ export default function Treasury({ guildId }: Props) {
         </button>
       </div>
 
-      {/* No wallet connected - show connect form */}
+      {/* No wallet connected - show connect form (owner only) or message */}
       {!wallet && !loading && (
         <div className="card treasury-connect-card">
           <div className="card-header"><div className="card-title">Connect Treasury Wallet</div></div>
           <div className="empty-state" style={{ padding: '16px 0' }}>
             <div className="empty-state-icon">🔗</div>
-            <div className="empty-state-text">No treasury wallet is connected to this server.<br />Connect a Solana wallet to manage payouts and budgets.</div>
+            <div className="empty-state-text">No treasury wallet is connected to this server.{isOwner ? <><br />Connect a Solana wallet to manage payouts and budgets.</> : <><br />Ask the server owner to connect a treasury wallet.</>}</div>
           </div>
+          {loadError && (
+            <div style={{ background: 'var(--bg-secondary, #1a1a2e)', border: '1px solid var(--danger, #e74c3c)', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--danger, #e74c3c)' }}>
+              {loadError}
+            </div>
+          )}
+          {isOwner && (
+          <>
           <div style={{ background: 'var(--bg-secondary, #1a1a2e)', border: '1px solid var(--border-color, #333)', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--text-muted, #aaa)' }}>
             <strong style={{ color: 'var(--text-primary, #fff)' }}>🔒 Important:</strong> Only the <strong>Server Owner</strong> can connect the treasury wallet. Once connected, the wallet is <strong>permanently locked</strong> to this server and cannot be changed.
           </div>
@@ -250,6 +279,8 @@ export default function Treasury({ guildId }: Props) {
               {saving ? <span className="spinner" /> : '🔗 Connect Wallet'}
             </button>
           </form>
+          </>
+          )}
         </div>
       )}
 

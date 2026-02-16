@@ -308,7 +308,7 @@ export default function App() {
             {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
             {page === 'votes' && <Events guildId={guildId} isOwner={isOwner} />}
             {page === 'history' && <History guildId={guildId} />}
-            {page === 'treasury' && <Treasury guildId={guildId} />}
+            {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} />}
           </ProfilerLogger>
         </main>

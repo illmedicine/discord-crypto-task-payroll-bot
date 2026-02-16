@@ -118,7 +118,10 @@ module.exports = function buildApi({ discordClient }) {
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
       // Resolve the Discord ID: if logged in via Google, look up the linked Discord account
       const discordId = await resolveCanonicalUserId(req.user)
-      if (!discordId) return res.status(403).json({ error: 'forbidden_not_guild_owner' })
+      if (!discordId) {
+        console.warn(`[requireGuildOwner] No discordId resolved for user:`, req.user?.id)
+        return res.status(403).json({ error: 'forbidden_not_guild_owner' })
+      }
       // Check ownership via bot cache first
       if (discordId === guild.ownerId) {
         req.guild = guild
@@ -138,10 +141,16 @@ module.exports = function buildApi({ discordClient }) {
             req.userRole = 'owner'
             return next()
           }
+          console.warn(`[requireGuildOwner] OAuth fallback: user ${discordId} is NOT owner of guild ${guildId} (owner in cache: ${guild.ownerId})`)
+        } else {
+          console.warn(`[requireGuildOwner] No OAuth token found for user ${discordId}`)
         }
-      } catch (_) {}
+      } catch (oauthErr) {
+        console.warn(`[requireGuildOwner] OAuth fallback failed for user ${discordId}:`, oauthErr?.response?.status || oauthErr?.message)
+      }
       return res.status(403).json({ error: 'forbidden_not_guild_owner' })
-    } catch (_) {
+    } catch (err) {
+      console.error(`[requireGuildOwner] Guild fetch failed:`, err?.message)
       return res.status(404).json({ error: 'guild_not_found' })
     }
   }
@@ -154,7 +163,10 @@ module.exports = function buildApi({ discordClient }) {
       const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
       const discordId = await resolveCanonicalUserId(req.user)
-      if (!discordId) return res.status(403).json({ error: 'forbidden_no_discord_id' })
+      if (!discordId) {
+        console.warn(`[requireGuildMember] No discordId resolved for user:`, req.user?.id)
+        return res.status(403).json({ error: 'forbidden_no_discord_id' })
+      }
       // Owner always passes
       if (discordId === guild.ownerId) {
         req.guild = guild
@@ -182,12 +194,19 @@ module.exports = function buildApi({ discordClient }) {
               req.userRole = userGuild.owner ? 'owner' : ((perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n) ? 'admin' : 'member'
               return next()
             }
+          } else {
+            console.warn(`[requireGuildMember] No OAuth token found for user ${discordId}`)
           }
-        } catch (_) {}
+        } catch (oauthErr) {
+          console.warn(`[requireGuildMember] OAuth fallback failed for user ${discordId}:`, oauthErr?.response?.status || oauthErr?.message)
+        }
+        console.warn(`[requireGuildMember] User ${discordId} denied access to guild ${guildId} (owner: ${guild.ownerId})`)
         return res.status(403).json({ error: 'forbidden_not_guild_member' })
       }
-    } catch (_) {
+    } catch (err) {
+      console.error(`[requireGuildMember] Guild fetch failed:`, err?.message)
       return res.status(404).json({ error: 'guild_not_found' })
+    }
     }
   }
 
