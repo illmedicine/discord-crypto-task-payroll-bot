@@ -349,7 +349,9 @@ db.serialize(() => {
   )
 
   // Ensure discord_access_token column exists (migration for existing DBs)
-  db.run(`ALTER TABLE user_accounts ADD COLUMN discord_access_token TEXT`).catch(() => {})
+  db.run(`ALTER TABLE user_accounts ADD COLUMN discord_access_token TEXT`, (err) => {
+    if (err && !err.message.includes('duplicate column')) console.warn('[db] discord_access_token migration:', err.message)
+  })
 
   // User preferences – persists selected guild, page, etc. across sessions
   db.run(
