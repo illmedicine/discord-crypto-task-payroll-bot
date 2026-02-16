@@ -340,12 +340,16 @@ db.serialize(() => {
       google_email TEXT,
       google_name TEXT,
       google_picture TEXT,
+      discord_access_token TEXT,
       last_login_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(discord_id),
       UNIQUE(google_id)
     )`
   )
+
+  // Ensure discord_access_token column exists (migration for existing DBs)
+  db.run(`ALTER TABLE user_accounts ADD COLUMN discord_access_token TEXT`).catch(() => {})
 
   // User preferences – persists selected guild, page, etc. across sessions
   db.run(

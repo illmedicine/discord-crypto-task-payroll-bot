@@ -137,7 +137,7 @@ export default function App() {
   }
 
   const userRole = guilds.find(g => g.id === guildId)?.role || 'member'
-  const isOwner = userRole === 'owner'
+  const isOwner = userRole === 'owner' || userRole === 'admin'
 
   // Not logged in - show login screen
   if (!user) {
@@ -291,7 +291,7 @@ export default function App() {
           >
             {guilds.length === 0 && <option value="">No servers</option>}
             {guilds.map(g => (
-              <option key={g.id} value={g.id}>{g.name}{g.role === 'member' ? ' (member)' : ''}</option>
+              <option key={g.id} value={g.id}>{g.name}{g.role && g.role !== 'owner' ? ` (${g.role})` : ''}</option>
             ))}
           </select>
           <div className="top-bar-actions">
