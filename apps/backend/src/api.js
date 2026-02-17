@@ -47,6 +47,58 @@ module.exports = function buildApi({ discordClient }) {
     return `${proto}://${req.get('host')}`
   }
 
+  // ---- Raw Discord REST helpers (reliable in REST-only mode, no gateway needed) ----
+  const BOT_TOKEN = process.env.DISCORD_TOKEN
+  async function discordBotAPI(path) {
+    const res = await fetch(`https://discord.com/api/v10${path}`, {
+      headers: { Authorization: `Bot ${BOT_TOKEN}` }
+    })
+    if (!res.ok) throw new Error(`Discord API ${res.status}: ${path}`)
+    return res.json()
+  }
+
+  // Cache guild info fetched via REST (avoids repeated API calls)
+  const _guildInfoCache = new Map()
+  async function getGuildInfoViaREST(guildId) {
+    const cached = _guildInfoCache.get(guildId)
+    if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return cached.data
+    try {
+      const data = await discordBotAPI(`/guilds/${guildId}`)
+      _guildInfoCache.set(guildId, { data, ts: Date.now() })
+      return data
+    } catch { return null }
+  }
+
+  // Resolve a guild to a proper discord.js Guild object (with channels/members managers)
+  // or fall back to raw REST guild info. Stubs from populateGuildCache lack these managers.
+  async function resolveGuild(guildId) {
+    // 1. Check cache for a proper Guild object (has channels manager)
+    let guild = discordClient.guilds.cache.get(guildId)
+    if (guild && typeof guild.channels?.fetch === 'function') return guild
+
+    // 2. Try discord.js guilds.fetch — creates a proper Guild with managers
+    try {
+      guild = await discordClient.guilds.fetch(guildId)
+      if (guild && typeof guild.channels?.fetch === 'function') return guild
+    } catch (err) {
+      console.warn(`[resolveGuild] guilds.fetch failed for ${guildId}:`, err?.message)
+    }
+
+    // 3. Raw REST fallback — returns guild info without discord.js managers
+    const info = await getGuildInfoViaREST(guildId)
+    if (info) {
+      return { id: info.id, name: info.name, ownerId: info.owner_id, icon: info.icon, _restOnly: true }
+    }
+    return null
+  }
+
+  // Fetch a guild member via raw REST (works without gateway)
+  async function fetchMemberViaREST(guildId, userId) {
+    try {
+      return await discordBotAPI(`/guilds/${guildId}/members/${userId}`)
+    } catch { return null }
+  }
+
   const sessionSecret = process.env.DCB_SESSION_SECRET
 
   function getBearerToken(req) {
@@ -170,16 +222,15 @@ module.exports = function buildApi({ discordClient }) {
     try {
       const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
-      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(() => null)
+      const guild = await resolveGuild(guildId)
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId) {
         console.warn(`[requireGuildOwner] No discordId resolved for user:`, req.user?.id)
         return res.status(403).json({ error: 'forbidden_not_guild_owner' })
       }
-      // Check ownership via bot cache first (may not have ownerId in REST-only mode)
-      const ownerId = guild.ownerId || (guild.fetch ? (await guild.fetch().catch(() => ({}))).ownerId : null)
-      if (discordId === ownerId) {
+      // Check ownership (resolveGuild provides ownerId from REST or cache)
+      if (discordId === guild.ownerId) {
         req.guild = guild
         req.userRole = 'owner'
         return next()
@@ -214,30 +265,29 @@ module.exports = function buildApi({ discordClient }) {
     try {
       const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
-      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(() => null)
+      const guild = await resolveGuild(guildId)
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId) {
         console.warn(`[requireGuildMember] No discordId resolved for user:`, req.user?.id)
         return res.status(403).json({ error: 'forbidden_no_discord_id' })
       }
-      // Owner always passes
-      const memberOwnerId = guild.ownerId || (guild.fetch ? (await guild.fetch().catch(() => ({}))).ownerId : null)
-      if (discordId === memberOwnerId) {
+      // Owner always passes (resolveGuild provides ownerId)
+      if (discordId === guild.ownerId) {
         req.guild = guild
         req.userRole = 'owner'
         return next()
       }
-      // Check if user is a guild member via bot cache (may not work in REST-only mode)
+      // Check if user is a guild member via bot's guild object
       try {
-        if (guild.members) {
+        if (typeof guild.members?.fetch === 'function') {
           const member = await guild.members.fetch(discordId)
           req.guild = guild
           const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
           req.userRole = hasAdmin ? 'admin' : 'member'
           return next()
         }
-        throw new Error('No members manager (REST-only mode)')
+        throw new Error('No members manager (REST-only fallback)')
       } catch (_) {
         // Fallback: check via user's stored Discord OAuth token (with auto-refresh)
         const userGuilds = await fetchUserGuildsViaOAuth(discordId)
@@ -748,18 +798,19 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         }
       }
     } else {
-      // Fallback: iterate bot's guild cache (when OAuth token unavailable)
+      // Fallback: use raw REST to check each guild (when OAuth token unavailable)
       for (const g of discordClient.guilds.cache.values()) {
         try {
-          const guild = await g.fetch()
-          if (guild.ownerId === discordId) {
-            results.push({ id: guild.id, name: guild.name, role: 'owner' })
+          const guildInfo = await getGuildInfoViaREST(g.id)
+          if (!guildInfo) continue
+          if (guildInfo.owner_id === discordId) {
+            results.push({ id: g.id, name: guildInfo.name || g.name, role: 'owner' })
           } else if (discordId) {
-            try {
-              const member = await guild.members.fetch(discordId)
-              const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
-              results.push({ id: guild.id, name: guild.name, role: hasAdmin ? 'admin' : 'member' })
-            } catch (_) { /* not a member */ }
+            const member = await fetchMemberViaREST(g.id, discordId)
+            if (member) {
+              // Check permissions from member roles (simplified — mark as member)
+              results.push({ id: g.id, name: guildInfo.name || g.name, role: 'member' })
+            }
           }
         } catch (_) {
         }
@@ -769,13 +820,27 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   app.get('/api/admin/guilds/:guildId/channels', requireAuth, requireGuildMember, async (req, res) => {
-    const channels = await req.guild.channels.fetch()
-    const out = []
-    for (const c of channels.values()) {
-      if (c && (c.type === 0 || c.type === 5)) out.push({ id: c.id, name: c.name, type: c.type })
+    try {
+      let out = []
+      if (typeof req.guild.channels?.fetch === 'function') {
+        // Proper discord.js Guild — use channels manager
+        const channels = await req.guild.channels.fetch()
+        for (const c of channels.values()) {
+          if (c && (c.type === 0 || c.type === 5)) out.push({ id: c.id, name: c.name, type: c.type })
+        }
+      } else {
+        // REST-only fallback — fetch channels via raw REST
+        const channels = await discordBotAPI(`/guilds/${req.params.guildId}/channels`)
+        for (const c of channels) {
+          if (c.type === 0 || c.type === 5) out.push({ id: c.id, name: c.name, type: c.type })
+        }
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name))
+      res.json(out)
+    } catch (err) {
+      console.error('[channels] Fetch error:', err?.message)
+      res.status(500).json({ error: 'channel_fetch_failed' })
     }
-    out.sort((a, b) => a.name.localeCompare(b.name))
-    res.json(out)
   })
 
   app.get('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildMember, async (req, res) => {
@@ -2086,8 +2151,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Enrich with Discord data
       const enriched = await Promise.all((rows || []).map(async (w) => {
         try {
-          const member = await req.guild.members.fetch(w.discord_id)
-          return { ...w, avatar: member.user.displayAvatarURL({ size: 64 }), display_name: member.displayName, status: member.presence?.status || 'offline', joined_guild_at: member.joinedAt?.toISOString() || null, account_created_at: member.user.createdAt?.toISOString() || null }
+          if (typeof req.guild.members?.fetch === 'function') {
+            const member = await req.guild.members.fetch(w.discord_id)
+            return { ...w, avatar: member.user.displayAvatarURL({ size: 64 }), display_name: member.displayName, status: member.presence?.status || 'offline', joined_guild_at: member.joinedAt?.toISOString() || null, account_created_at: member.user.createdAt?.toISOString() || null }
+          }
+          // REST-only fallback
+          const m = await fetchMemberViaREST(req.guild.id, w.discord_id)
+          if (m) {
+            const avatar = m.user?.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=64` : null
+            return { ...w, avatar, display_name: m.nick || m.user?.global_name || m.user?.username || w.username, status: 'offline', joined_guild_at: m.joined_at || null, account_created_at: null }
+          }
+          return { ...w, avatar: null, display_name: w.username, status: 'offline', joined_guild_at: null, account_created_at: null }
         } catch (_) {
           return { ...w, avatar: null, display_name: w.username, status: 'offline', joined_guild_at: null, account_created_at: null }
         }
@@ -2105,7 +2179,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (!discord_id) return res.status(400).json({ error: 'missing_discord_id' })
       const workerRole = ['staff', 'admin'].includes(role) ? role : 'staff'
       let username = 'unknown'
-      try { const m = await req.guild.members.fetch(discord_id); username = m.user.username } catch (_) {}
+      try {
+        if (typeof req.guild.members?.fetch === 'function') {
+          const m = await req.guild.members.fetch(discord_id); username = m.user.username
+        } else {
+          const m = await fetchMemberViaREST(req.guild.id, discord_id)
+          if (m?.user?.username) username = m.user.username
+        }
+      } catch (_) {}
       await db.run(
         `INSERT INTO dcb_workers (guild_id, discord_id, username, role, added_by) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(guild_id, discord_id) DO UPDATE SET username=excluded.username, role=excluded.role, added_by=excluded.added_by, removed_at=NULL, added_at=CURRENT_TIMESTAMP`,
@@ -2155,12 +2236,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const activity = await db.all('SELECT * FROM worker_activity WHERE guild_id = ? AND discord_id = ? ORDER BY created_at DESC LIMIT 50', [req.guild.id, req.params.discordId])
       let enriched = { ...worker, ...(stats || {}), activity: activity || [] }
       try {
-        const member = await req.guild.members.fetch(req.params.discordId)
-        enriched.avatar = member.user.displayAvatarURL({ size: 128 })
-        enriched.display_name = member.displayName
-        enriched.status = member.presence?.status || 'offline'
-        enriched.joined_guild_at = member.joinedAt?.toISOString() || null
-        enriched.account_created_at = member.user.createdAt?.toISOString() || null
+        if (typeof req.guild.members?.fetch === 'function') {
+          const member = await req.guild.members.fetch(req.params.discordId)
+          enriched.avatar = member.user.displayAvatarURL({ size: 128 })
+          enriched.display_name = member.displayName
+          enriched.status = member.presence?.status || 'offline'
+          enriched.joined_guild_at = member.joinedAt?.toISOString() || null
+          enriched.account_created_at = member.user.createdAt?.toISOString() || null
+        } else {
+          const m = await fetchMemberViaREST(req.guild.id, req.params.discordId)
+          if (m) {
+            enriched.avatar = m.user?.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=128` : null
+            enriched.display_name = m.nick || m.user?.global_name || m.user?.username || worker.username
+            enriched.status = 'offline'
+            enriched.joined_guild_at = m.joined_at || null
+          }
+        }
       } catch (_) {}
       res.json(enriched)
     } catch (err) {
@@ -2185,10 +2276,26 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   app.get('/api/admin/guilds/:guildId/members', requireAuth, requireGuildMember, async (req, res) => {
     try {
-      const members = await req.guild.members.fetch({ limit: 100 })
-      const list = members.filter(m => !m.user.bot).map(m => ({
-        id: m.id, username: m.user.username, display_name: m.displayName, avatar: m.user.displayAvatarURL({ size: 32 })
-      }))
+      let list = []
+      if (typeof req.guild.members?.fetch === 'function') {
+        const members = await req.guild.members.fetch({ limit: 100 })
+        list = members.filter(m => !m.user.bot).map(m => ({
+          id: m.id, username: m.user.username, display_name: m.displayName, avatar: m.user.displayAvatarURL({ size: 32 })
+        }))
+      } else {
+        // REST-only fallback
+        try {
+          const members = await discordBotAPI(`/guilds/${req.params.guildId}/members?limit=100`)
+          list = members.filter(m => !m.user?.bot).map(m => ({
+            id: m.user.id,
+            username: m.user.username,
+            display_name: m.nick || m.user.global_name || m.user.username,
+            avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=32` : null
+          }))
+        } catch (restErr) {
+          console.warn('[members] REST fallback failed:', restErr?.message)
+        }
+      }
       res.json(list)
     } catch (err) {
       console.error('[members] GET error:', err?.message || err)
