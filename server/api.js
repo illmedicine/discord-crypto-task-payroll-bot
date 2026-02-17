@@ -948,7 +948,8 @@ app.listen(port, () => {
       const [
         txRow, contestRow, voteEventRow, eventRow,
         bulkTaskRow, taskRow,
-        paidTx, paidContestPrizes, paidVoteEventPrizes, paidLegacyTasks, paidApprovedProofs,
+        paidTx,
+        prizePoolSOL, prizePoolUSD,
         contestWinners, voteWinners, proofPayouts,
         usersRow, treasuryWalletCount, userWalletCount,
         siteVisitors, discordClicks, managerClicks
@@ -959,22 +960,22 @@ app.listen(port, () => {
         safe(dbGet('SELECT COUNT(*) AS c FROM events'), { c: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM bulk_tasks'), { c: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM tasks'), { c: 0 }),
+        // On-chain transactions (direct SOL transfers)
         safe(dbGet('SELECT COALESCE(SUM(amount), 0) AS total FROM transactions'), { total: 0 }),
-        // Contest prizes awarded to winners
-        safe(dbGet(`SELECT COALESCE(SUM(c.prize_amount / CASE WHEN c.num_winners > 0 THEN c.num_winners ELSE 1 END), 0) AS total
-          FROM contest_entries ce JOIN contests c ON ce.contest_id = c.id WHERE ce.is_winner = 1`), { total: 0 }),
-        // Vote event prizes awarded to winners
-        safe(dbGet(`SELECT COALESCE(SUM(ve.prize_amount / CASE WHEN (SELECT COUNT(*) FROM vote_event_participants vp2 WHERE vp2.vote_event_id = ve.id AND vp2.is_winner = 1) > 0
-          THEN (SELECT COUNT(*) FROM vote_event_participants vp2 WHERE vp2.vote_event_id = ve.id AND vp2.is_winner = 1) ELSE 1 END), 0) AS total
-          FROM vote_event_participants vep JOIN vote_events ve ON vep.vote_event_id = ve.id WHERE vep.is_winner = 1`), { total: 0 }),
-        // Legacy task payouts
-        safe(dbGet("SELECT COALESCE(SUM(amount), 0) AS total FROM tasks WHERE status = 'completed' OR transaction_signature IS NOT NULL"), { total: 0 }),
-        // Approved proof submissions
-        safe(dbGet(`SELECT COALESCE(SUM(bt.payout_amount), 0) AS total
-          FROM proof_submissions ps
-          JOIN task_assignments ta ON ps.task_assignment_id = ta.id
-          JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
-          WHERE ps.status = 'approved'`), { total: 0 }),
+        // Total prize pool offered (SOL-denominated events)
+        safe(dbGet(`SELECT COALESCE(SUM(prize_amount), 0) AS total FROM (
+          SELECT prize_amount FROM vote_events WHERE currency = 'SOL' AND prize_amount > 0
+          UNION ALL SELECT prize_amount FROM contests WHERE currency = 'SOL' AND prize_amount > 0
+          UNION ALL SELECT prize_amount FROM events WHERE currency = 'SOL' AND prize_amount > 0
+          UNION ALL SELECT payout_amount AS prize_amount FROM bulk_tasks WHERE payout_currency = 'SOL' AND payout_amount > 0
+        )`), { total: 0 }),
+        // Total prize pool offered (USD-denominated events)
+        safe(dbGet(`SELECT COALESCE(SUM(prize_amount), 0) AS total FROM (
+          SELECT prize_amount FROM vote_events WHERE currency = 'USD' AND prize_amount > 0
+          UNION ALL SELECT prize_amount FROM contests WHERE currency = 'USD' AND prize_amount > 0
+          UNION ALL SELECT prize_amount FROM events WHERE currency = 'USD' AND prize_amount > 0
+          UNION ALL SELECT payout_amount AS prize_amount FROM bulk_tasks WHERE payout_currency = 'USD' AND payout_amount > 0
+        )`), { total: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM contest_entries WHERE is_winner = 1"), { c: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
@@ -990,11 +991,12 @@ app.listen(port, () => {
       // Active servers = actual Discord guilds the bot is in (live count)
       const activeServers = client?.guilds?.cache?.size || 0;
 
-      const totalPaidOutSOL = (paidTx.total || 0)
-        + (paidContestPrizes.total || 0)
-        + (paidVoteEventPrizes.total || 0)
-        + (paidLegacyTasks.total || 0)
-        + (paidApprovedProofs.total || 0);
+      // Sum: on-chain tx (SOL) + SOL prize pools + USD prize pools converted to SOL
+      const txSOL = paidTx.total || 0;
+      const poolSOL = prizePoolSOL.total || 0;
+      const poolUSD = prizePoolUSD.total || 0;
+      const totalPaidOutSOL = txSOL + poolSOL + (solPrice > 0 ? poolUSD / solPrice : 0);
+      const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
 
       // ── Inline Solana helpers (avoids dependency on utils/crypto) ──
       const LAMPORTS_PER_SOL = 1_000_000_000;
@@ -1051,7 +1053,7 @@ app.listen(port, () => {
         totalTransactions: txRow.c,
         eventsHosted: (contestRow.c || 0) + (voteEventRow.c || 0) + (eventRow.c || 0),
         tasksCreated: (bulkTaskRow.c || 0) + (taskRow.c || 0),
-        totalPaidOut: totalPaidOutSOL * solPrice,
+        totalPaidOut: totalPaidOutUSD,
         totalPaidOutSOL,
         treasuryWalletValue,
         treasuryWalletValueSOL: treasuryBalanceSOL,
