@@ -2300,6 +2300,50 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot fetches gambling-event data it doesn't have locally (created via web UI)
+  app.get('/api/internal/gambling-event/:id', requireInternal, async (req, res) => {
+    try {
+      const eventId = Number(req.params.id)
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'not_found' })
+      const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [eventId])
+      res.json({ event, slots })
+    } catch (err) {
+      console.error('[internal] gambling-event fetch error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes gambling bet/status back to keep backend DB in sync
+  app.post('/api/internal/gambling-event-sync', requireInternal, async (req, res) => {
+    try {
+      const { eventId, action, userId, guildId, chosenSlot, betAmount, status } = req.body || {}
+      if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
+
+      if (action === 'bet' && userId && guildId) {
+        await db.run(
+          `INSERT OR IGNORE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`,
+          [eventId, guildId, userId, chosenSlot, betAmount || 0]
+        ).catch(() => {})
+        await db.run(
+          `UPDATE gambling_events SET current_players = (SELECT COUNT(*) FROM gambling_event_bets WHERE gambling_event_id = ?) WHERE id = ?`,
+          [eventId, eventId]
+        ).catch(() => {})
+      } else if (action === 'status_update' && status) {
+        await db.run(
+          `UPDATE gambling_events SET status = ? WHERE id = ?`,
+          [status, eventId]
+        ).catch(() => {})
+        console.log(`[internal] gambling-event #${eventId} status → ${status}`)
+      }
+
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] gambling-event-sync error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot fetches vote-event data it doesn't have locally (created via web UI)
   app.get('/api/internal/vote-event/:id', requireInternal, async (req, res) => {
     try {

@@ -1895,6 +1895,60 @@ const setGamblingEventWinners = (eventId, winnerUserIds) => {
   });
 };
 
+// Insert a gambling event (+ slots) synced from the backend service
+const createGamblingEventFromSync = (event, slots) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run(
+        `INSERT OR REPLACE INTO gambling_events
+          (id, guild_id, channel_id, message_id, title, description, mode, prize_amount, currency, entry_fee,
+           min_players, max_players, current_players, duration_minutes, num_slots, winning_slot, created_by, status, ends_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          event.id,
+          event.guild_id,
+          event.channel_id,
+          event.message_id || null,
+          event.title,
+          event.description || '',
+          event.mode || 'house',
+          event.prize_amount || 0,
+          event.currency || 'SOL',
+          event.entry_fee || 0,
+          event.min_players,
+          event.max_players,
+          event.current_players || 0,
+          event.duration_minutes || null,
+          event.num_slots || 6,
+          event.winning_slot || null,
+          event.created_by,
+          event.status || 'active',
+          event.ends_at || null,
+          event.created_at || new Date().toISOString()
+        ],
+        function (err) {
+          if (err) return reject(err);
+        }
+      );
+
+      if (Array.isArray(slots)) {
+        for (const s of slots) {
+          db.run(
+            `INSERT OR REPLACE INTO gambling_event_slots (gambling_event_id, slot_number, label, color) VALUES (?, ?, ?, ?)`,
+            [event.id, s.slot_number, s.label, s.color || '#888']
+          );
+        }
+      }
+
+      // Final no-op to capture completion
+      db.run('SELECT 1', [], function (err) {
+        if (err) reject(err);
+        else resolve(event.id);
+      });
+    });
+  });
+};
+
 const deleteGamblingEvent = (eventId) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
@@ -2486,6 +2540,7 @@ module.exports = {
   getGuildWorkersSummary,
   // Gambling Event functions
   createGamblingEvent,
+  createGamblingEventFromSync,
   addGamblingEventSlot,
   getGamblingEvent,
   getGamblingEventSlots,

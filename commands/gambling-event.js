@@ -2,6 +2,56 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const db = require('../utils/db');
 const { processGamblingEvent } = require('../utils/gamblingEventProcessor');
 
+// ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
+const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+
+async function fetchGamblingEventFromBackend(eventId) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return null;
+  try {
+    const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event/${eventId}`;
+    const res = await fetch(url, {
+      headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
+    });
+    if (!res.ok) return null;
+    const { event, slots } = await res.json();
+    if (!event) return null;
+
+    // Cache into bot's local database
+    try {
+      await db.createGamblingEventFromSync(event, slots);
+      console.log(`[GamblingEvent] Synced event #${eventId} from backend DB`);
+    } catch (syncErr) {
+      console.warn(`[GamblingEvent] Sync cache warning for #${eventId}:`, syncErr.message);
+    }
+    return event;
+  } catch (err) {
+    console.error(`[GamblingEvent] Backend fetch error for #${eventId}:`, err.message);
+    return null;
+  }
+}
+
+async function getGamblingEventWithFallback(eventId) {
+  let event = await db.getGamblingEvent(eventId);
+  // Always try backend to get authoritative state
+  const backendEvent = await fetchGamblingEventFromBackend(eventId);
+  if (backendEvent) {
+    event = backendEvent;
+  }
+  return event;
+}
+
+// Fire-and-forget sync of bet actions back to backend DB
+function syncBetToBackend(body) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
+  const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event-sync`;
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+    body: JSON.stringify(body)
+  }).catch(err => console.error('[GamblingEvent] Backend sync error:', err.message));
+}
+
 // Default roulette-style slot presets
 const DEFAULT_SLOTS = [
   { label: '🔴 Red',    color: '#E74C3C' },
@@ -173,7 +223,7 @@ module.exports = {
     const eventId = Number(parts[2]);
     const slotNumber = Number(parts[3]);
 
-    const event = await db.getGamblingEvent(eventId);
+    const event = await getGamblingEventWithFallback(eventId);
     if (!event) {
       return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
     }
