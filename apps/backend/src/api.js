@@ -1506,14 +1506,23 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         desc += `\n**🔄 Refund Policy:**\n`
         desc += `• If event is cancelled (not enough players), all entries are refunded\n`
         desc += `• Refunds are sent to your connected wallet address\n`
-
-        desc += `\n**📜 Terms & Conditions:**\n`
-        desc += `• One bet per player — no changes after entry\n`
-        desc += `• Winners determined by random provably-fair wheel spin\n`
-        desc += `• Payouts sent to your connected Solana wallet\n`
-        desc += `• By entering, you agree to these terms and accept the outcome\n`
-        desc += `• Must be 18+ to participate in wagering events`
+      } else {
+        desc += `\n**🏆 Prize Distribution:**\n`
+        if (isPotMode) {
+          desc += `• **90%** of pot split evenly among winner(s)\n`
+          desc += `• **10%** retained by the house (server treasury)\n`
+        } else {
+          desc += `• Prize: **${Number(event.prize_amount || 0)} ${event.currency}** funded by the house\n`
+          desc += `• Full prize amount goes to the winner(s)\n`
+        }
       }
+
+      desc += `\n**📜 Rules & Terms:**\n`
+      desc += `• One bet per player — no changes after entry\n`
+      desc += `• Winners determined by random provably-fair wheel spin\n`
+      desc += `• Payouts sent to your connected Solana wallet\n`
+      desc += `• By entering, you agree to these terms and accept the outcome\n`
+      desc += `• Must be 18+ to participate in wagering events`
 
       const mainEmbed = new EmbedBuilder()
         .setColor('#E74C3C')
