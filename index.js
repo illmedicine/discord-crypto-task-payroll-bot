@@ -271,6 +271,20 @@ client.once('clientReady', async () => {
       console.error('[VoteEvent] Error in vote event end checker:', error);
     }
   }, 30000); // Check every 30 seconds
+
+  // Gambling Event end checker - runs every 30 seconds
+  const { processGamblingEvent } = require('./utils/gamblingEventProcessor');
+  console.log('🎰 Starting gambling event end checker...');
+  setInterval(async () => {
+    try {
+      const expiredGamblingEvents = await db.getExpiredGamblingEvents();
+      for (const event of expiredGamblingEvents) {
+        await processGamblingEvent(event.id, client, 'time');
+      }
+    } catch (error) {
+      console.error('[GamblingEvent] Error in gambling event end checker:', error);
+    }
+  }, 30000);
 });
 
 // Interaction handler
@@ -451,6 +465,24 @@ client.on('interactionCreate', async interaction => {
           await voteEventCommand.handleVoteSubmit(interaction);
         } catch (error) {
           console.error('❌ Error handling image vote button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
+    }
+
+    // Handle gambling event bet buttons
+    if (interaction.customId.startsWith('gamble_bet_')) {
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleBetButton) {
+        try {
+          await gamblingEventCommand.handleBetButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling gambling bet button:', error);
           if (interaction.replied || interaction.deferred) {
             await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
           } else {

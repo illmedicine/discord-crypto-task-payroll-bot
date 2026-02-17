@@ -402,6 +402,59 @@ db.serialize(() => {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   )
+
+  // ---- Gambling Events tables ----
+  db.run(
+    `CREATE TABLE IF NOT EXISTS gambling_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      mode TEXT DEFAULT 'house',
+      prize_amount REAL DEFAULT 0,
+      currency TEXT DEFAULT 'SOL',
+      entry_fee REAL DEFAULT 0,
+      min_players INTEGER NOT NULL DEFAULT 2,
+      max_players INTEGER NOT NULL DEFAULT 20,
+      current_players INTEGER DEFAULT 0,
+      duration_minutes INTEGER,
+      num_slots INTEGER DEFAULT 6,
+      winning_slot INTEGER,
+      created_by TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      ends_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
+  db.run(
+    `CREATE TABLE IF NOT EXISTS gambling_event_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gambling_event_id INTEGER NOT NULL,
+      slot_number INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      color TEXT DEFAULT '#888',
+      UNIQUE(gambling_event_id, slot_number),
+      FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id)
+    )`
+  )
+
+  db.run(
+    `CREATE TABLE IF NOT EXISTS gambling_event_bets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gambling_event_id INTEGER NOT NULL,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      chosen_slot INTEGER NOT NULL,
+      bet_amount REAL DEFAULT 0,
+      is_winner INTEGER DEFAULT 0,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(gambling_event_id, user_id),
+      FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id)
+    )`
+  )
 })
 
 function run(sql, params = []) {

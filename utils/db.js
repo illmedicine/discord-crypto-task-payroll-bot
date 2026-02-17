@@ -358,6 +358,63 @@ const initDb = () => {
     // Migration: add qualification_url to vote_events
     db.run(`ALTER TABLE vote_events ADD COLUMN qualification_url TEXT`, () => {});
 
+    // ---- Gambling Events tables ----
+    db.run(`
+      CREATE TABLE IF NOT EXISTS gambling_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        message_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        mode TEXT DEFAULT 'house',
+        prize_amount REAL DEFAULT 0,
+        currency TEXT DEFAULT 'SOL',
+        entry_fee REAL DEFAULT 0,
+        min_players INTEGER NOT NULL DEFAULT 2,
+        max_players INTEGER NOT NULL DEFAULT 20,
+        current_players INTEGER DEFAULT 0,
+        duration_minutes INTEGER,
+        num_slots INTEGER DEFAULT 6,
+        winning_slot INTEGER,
+        created_by TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        ends_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(created_by) REFERENCES users(discord_id)
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS gambling_event_slots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gambling_event_id INTEGER NOT NULL,
+        slot_number INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        color TEXT DEFAULT '#888',
+        UNIQUE(gambling_event_id, slot_number),
+        FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id)
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS gambling_event_bets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gambling_event_id INTEGER NOT NULL,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        chosen_slot INTEGER NOT NULL,
+        bet_amount REAL DEFAULT 0,
+        is_winner INTEGER DEFAULT 0,
+        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(gambling_event_id, user_id),
+        FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id),
+        FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id),
+        FOREIGN KEY(user_id) REFERENCES users(discord_id)
+      )
+    `);
+
     // User stats table (fast counters for trust/risk scoring)
     db.run(`
       CREATE TABLE IF NOT EXISTS user_stats (
@@ -1672,6 +1729,193 @@ const deleteVoteEvent = (voteEventId) => {
   });
 };
 
+// ==================== GAMBLING EVENT OPERATIONS ====================
+
+const createGamblingEvent = (guildId, channelId, title, description, mode, prizeAmount, currency, entryFee, minPlayers, maxPlayers, durationMinutes, numSlots, createdBy) => {
+  return new Promise((resolve, reject) => {
+    const endsAt = durationMinutes ? new Date(Date.now() + (durationMinutes * 60 * 1000)).toISOString() : null;
+    db.run(
+      `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, channelId, title, description || '', mode || 'house', prizeAmount || 0, currency || 'SOL', entryFee || 0, minPlayers, maxPlayers, durationMinutes, numSlots || 6, createdBy, endsAt],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const addGamblingEventSlot = (eventId, slotNumber, label, color) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO gambling_event_slots (gambling_event_id, slot_number, label, color) VALUES (?, ?, ?, ?)`,
+      [eventId, slotNumber, label, color || '#888'],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getGamblingEvent = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM gambling_events WHERE id = ?`, [eventId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+const getGamblingEventSlots = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC`, [eventId], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
+const getActiveGamblingEvents = (guildId) => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM gambling_events WHERE guild_id = ? AND status = 'active' ORDER BY created_at DESC`, [guildId], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
+const getExpiredGamblingEvents = () => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM gambling_events WHERE status = 'active' AND ends_at IS NOT NULL AND datetime(ends_at) <= datetime('now')`,
+      [],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const updateGamblingEventStatus = (eventId, status) => {
+  return new Promise((resolve, reject) => {
+    db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+};
+
+const updateGamblingEventMessageId = (eventId, messageId) => {
+  return new Promise((resolve, reject) => {
+    db.run(`UPDATE gambling_events SET message_id = ? WHERE id = ?`, [messageId, eventId], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+};
+
+const setGamblingEventWinningSlot = (eventId, winningSlot) => {
+  return new Promise((resolve, reject) => {
+    db.run(`UPDATE gambling_events SET winning_slot = ? WHERE id = ?`, [winningSlot, eventId], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+};
+
+const joinGamblingEvent = (eventId, guildId, userId, chosenSlot, betAmount) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      db.run(`UPDATE gambling_events SET current_players = current_players + 1 WHERE id = ?`, [eventId], (err) => {
+        if (err) { db.run('ROLLBACK'); return reject(err); }
+      });
+      db.run(
+        `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`,
+        [eventId, guildId, userId, chosenSlot, betAmount || 0],
+        function (err) {
+          if (err) { db.run('ROLLBACK'); return reject(err); }
+          db.run('COMMIT', (commitErr) => {
+            if (commitErr) reject(commitErr);
+            else resolve(this.lastID);
+          });
+        }
+      );
+    });
+  });
+};
+
+const getGamblingEventBet = (eventId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM gambling_event_bets WHERE gambling_event_id = ? AND user_id = ?`, [eventId, userId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+const getGamblingEventBets = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM gambling_event_bets WHERE gambling_event_id = ? ORDER BY joined_at ASC`, [eventId], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
+const getGamblingBetResults = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT chosen_slot, COUNT(*) as bet_count, SUM(bet_amount) as total_bet
+       FROM gambling_event_bets WHERE gambling_event_id = ? GROUP BY chosen_slot ORDER BY bet_count DESC`,
+      [eventId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      }
+    );
+  });
+};
+
+const setGamblingEventWinners = (eventId, winnerUserIds) => {
+  return new Promise((resolve, reject) => {
+    if (!winnerUserIds || winnerUserIds.length === 0) return resolve();
+    const placeholders = winnerUserIds.map(() => '?').join(',');
+    db.run(
+      `UPDATE gambling_event_bets SET is_winner = 1 WHERE gambling_event_id = ? AND user_id IN (${placeholders})`,
+      [eventId, ...winnerUserIds],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const deleteGamblingEvent = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      db.run('BEGIN TRANSACTION');
+      db.run(`DELETE FROM gambling_event_bets WHERE gambling_event_id = ?`, [eventId], (err) => {
+        if (err) { db.run('ROLLBACK'); return reject(err); }
+      });
+      db.run(`DELETE FROM gambling_event_slots WHERE gambling_event_id = ?`, [eventId], (err) => {
+        if (err) { db.run('ROLLBACK'); return reject(err); }
+      });
+      db.run(`DELETE FROM gambling_events WHERE id = ?`, [eventId], function (err) {
+        if (err) { db.run('ROLLBACK'); return reject(err); }
+        db.run('COMMIT', (commitErr) => {
+          if (commitErr) reject(commitErr);
+          else resolve(this.changes);
+        });
+      });
+    });
+  });
+};
+
 // ==================== TRUST/RISK STAT OPERATIONS ====================
 
 const touchUserStats = (discordId) => {
@@ -2240,4 +2484,20 @@ module.exports = {
   upsertWorkerDailyStat,
   getWorkerStats,
   getGuildWorkersSummary,
+  // Gambling Event functions
+  createGamblingEvent,
+  addGamblingEventSlot,
+  getGamblingEvent,
+  getGamblingEventSlots,
+  getActiveGamblingEvents,
+  getExpiredGamblingEvents,
+  updateGamblingEventStatus,
+  updateGamblingEventMessageId,
+  setGamblingEventWinningSlot,
+  joinGamblingEvent,
+  getGamblingEventBet,
+  getGamblingEventBets,
+  getGamblingBetResults,
+  setGamblingEventWinners,
+  deleteGamblingEvent,
 };
