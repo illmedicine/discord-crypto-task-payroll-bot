@@ -2250,13 +2250,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get('SELECT COUNT(*) AS c FROM bulk_tasks'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM tasks'), { c: 0 }),
         safe(db.get('SELECT COALESCE(SUM(amount), 0) AS total FROM transactions'), { total: 0 }),
-        safe(db.get("SELECT COUNT(*) AS c FROM contest_entries WHERE status = 'winner'"), { c: 0 }),
+        safe(db.get("SELECT COUNT(*) AS c FROM contest_entries WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM users'), { c: 0 }),
         // Wallet counts
         safe(db.get('SELECT COUNT(*) AS c FROM guild_wallets WHERE wallet_address IS NOT NULL'), { c: 0 }),
-        safe(db.get("SELECT COUNT(*) AS c FROM users WHERE COALESCE(solana_address, wallet_address) IS NOT NULL"), { c: 0 }),
+        safe(db.get("SELECT COUNT(*) AS c FROM users WHERE solana_address IS NOT NULL"), { c: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'discord_clicks'"), { count: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
@@ -2267,25 +2267,47 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       const totalPaidOutSOL = paidRow.total || 0;
 
+      // ── Inline Solana helpers (utils/crypto not available in backend container) ──
+      const LAMPORTS_PER_SOL = 1_000_000_000;
+      const SOLANA_RPC = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+
+      async function fetchSolBalance(address) {
+        try {
+          const { data } = await axios.post(SOLANA_RPC, {
+            jsonrpc: '2.0', id: 1, method: 'getBalance', params: [address]
+          }, { timeout: 8000 });
+          return (data?.result?.value || 0) / LAMPORTS_PER_SOL;
+        } catch { return 0; }
+      }
+
+      async function fetchSolPrice() {
+        try {
+          const { data } = await axios.get(
+            'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+            { timeout: 8000 }
+          );
+          return data?.solana?.usd || 0;
+        } catch { return 0; }
+      }
+
       // Fetch SOL price + wallet balances (best-effort)
       let solPrice = 0;
       let treasuryBalanceSOL = 0;
       let userBalanceSOL = 0;
       try {
-        const cryptoUtils = require('../../../utils/crypto');
-        solPrice = await cryptoUtils.getSolanaPrice().catch(() => 0);
+        solPrice = await fetchSolPrice();
 
         // Treasury wallets
         const treasuryWallets = await safe(db.all('SELECT wallet_address FROM guild_wallets WHERE wallet_address IS NOT NULL'), []);
         const treasuryBalances = await Promise.all(
-          treasuryWallets.map(w => cryptoUtils.getBalance(w.wallet_address).catch(() => 0))
+          treasuryWallets.map(w => fetchSolBalance(w.wallet_address))
         );
         treasuryBalanceSOL = treasuryBalances.reduce((s, b) => s + b, 0);
 
-        // User wallets (bot DB uses solana_address, backend DB uses wallet_address)
-        const userWallets = await safe(db.all("SELECT COALESCE(solana_address, wallet_address) AS addr FROM users WHERE COALESCE(solana_address, wallet_address) IS NOT NULL"), []);
+        // User wallets (bot DB uses solana_address)
+        const userWallets = await safe(db.all("SELECT solana_address AS addr FROM users WHERE solana_address IS NOT NULL"), []);
         const userBalances = await Promise.all(
-          userWallets.map(w => cryptoUtils.getBalance(w.addr).catch(() => 0))
+          userWallets.map(w => fetchSolBalance(w.addr))
         );
         userBalanceSOL = userBalances.reduce((s, b) => s + b, 0);
       } catch (e) {
