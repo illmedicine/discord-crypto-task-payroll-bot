@@ -744,7 +744,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         }
       }
     } else {
-      // Fallback: iterate bot's guild cache (original approach)
+      // Fallback: iterate bot's guild cache (when OAuth token unavailable)
       for (const g of discordClient.guilds.cache.values()) {
         try {
           const guild = await g.fetch()
@@ -752,8 +752,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             results.push({ id: guild.id, name: guild.name, role: 'owner' })
           } else if (discordId) {
             try {
-              await guild.members.fetch(discordId)
-              results.push({ id: guild.id, name: guild.name, role: 'member' })
+              const member = await guild.members.fetch(discordId)
+              const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
+              results.push({ id: guild.id, name: guild.name, role: hasAdmin ? 'admin' : 'member' })
             } catch (_) { /* not a member */ }
           }
         } catch (_) {
@@ -1412,6 +1413,169 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       console.error('[qualify] error:', err?.message || err)
       if (err?.message?.includes('UNIQUE constraint')) return res.status(409).json({ error: 'already_submitted' })
       res.status(500).json({ error: 'qualification_failed' })
+    }
+  })
+
+  // ---- Gambling Events ----
+  app.get('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildMember, async (req, res) => {
+    const rows = await db.all('SELECT * FROM gambling_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
+    res.json(rows)
+  })
+
+  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, async (req, res) => {
+    const {
+      channel_id, title, description, mode, prize_amount, currency,
+      entry_fee, min_players, max_players, duration_minutes, slots,
+    } = req.body || {}
+
+    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
+    if (!min_players || !max_players) return res.status(400).json({ error: 'missing_player_limits' })
+    if (!Array.isArray(slots) || slots.length < 2) return res.status(400).json({ error: 'at_least_two_slots_required' })
+
+    const endsAt = duration_minutes ? new Date(Date.now() + (Number(duration_minutes) * 60 * 1000)).toISOString() : null
+    const numSlots = slots.length
+
+    const r = await db.run(
+      `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.guild.id, String(channel_id), String(title), String(description || ''),
+       String(mode || 'house'), Number(prize_amount || 0), String(currency || 'SOL'),
+       Number(entry_fee || 0), Number(min_players), Number(max_players),
+       duration_minutes == null ? null : Number(duration_minutes), numSlots, req.user.id, endsAt]
+    )
+
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i]
+      await db.run(
+        'INSERT INTO gambling_event_slots (gambling_event_id, slot_number, label, color) VALUES (?, ?, ?, ?)',
+        [r.lastID, i + 1, String(s.label || `Slot ${i + 1}`), String(s.color || '#888')]
+      )
+    }
+
+    const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [r.lastID])
+    res.json(event)
+  })
+
+  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'gambling_event_not_found' })
+
+      const channelId = req.body?.channel_id || event.channel_id
+      const channel = await fetchTextChannel(req.guild.id, channelId)
+      const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [eventId])
+
+      // Recalculate ends_at from NOW
+      let endTimestamp = null
+      if (event.duration_minutes) {
+        const newEndsAt = new Date(Date.now() + (event.duration_minutes * 60 * 1000)).toISOString()
+        await db.run('UPDATE gambling_events SET ends_at = ? WHERE id = ?', [newEndsAt, eventId])
+        endTimestamp = Math.floor(new Date(newEndsAt).getTime() / 1000)
+      } else if (event.ends_at) {
+        endTimestamp = Math.floor(new Date(event.ends_at).getTime() / 1000)
+      }
+
+      const modeLabel = event.mode === 'pot' ? '🏦 Pot Split' : '🏠 House-funded'
+      const entryInfo = event.entry_fee > 0 ? `${event.entry_fee} ${event.currency} per bet` : 'Free entry'
+
+      const slotList = slots.map(s => `${s.slot_number}. ${s.label}`).join('\n')
+
+      const mainEmbed = new EmbedBuilder()
+        .setColor('#E74C3C')
+        .setTitle(`🎰 DCB Gambling Event: ${event.title}`)
+        .setDescription(
+          (event.description || 'Place your bets!') +
+          '\n\n**How it works:**\n' +
+          '1️⃣ Click a slot button below to place your bet\n' +
+          '2️⃣ The wheel spins when max players join or time runs out\n' +
+          '3️⃣ If your slot wins — you get paid instantly! 💰'
+        )
+        .addFields(
+          { name: '🎲 Mode', value: modeLabel, inline: true },
+          { name: '🪑 Players', value: `${event.current_players}/${event.max_players}`, inline: true },
+          { name: '✅ Min to Spin', value: `${event.min_players}`, inline: true },
+          { name: '🎁 Prize Pool', value: event.mode === 'pot' ? `${entryInfo} (pot split)` : `${Number(event.prize_amount || 0)} ${event.currency}`, inline: true },
+          { name: '🎰 Slots', value: slotList || 'None', inline: false },
+        )
+        .setFooter({ text: `DisCryptoBank • Gamble #${eventId} • Provably Fair` })
+        .setTimestamp()
+
+      if (endTimestamp) mainEmbed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true })
+
+      // Build slot bet buttons (up to 5 per row, max 5 rows)
+      const components = []
+      const slotButtons = slots.slice(0, 20).map(s =>
+        new ButtonBuilder()
+          .setCustomId(`gamble_bet_${eventId}_${s.slot_number}`)
+          .setLabel(`${s.label}`)
+          .setStyle(ButtonStyle.Primary)
+      )
+
+      for (let i = 0; i < slotButtons.length; i += 5) {
+        components.push(new ActionRowBuilder().addComponents(...slotButtons.slice(i, i + 5)))
+      }
+
+      const msg = await channel.send({ embeds: [mainEmbed], components })
+      await db.run('UPDATE gambling_events SET message_id = ?, channel_id = ? WHERE id = ?', [msg.id, String(channelId), eventId])
+
+      res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
+    } catch (err) {
+      console.error('[gambling-event] publish error:', err?.message || err)
+      res.status(500).json({ error: 'publish_failed' })
+    }
+  })
+
+  app.delete('/api/admin/guilds/:guildId/gambling-events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'not_found' })
+
+      // Remove Discord message if published
+      if (event.message_id && event.channel_id) {
+        try {
+          const channel = await discordClient.channels.fetch(event.channel_id)
+          if (channel) {
+            const msg = await channel.messages.fetch(event.message_id).catch(() => null)
+            if (msg) await msg.delete().catch(() => {})
+          }
+        } catch (_) {}
+      }
+
+      await db.run('DELETE FROM gambling_event_bets WHERE gambling_event_id = ?', [eventId])
+      await db.run('DELETE FROM gambling_event_slots WHERE gambling_event_id = ?', [eventId])
+      await db.run('DELETE FROM gambling_events WHERE id = ?', [eventId])
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[gambling-event] delete error:', err?.message || err)
+      res.status(500).json({ error: 'delete_failed' })
+    }
+  })
+
+  app.patch('/api/admin/guilds/:guildId/gambling-events/:eventId/cancel', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'not_found' })
+
+      await db.run('UPDATE gambling_events SET status = ? WHERE id = ?', ['cancelled', eventId])
+
+      // Remove Discord message if published
+      if (event.message_id && event.channel_id) {
+        try {
+          const channel = await discordClient.channels.fetch(event.channel_id)
+          if (channel) {
+            const msg = await channel.messages.fetch(event.message_id).catch(() => null)
+            if (msg) await msg.delete().catch(() => {})
+          }
+        } catch (_) {}
+      }
+
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[gambling-event] cancel error:', err?.message || err)
+      res.status(500).json({ error: 'cancel_failed' })
     }
   })
 
