@@ -2242,7 +2242,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         contestWinners, voteWinners, proofPayouts,
         usersRow,
         treasuryWalletCount, userWalletCount,
-        siteVisitors, discordClicks, managerClicks
+        siteVisitors, totalCommandsRun, managerClicks
       ] = await Promise.all([
         safe(db.get('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM contests'), { c: 0 }),
@@ -2274,7 +2274,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get('SELECT COUNT(*) AS c FROM guild_wallets WHERE wallet_address IS NOT NULL'), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM users WHERE solana_address IS NOT NULL"), { c: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
-        safe(db.get("SELECT count FROM site_analytics WHERE metric = 'discord_clicks'"), { count: 0 }),
+        safe(db.get('SELECT COUNT(*) AS c FROM command_audit'), { c: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
       ]);
 
@@ -2359,7 +2359,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         totalPayouts: (contestWinners.c || 0) + (voteWinners.c || 0) + (proofPayouts.c || 0),
         totalUsers: usersRow.c,
         siteVisitors: siteVisitors?.count || 0,
-        discordClicks: discordClicks?.count || 0,
+        totalCommandsRun: totalCommandsRun?.c || 0,
         managerClicks: managerClicks?.count || 0,
         lastUpdated: new Date().toISOString(),
       });

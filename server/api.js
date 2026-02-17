@@ -952,7 +952,7 @@ app.listen(port, () => {
         prizePoolSOL, prizePoolUSD,
         contestWinners, voteWinners, proofPayouts,
         usersRow, treasuryWalletCount, userWalletCount,
-        siteVisitors, discordClicks, managerClicks
+        siteVisitors, totalCommandsRun, managerClicks
       ] = await Promise.all([
         safe(dbGet('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM contests'), { c: 0 }),
@@ -984,7 +984,7 @@ app.listen(port, () => {
         safe(dbGet('SELECT COUNT(*) AS c FROM guild_wallets WHERE wallet_address IS NOT NULL'), { c: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM users WHERE solana_address IS NOT NULL"), { c: 0 }),
         safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
-        safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'discord_clicks'"), { count: 0 }),
+        safe(dbGet('SELECT COUNT(*) AS c FROM command_audit'), { c: 0 }),
         safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
       ]);
 
@@ -1069,7 +1069,7 @@ app.listen(port, () => {
         totalPayouts: (contestWinners.c || 0) + (voteWinners.c || 0) + (proofPayouts.c || 0),
         totalUsers: usersRow.c,
         siteVisitors: siteVisitors?.count || 0,
-        discordClicks: discordClicks?.count || 0,
+        totalCommandsRun: totalCommandsRun?.c || 0,
         managerClicks: managerClicks?.count || 0,
         lastUpdated: new Date().toISOString(),
       });
