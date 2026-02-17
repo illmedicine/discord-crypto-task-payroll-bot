@@ -2369,6 +2369,24 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   });
 
+  // ── Temporary debug: inspect payout data sources ────────────────────
+  app.get('/api/debug/payouts', async (_req, res) => {
+    try {
+      const [voteEvents, voteParticipants, contests, contestEntries, transactions, tasks, proofSubs] = await Promise.all([
+        safe(db.all('SELECT id, title, prize_amount, currency, status FROM vote_events'), []),
+        safe(db.all('SELECT vote_event_id, user_id, is_winner FROM vote_event_participants'), []),
+        safe(db.all('SELECT id, title, prize_amount, currency, status, num_winners FROM contests'), []),
+        safe(db.all('SELECT contest_id, user_id, is_winner FROM contest_entries'), []),
+        safe(db.all('SELECT id, guild_id, amount, status FROM transactions'), []),
+        safe(db.all('SELECT id, guild_id, amount, status, transaction_signature FROM tasks'), []),
+        safe(db.all("SELECT ps.id, ps.status, bt.payout_amount, bt.payout_currency FROM proof_submissions ps JOIN task_assignments ta ON ps.task_assignment_id = ta.id JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id"), []),
+      ]);
+      res.json({ voteEvents, voteParticipants, contests, contestEntries, transactions, tasks, proofSubs });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Site analytics tracking (visitors / clicks) ────────────────────
   app.post('/api/track', async (req, res) => {
     try {
