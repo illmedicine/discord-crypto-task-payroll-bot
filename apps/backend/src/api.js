@@ -2281,12 +2281,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Active servers = actual Discord guilds the bot is in (live count)
       const activeServers = discordClient?.guilds?.cache?.size || 0;
 
-      // Sum: on-chain tx (SOL) + SOL prize pools + USD prize pools converted to SOL
+      // Prize pool raw values (computed after solPrice is fetched below)
       const txSOL = paidTx.total || 0;
       const poolSOL = prizePoolSOL.total || 0;
       const poolUSD = prizePoolUSD.total || 0;
-      const totalPaidOutSOL = txSOL + poolSOL + (solPrice > 0 ? poolUSD / solPrice : 0);
-      const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
 
       // ── Inline Solana helpers (utils/crypto not available in backend container) ──
       const LAMPORTS_PER_SOL = 1_000_000_000;
@@ -2337,6 +2335,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       const treasuryWalletValue = treasuryBalanceSOL * solPrice;
       const userWalletValue = userBalanceSOL * solPrice;
+
+      // Total prize pool (computed after solPrice is known)
+      const totalPaidOutSOL = txSOL + poolSOL + (solPrice > 0 ? poolUSD / solPrice : 0);
+      const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
 
       res.json({
         totalTransactions: txRow.c,
