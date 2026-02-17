@@ -353,6 +353,11 @@ db.serialize(() => {
     if (err && !err.message.includes('duplicate column')) console.warn('[db] discord_access_token migration:', err.message)
   })
 
+  // Ensure discord_refresh_token column exists (migration for existing DBs)
+  db.run(`ALTER TABLE user_accounts ADD COLUMN discord_refresh_token TEXT`, (err) => {
+    if (err && !err.message.includes('duplicate column')) console.warn('[db] discord_refresh_token migration:', err.message)
+  })
+
   // User preferences – persists selected guild, page, etc. across sessions
   db.run(
     `CREATE TABLE IF NOT EXISTS user_preferences (

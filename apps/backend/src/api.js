@@ -110,13 +110,68 @@ module.exports = function buildApi({ discordClient }) {
     } catch (_) {}
   }
 
+  // ---- Helper: fetch user guilds via OAuth token, auto-refreshing if expired ----
+  async function fetchUserGuildsViaOAuth(discordId) {
+    const account = await db.get('SELECT discord_access_token, discord_refresh_token FROM user_accounts WHERE discord_id = ?', [discordId])
+    if (!account?.discord_access_token) return null
+
+    // Try the stored access token first
+    try {
+      const resp = await axios.get('https://discord.com/api/users/@me/guilds', {
+        headers: { Authorization: `Bearer ${account.discord_access_token}` }
+      })
+      return resp.data
+    } catch (err) {
+      const status = err?.response?.status
+      if (status !== 401) {
+        console.warn('[guilds] OAuth token request failed (non-401):', status || err?.message)
+        return null
+      }
+      console.log('[guilds] Access token expired for', discordId, '— attempting refresh')
+    }
+
+    // Access token expired — try refresh
+    if (!account.discord_refresh_token) {
+      console.warn('[guilds] No refresh token stored for', discordId)
+      return null
+    }
+    try {
+      const refreshResp = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+        client_id: process.env.DISCORD_CLIENT_ID,
+        client_secret: process.env.DISCORD_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+        refresh_token: account.discord_refresh_token
+      }).toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      })
+      const newAccess = refreshResp.data.access_token
+      const newRefresh = refreshResp.data.refresh_token || account.discord_refresh_token
+      if (!newAccess) { console.warn('[guilds] Refresh response had no access_token'); return null }
+
+      // Persist the new tokens
+      await db.run(
+        'UPDATE user_accounts SET discord_access_token = ?, discord_refresh_token = ? WHERE discord_id = ?',
+        [newAccess, newRefresh, discordId]
+      )
+      console.log('[guilds] Token refreshed successfully for', discordId)
+
+      // Retry guild fetch with new token
+      const resp = await axios.get('https://discord.com/api/users/@me/guilds', {
+        headers: { Authorization: `Bearer ${newAccess}` }
+      })
+      return resp.data
+    } catch (refreshErr) {
+      console.warn('[guilds] Token refresh failed for', discordId, ':', refreshErr?.response?.status || refreshErr?.message)
+      return null
+    }
+  }
+
   async function requireGuildOwner(req, res, next) {
     try {
       const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
       const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
-      // Resolve the Discord ID: if logged in via Google, look up the linked Discord account
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId) {
         console.warn(`[requireGuildOwner] No discordId resolved for user:`, req.user?.id)
@@ -128,25 +183,23 @@ module.exports = function buildApi({ discordClient }) {
         req.userRole = 'owner'
         return next()
       }
-      // Fallback: verify ownership via user's stored Discord OAuth token
-      try {
-        const account = await db.get('SELECT discord_access_token FROM user_accounts WHERE discord_id = ?', [discordId])
-        if (account?.discord_access_token) {
-          const resp = await axios.get('https://discord.com/api/users/@me/guilds', {
-            headers: { Authorization: `Bearer ${account.discord_access_token}` }
-          })
-          const userGuild = resp.data.find(g => g.id === guildId)
-          if (userGuild?.owner) {
+      // Fallback: check via OAuth token (with auto-refresh) — allow owners AND admins
+      const userGuilds = await fetchUserGuildsViaOAuth(discordId)
+      if (userGuilds) {
+        const userGuild = userGuilds.find(g => g.id === guildId)
+        if (userGuild) {
+          const isOwner = userGuild.owner === true
+          const perms = BigInt(userGuild.permissions || 0)
+          const isAdmin = (perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n
+          if (isOwner || isAdmin) {
             req.guild = guild
-            req.userRole = 'owner'
+            req.userRole = isOwner ? 'owner' : 'admin'
             return next()
           }
-          console.warn(`[requireGuildOwner] OAuth fallback: user ${discordId} is NOT owner of guild ${guildId} (owner in cache: ${guild.ownerId})`)
-        } else {
-          console.warn(`[requireGuildOwner] No OAuth token found for user ${discordId}`)
         }
-      } catch (oauthErr) {
-        console.warn(`[requireGuildOwner] OAuth fallback failed for user ${discordId}:`, oauthErr?.response?.status || oauthErr?.message)
+        console.warn(`[requireGuildOwner] User ${discordId} lacks owner/admin perms for guild ${guildId}`)
+      } else {
+        console.warn(`[requireGuildOwner] No OAuth guilds available for user ${discordId}`)
       }
       return res.status(403).json({ error: 'forbidden_not_guild_owner' })
     } catch (err) {
@@ -175,30 +228,23 @@ module.exports = function buildApi({ discordClient }) {
       }
       // Check if user is a guild member via bot cache
       try {
-        await guild.members.fetch(discordId)
+        const member = await guild.members.fetch(discordId)
         req.guild = guild
-        req.userRole = 'member'
+        // Detect admin even via bot cache
+        const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
+        req.userRole = hasAdmin ? 'admin' : 'member'
         return next()
       } catch (_) {
-        // Fallback: check via user's stored Discord OAuth token
-        try {
-          const account = await db.get('SELECT discord_access_token FROM user_accounts WHERE discord_id = ?', [discordId])
-          if (account?.discord_access_token) {
-            const resp = await axios.get('https://discord.com/api/users/@me/guilds', {
-              headers: { Authorization: `Bearer ${account.discord_access_token}` }
-            })
-            const userGuild = resp.data.find(g => g.id === guildId)
-            if (userGuild) {
-              req.guild = guild
-              const perms = BigInt(userGuild.permissions || 0)
-              req.userRole = userGuild.owner ? 'owner' : ((perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n) ? 'admin' : 'member'
-              return next()
-            }
-          } else {
-            console.warn(`[requireGuildMember] No OAuth token found for user ${discordId}`)
+        // Fallback: check via user's stored Discord OAuth token (with auto-refresh)
+        const userGuilds = await fetchUserGuildsViaOAuth(discordId)
+        if (userGuilds) {
+          const userGuild = userGuilds.find(g => g.id === guildId)
+          if (userGuild) {
+            req.guild = guild
+            const perms = BigInt(userGuild.permissions || 0)
+            req.userRole = userGuild.owner ? 'owner' : ((perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n) ? 'admin' : 'member'
+            return next()
           }
-        } catch (oauthErr) {
-          console.warn(`[requireGuildMember] OAuth fallback failed for user ${discordId}:`, oauthErr?.response?.status || oauthErr?.message)
         }
         console.warn(`[requireGuildMember] User ${discordId} denied access to guild ${guildId} (owner: ${guild.ownerId})`)
         return res.status(403).json({ error: 'forbidden_not_guild_member' })
@@ -331,12 +377,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const discordId = userResp.data.id
       console.log('[OAuth Discord] user fetched:', discordId, userResp.data.username)
 
-      // Step 3: Upsert user_accounts row (including access token for guild listing)
+      // Step 3: Upsert user_accounts row (including access + refresh token for guild listing)
+      const refreshToken = tokenResp.data.refresh_token || null
       try {
         await db.run(
-          `INSERT INTO user_accounts (discord_id, discord_access_token, last_login_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-           ON CONFLICT(discord_id) DO UPDATE SET discord_access_token = ?, last_login_at = CURRENT_TIMESTAMP`,
-          [discordId, accessToken, accessToken]
+          `INSERT INTO user_accounts (discord_id, discord_access_token, discord_refresh_token, last_login_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(discord_id) DO UPDATE SET discord_access_token = ?, discord_refresh_token = COALESCE(?, discord_refresh_token), last_login_at = CURRENT_TIMESTAMP`,
+          [discordId, accessToken, refreshToken, accessToken, refreshToken]
         )
         ok('db_upsert')
       } catch (dbErr) {
@@ -678,18 +725,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     // This is more reliable than depending on the bot's member cache
     let userGuilds = null
     if (discordId) {
-      try {
-        const account = await db.get('SELECT discord_access_token FROM user_accounts WHERE discord_id = ?', [discordId])
-        if (account?.discord_access_token) {
-          const resp = await axios.get('https://discord.com/api/users/@me/guilds', {
-            headers: { Authorization: `Bearer ${account.discord_access_token}` }
-          })
-          userGuilds = resp.data // Array of { id, name, owner, permissions, ... }
-        }
-      } catch (err) {
-        console.warn('[guilds] Failed to fetch user guilds via OAuth token:', err?.response?.status || err?.message)
-        // Token may be expired — fall back to bot cache approach below
-      }
+      userGuilds = await fetchUserGuildsViaOAuth(discordId)
     }
 
     if (userGuilds) {
@@ -716,16 +752,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             results.push({ id: guild.id, name: guild.name, role: 'owner' })
           } else if (discordId) {
             try {
-              await guild.members.fetch(discordId)
-              results.push({ id: guild.id, name: guild.name, role: 'member' })
-            } catch (_) { /* not a member */ }
-          }
-        } catch (_) {
-        }
-      }
-    }
-    res.json(results)
-  })
+              await guild.members.fetch(discorwhen OAuth token unavailable)
+      for (const g of discordClient.guilds.cache.values()) {
+        try {
+          const guild = await g.fetch()
+          if (guild.ownerId === discordId) {
+            results.push({ id: guild.id, name: guild.name, role: 'owner' })
+          } else if (discordId) {
+            try {
+              const member = await guild.members.fetch(discordId)
+              const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
+              results.push({ id: guild.id, name: guild.name, role: hasAdmin ? 'admin' 
 
   app.get('/api/admin/guilds/:guildId/channels', requireAuth, requireGuildMember, async (req, res) => {
     const channels = await req.guild.channels.fetch()
