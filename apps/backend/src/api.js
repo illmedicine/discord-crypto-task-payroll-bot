@@ -752,17 +752,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             results.push({ id: guild.id, name: guild.name, role: 'owner' })
           } else if (discordId) {
             try {
-              await guild.members.fetch(discorwhen OAuth token unavailable)
-      for (const g of discordClient.guilds.cache.values()) {
-        try {
-          const guild = await g.fetch()
-          if (guild.ownerId === discordId) {
-            results.push({ id: guild.id, name: guild.name, role: 'owner' })
-          } else if (discordId) {
-            try {
-              const member = await guild.members.fetch(discordId)
-              const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
-              results.push({ id: guild.id, name: guild.name, role: hasAdmin ? 'admin' 
+              await guild.members.fetch(discordId)
+              results.push({ id: guild.id, name: guild.name, role: 'member' })
+            } catch (_) { /* not a member */ }
+          }
+        } catch (_) {
+        }
+      }
+    }
+    res.json(results)
+  })
 
   app.get('/api/admin/guilds/:guildId/channels', requireAuth, requireGuildMember, async (req, res) => {
     const channels = await req.guild.channels.fetch()
