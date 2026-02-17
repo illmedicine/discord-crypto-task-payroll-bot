@@ -2342,6 +2342,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       res.json({
         totalTransactions: txRow.c,
+        totalWinners: (contestWinners.c || 0) + (voteWinners.c || 0),
         eventsHosted: (contestRow.c || 0) + (voteEventRow.c || 0) + (eventRow.c || 0),
         tasksCreated: (bulkTaskRow.c || 0) + (taskRow.c || 0),
         voteEventsCreated: voteEventRow.c || 0,

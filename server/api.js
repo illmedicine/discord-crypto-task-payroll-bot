@@ -1053,6 +1053,7 @@ app.listen(port, () => {
 
       res.json({
         totalTransactions: txRow.c,
+        totalWinners: (contestWinners.c || 0) + (voteWinners.c || 0),
         eventsHosted: (contestRow.c || 0) + (voteEventRow.c || 0) + (eventRow.c || 0),
         tasksCreated: (bulkTaskRow.c || 0) + (taskRow.c || 0),
         totalPaidOut: totalPaidOutUSD,
