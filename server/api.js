@@ -952,7 +952,8 @@ app.listen(port, () => {
         prizePoolSOL, prizePoolUSD,
         contestWinners, voteWinners, proofPayouts,
         usersRow, treasuryWalletCount, userWalletCount,
-        siteVisitors, totalCommandsRun, managerClicks
+        siteVisitors, totalCommandsRun, managerClicks,
+        payWalletCommands
       ] = await Promise.all([
         safe(dbGet('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM contests'), { c: 0 }),
@@ -986,6 +987,7 @@ app.listen(port, () => {
         safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM command_audit'), { c: 0 }),
         safe(dbGet("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
+        safe(dbGet("SELECT COUNT(*) AS c FROM command_audit WHERE command_name IN ('pay', 'wallet', 'user-wallet', 'bot-wallet')"), { c: 0 }),
       ]);
 
       // Active servers = actual Discord guilds the bot is in (live count)
@@ -1052,7 +1054,7 @@ app.listen(port, () => {
       const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
 
       res.json({
-        totalTransactions: txRow.c,
+        totalTransactions: payWalletCommands?.c || 0,
         totalWinners: (contestWinners.c || 0) + (voteWinners.c || 0),
         eventsHosted: (contestRow.c || 0) + (voteEventRow.c || 0) + (eventRow.c || 0),
         tasksCreated: (bulkTaskRow.c || 0) + (taskRow.c || 0),
