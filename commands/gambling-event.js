@@ -41,7 +41,11 @@ async function getGamblingEventWithFallback(eventId) {
   // Always try backend to get authoritative state
   const backendEvent = await fetchGamblingEventFromBackend(eventId);
   if (backendEvent) {
+    // Preserve the LOCAL player count (bot DB is authoritative for bets/joins
+    // because they happen in the bot process and sync to backend is async)
+    const localPlayers = event ? event.current_players : 0;
     event = backendEvent;
+    event.current_players = Math.max(localPlayers, backendEvent.current_players || 0);
   }
   return event;
 }

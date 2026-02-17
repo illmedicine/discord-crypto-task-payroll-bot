@@ -40,7 +40,12 @@ async function getVoteEventWithFallback(eventId) {
   // created via the dashboard — its DB may differ from the bot's local DB).
   const backendEvent = await fetchEventFromBackend(eventId);
   if (backendEvent) {
+    // Preserve the LOCAL participant count (bot DB is authoritative for joins/bets
+    // because joins happen in the bot process and sync to backend is async)
+    const localParticipants = event ? event.current_participants : 0;
     event = backendEvent;
+    // Use the HIGHER of local vs backend count (local may be ahead due to async sync)
+    event.current_participants = Math.max(localParticipants, backendEvent.current_participants || 0);
   }
   return event;
 }

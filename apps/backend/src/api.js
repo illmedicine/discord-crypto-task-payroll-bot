@@ -170,15 +170,16 @@ module.exports = function buildApi({ discordClient }) {
     try {
       const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
-      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
+      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(() => null)
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId) {
         console.warn(`[requireGuildOwner] No discordId resolved for user:`, req.user?.id)
         return res.status(403).json({ error: 'forbidden_not_guild_owner' })
       }
-      // Check ownership via bot cache first
-      if (discordId === guild.ownerId) {
+      // Check ownership via bot cache first (may not have ownerId in REST-only mode)
+      const ownerId = guild.ownerId || (guild.fetch ? (await guild.fetch().catch(() => ({}))).ownerId : null)
+      if (discordId === ownerId) {
         req.guild = guild
         req.userRole = 'owner'
         return next()
@@ -213,7 +214,7 @@ module.exports = function buildApi({ discordClient }) {
     try {
       const guildId = req.params.guildId || req.body.guild_id || req.query.guild_id
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
-      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId)
+      const guild = discordClient.guilds.cache.get(guildId) || await discordClient.guilds.fetch(guildId).catch(() => null)
       if (!guild) return res.status(404).json({ error: 'guild_not_found' })
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId) {
@@ -221,19 +222,22 @@ module.exports = function buildApi({ discordClient }) {
         return res.status(403).json({ error: 'forbidden_no_discord_id' })
       }
       // Owner always passes
-      if (discordId === guild.ownerId) {
+      const memberOwnerId = guild.ownerId || (guild.fetch ? (await guild.fetch().catch(() => ({}))).ownerId : null)
+      if (discordId === memberOwnerId) {
         req.guild = guild
         req.userRole = 'owner'
         return next()
       }
-      // Check if user is a guild member via bot cache
+      // Check if user is a guild member via bot cache (may not work in REST-only mode)
       try {
-        const member = await guild.members.fetch(discordId)
-        req.guild = guild
-        // Detect admin even via bot cache
-        const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
-        req.userRole = hasAdmin ? 'admin' : 'member'
-        return next()
+        if (guild.members) {
+          const member = await guild.members.fetch(discordId)
+          req.guild = guild
+          const hasAdmin = member.permissions.has('Administrator') || member.permissions.has('ManageGuild')
+          req.userRole = hasAdmin ? 'admin' : 'member'
+          return next()
+        }
+        throw new Error('No members manager (REST-only mode)')
       } catch (_) {
         // Fallback: check via user's stored Discord OAuth token (with auto-refresh)
         const userGuilds = await fetchUserGuildsViaOAuth(discordId)
