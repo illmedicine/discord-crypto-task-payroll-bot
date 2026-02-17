@@ -483,12 +483,20 @@ client.on('interactionCreate', async interaction => {
           await gamblingEventCommand.handleBetButton(interaction);
         } catch (error) {
           console.error('❌ Error handling gambling bet button:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
+          const errMsg = error?.message || 'Unknown error';
+          try {
+            if (interaction.replied || interaction.deferred) {
+              await interaction.followUp({ content: `❌ An error occurred while placing your bet: ${errMsg}`, ephemeral: true });
+            } else {
+              await interaction.reply({ content: `❌ An error occurred while placing your bet: ${errMsg}`, ephemeral: true });
+            }
+          } catch (_) {}
         }
+      } else {
+        console.error('❌ gambling-event command not loaded! Cannot handle bet button.');
+        try {
+          await interaction.reply({ content: '❌ Gambling system is temporarily unavailable. Please try again in a moment.', ephemeral: true });
+        } catch (_) {}
       }
       return;
     }

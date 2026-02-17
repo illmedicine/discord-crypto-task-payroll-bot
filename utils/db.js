@@ -1843,17 +1843,34 @@ const joinGamblingEvent = (eventId, guildId, userId, chosenSlot, betAmount, paym
       db.run(`UPDATE gambling_events SET current_players = current_players + 1 WHERE id = ?`, [eventId], (err) => {
         if (err) { db.run('ROLLBACK'); return reject(err); }
       });
-      db.run(
-        `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null],
-        function (err) {
-          if (err) { db.run('ROLLBACK'); return reject(err); }
+      // Try INSERT with payment columns; fall back to basic INSERT if columns don't exist yet
+      const fullSql = `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+      const fullParams = [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null];
+      const fallbackSql = `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`;
+      const fallbackParams = [eventId, guildId, userId, chosenSlot, betAmount || 0];
+
+      db.run(fullSql, fullParams, function (err) {
+        if (err && err.message && err.message.includes('has no column')) {
+          // Columns not yet migrated — fall back
+          console.warn('[DB] joinGamblingEvent: payment columns missing, using fallback INSERT');
+          db.run(fallbackSql, fallbackParams, function (err2) {
+            if (err2) { db.run('ROLLBACK'); return reject(err2); }
+            const id = this.lastID;
+            db.run('COMMIT', (commitErr) => {
+              if (commitErr) reject(commitErr);
+              else resolve(id);
+            });
+          });
+        } else if (err) {
+          db.run('ROLLBACK'); return reject(err);
+        } else {
+          const id = this.lastID;
           db.run('COMMIT', (commitErr) => {
             if (commitErr) reject(commitErr);
-            else resolve(this.lastID);
+            else resolve(id);
           });
         }
-      );
+      });
     });
   });
 };

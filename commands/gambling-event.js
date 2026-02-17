@@ -238,10 +238,14 @@ module.exports = {
     const eventId = Number(parts[2]);
     const slotNumber = Number(parts[3]);
 
+    console.log(`[GamblingEvent] handleBetButton called: eventId=${eventId}, slot=${slotNumber}, user=${interaction.user.id}`);
+
     const event = await getGamblingEventWithFallback(eventId);
     if (!event) {
+      console.log(`[GamblingEvent] Event #${eventId} not found in local or backend DB`);
       return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
     }
+    console.log(`[GamblingEvent] Event #${eventId} fetched: mode=${event.mode}, currency=${event.currency}, entry_fee=${event.entry_fee}, status=${event.status}`);
     if (event.status !== 'active') {
       return interaction.reply({ content: '❌ This gambling event is no longer active.', ephemeral: true });
     }
@@ -317,7 +321,9 @@ module.exports = {
     // If we didn't defer yet (house mode / free entry), no deferral needed
     const isDeferred = requiresPayment && event.currency === 'SOL';
 
+    console.log(`[GamblingEvent] About to joinGamblingEvent: eventId=${eventId}, slot=${slotNumber}, betAmount=${betAmount}, paymentStatus=${paymentStatus}, wallet=${userWalletAddress}`);
     await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, paymentStatus, userWalletAddress);
+    console.log(`[GamblingEvent] joinGamblingEvent succeeded for event #${eventId}`);
 
     // Sync bet to backend
     syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount, paymentStatus, walletAddress: userWalletAddress });
