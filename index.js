@@ -485,8 +485,11 @@ client.on('interactionCreate', async interaction => {
           console.error('❌ Error handling gambling bet button:', error);
           const errMsg = error?.message || 'Unknown error';
           try {
-            if (interaction.replied || interaction.deferred) {
+            // handleBetButton always defers, so use editReply or followUp
+            if (interaction.replied) {
               await interaction.followUp({ content: `❌ An error occurred while placing your bet: ${errMsg}`, ephemeral: true });
+            } else if (interaction.deferred) {
+              await interaction.editReply({ content: `❌ An error occurred while placing your bet: ${errMsg}` });
             } else {
               await interaction.reply({ content: `❌ An error occurred while placing your bet: ${errMsg}`, ephemeral: true });
             }

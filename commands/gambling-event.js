@@ -11,9 +11,13 @@ async function fetchGamblingEventFromBackend(eventId) {
   if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return null;
   try {
     const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event/${eventId}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(url, {
-      headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
+      headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+      signal: controller.signal
     });
+    clearTimeout(timeout);
     if (!res.ok) return null;
     const { event, slots } = await res.json();
     if (!event) return null;
@@ -240,17 +244,20 @@ module.exports = {
 
     console.log(`[GamblingEvent] handleBetButton called: eventId=${eventId}, slot=${slotNumber}, user=${interaction.user.id}`);
 
+    // Defer immediately to avoid Discord 3-second timeout (backend fetch can be slow)
+    await interaction.deferReply({ ephemeral: true });
+
     const event = await getGamblingEventWithFallback(eventId);
     if (!event) {
       console.log(`[GamblingEvent] Event #${eventId} not found in local or backend DB`);
-      return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
+      return interaction.editReply({ content: '❌ Gambling event not found.' });
     }
     console.log(`[GamblingEvent] Event #${eventId} fetched: mode=${event.mode}, currency=${event.currency}, entry_fee=${event.entry_fee}, status=${event.status}`);
     if (event.status !== 'active') {
-      return interaction.reply({ content: '❌ This gambling event is no longer active.', ephemeral: true });
+      return interaction.editReply({ content: '❌ This gambling event is no longer active.' });
     }
     if (event.current_players >= event.max_players) {
-      return interaction.reply({ content: '❌ This event is full.', ephemeral: true });
+      return interaction.editReply({ content: '❌ This event is full.' });
     }
 
     // Check if user already bet
@@ -258,9 +265,8 @@ module.exports = {
     if (existing) {
       const slots = await db.getGamblingEventSlots(eventId);
       const chosen = slots.find(s => s.slot_number === existing.chosen_slot);
-      return interaction.reply({
-        content: `❌ You already placed a bet on **${chosen?.label || `Slot #${existing.chosen_slot}`}**. One bet per player!`,
-        ephemeral: true
+      return interaction.editReply({
+        content: `❌ You already placed a bet on **${chosen?.label || `Slot #${existing.chosen_slot}`}**. One bet per player!`
       });
     }
 
@@ -274,33 +280,29 @@ module.exports = {
       // 1. Require connected wallet
       const userData = await db.getUser(interaction.user.id);
       if (!userData || !userData.solana_address) {
-        return interaction.reply({
-          content: `❌ **Wallet Required!**\n\nThis event requires a **${entryFee} ${event.currency}** entry fee.\nYou must connect your Solana wallet first.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\`\n\nOnce connected, click the slot button again to enter.`,
-          ephemeral: true
+        return interaction.editReply({
+          content: `❌ **Wallet Required!**\n\nThis event requires a **${entryFee} ${event.currency}** entry fee.\nYou must connect your Solana wallet first.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\`\n\nOnce connected, click the slot button again to enter.`
         });
       }
       userWalletAddress = userData.solana_address;
 
       // 2. Validate wallet address
       if (!crypto.isValidSolanaAddress(userWalletAddress)) {
-        return interaction.reply({
-          content: '❌ Your connected wallet address is invalid. Please update it with `/user-wallet update`.', 
-          ephemeral: true
+        return interaction.editReply({
+          content: '❌ Your connected wallet address is invalid. Please update it with `/user-wallet update`.'
         });
       }
 
       // 3. Verify guild treasury wallet exists
       const guildWallet = await db.getGuildWallet(interaction.guildId);
       if (!guildWallet || !guildWallet.wallet_address) {
-        return interaction.reply({
-          content: '❌ This server does not have a treasury wallet configured. Server owner must use `/wallet connect` first.',
-          ephemeral: true
+        return interaction.editReply({
+          content: '❌ This server does not have a treasury wallet configured. Server owner must use `/wallet connect` first.'
         });
       }
 
       // 4. Check on-chain balance (SOL only for now)
       if (event.currency === 'SOL') {
-        await interaction.deferReply({ ephemeral: true });
         try {
           const balance = await crypto.getBalance(userWalletAddress);
           if (balance < entryFee) {
@@ -318,9 +320,6 @@ module.exports = {
     const betAmount = requiresPayment ? entryFee : 0;
     const paymentStatus = requiresPayment ? 'committed' : 'none';
 
-    // If we didn't defer yet (house mode / free entry), no deferral needed
-    const isDeferred = requiresPayment && event.currency === 'SOL';
-
     console.log(`[GamblingEvent] About to joinGamblingEvent: eventId=${eventId}, slot=${slotNumber}, betAmount=${betAmount}, paymentStatus=${paymentStatus}, wallet=${userWalletAddress}`);
     await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, paymentStatus, userWalletAddress);
     console.log(`[GamblingEvent] joinGamblingEvent succeeded for event #${eventId}`);
@@ -336,11 +335,7 @@ module.exports = {
       ? `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Players: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if event is cancelled.`
       : `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\n👥 Players: ${newCount}/${event.max_players}`;
 
-    if (isDeferred) {
-      await interaction.editReply({ content: confirmMsg });
-    } else {
-      await interaction.reply({ content: confirmMsg, ephemeral: true });
-    }
+    await interaction.editReply({ content: confirmMsg });
 
     // Announce milestone
     if (newCount === event.min_players) {
