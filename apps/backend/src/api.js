@@ -207,7 +207,6 @@ module.exports = function buildApi({ discordClient }) {
       console.error(`[requireGuildMember] Guild fetch failed:`, err?.message)
       return res.status(404).json({ error: 'guild_not_found' })
     }
-    }
   }
 
   async function fetchTextChannel(guildId, channelId) {
