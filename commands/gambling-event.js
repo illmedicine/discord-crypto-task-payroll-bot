@@ -244,8 +244,7 @@ module.exports = {
 
     console.log(`[GamblingEvent] handleBetButton called: eventId=${eventId}, slot=${slotNumber}, user=${interaction.user.id}`);
 
-    // Defer immediately to avoid Discord 3-second timeout (backend fetch can be slow)
-    await interaction.deferReply({ ephemeral: true });
+    // NOTE: deferReply is now called by index.js before this handler runs
 
     const event = await getGamblingEventWithFallback(eventId);
     if (!event) {

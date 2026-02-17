@@ -288,6 +288,8 @@ client.once('clientReady', async () => {
 });
 
 // Interaction handler
+const BUILD_TIMESTAMP = new Date().toISOString();
+console.log(`🔧 Build timestamp: ${BUILD_TIMESTAMP}`);
 client.on('interactionCreate', async interaction => {
   console.log(`[${new Date().toISOString()}] 📨 Interaction received: type=${interaction.type}`);
   if (interaction.isChatInputCommand()) {
@@ -477,29 +479,42 @@ client.on('interactionCreate', async interaction => {
 
     // Handle gambling event bet buttons
     if (interaction.customId.startsWith('gamble_bet_')) {
+      console.log(`[GamblingBet] 🎰 Button handler entered for customId: ${interaction.customId} (build: ${BUILD_TIMESTAMP})`);
+      try {
+        await interaction.deferReply({ ephemeral: true });
+        console.log(`[GamblingBet] ✅ deferReply succeeded`);
+      } catch (deferErr) {
+        console.error(`[GamblingBet] ❌ deferReply FAILED:`, deferErr.message);
+        return;
+      }
+
       const gamblingEventCommand = client.commands.get('gambling-event');
+      console.log(`[GamblingBet] Command loaded: ${!!gamblingEventCommand}, hasHandler: ${!!(gamblingEventCommand?.handleBetButton)}`);
       if (gamblingEventCommand && gamblingEventCommand.handleBetButton) {
         try {
           await gamblingEventCommand.handleBetButton(interaction);
         } catch (error) {
           console.error('❌ Error handling gambling bet button:', error);
+          console.error('❌ Stack:', error?.stack);
           const errMsg = error?.message || 'Unknown error';
           try {
-            // handleBetButton always defers, so use editReply or followUp
             if (interaction.replied) {
               await interaction.followUp({ content: `❌ An error occurred while placing your bet: ${errMsg}`, ephemeral: true });
-            } else if (interaction.deferred) {
-              await interaction.editReply({ content: `❌ An error occurred while placing your bet: ${errMsg}` });
             } else {
-              await interaction.reply({ content: `❌ An error occurred while placing your bet: ${errMsg}`, ephemeral: true });
+              await interaction.editReply({ content: `❌ An error occurred while placing your bet: ${errMsg}` });
             }
-          } catch (_) {}
+          } catch (replyErr) {
+            console.error('❌ Could not send error reply:', replyErr.message);
+          }
         }
       } else {
         console.error('❌ gambling-event command not loaded! Cannot handle bet button.');
+        console.error('❌ Loaded commands:', Array.from(client.commands.keys()).join(', '));
         try {
-          await interaction.reply({ content: '❌ Gambling system is temporarily unavailable. Please try again in a moment.', ephemeral: true });
-        } catch (_) {}
+          await interaction.editReply({ content: '❌ Gambling system is temporarily unavailable. Please try again in a moment.' });
+        } catch (replyErr) {
+          console.error('❌ Could not send fallback reply:', replyErr.message);
+        }
       }
       return;
     }
