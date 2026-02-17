@@ -2237,7 +2237,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         txRow,
         contestRow, voteEventRow, eventRow,
         bulkTaskRow, taskRow,
-        paidRow,
+        paidTx,
+        paidContestPrizes, paidVoteEventPrizes, paidLegacyTasks, paidApprovedProofs,
         contestWinners, voteWinners, proofPayouts,
         usersRow,
         treasuryWalletCount, userWalletCount,
@@ -2249,7 +2250,24 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get('SELECT COUNT(*) AS c FROM events'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM bulk_tasks'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM tasks'), { c: 0 }),
+        // ── Total Paid Out: aggregate ALL payout sources ──
+        // 1. On-chain transactions (direct SOL transfers)
         safe(db.get('SELECT COALESCE(SUM(amount), 0) AS total FROM transactions'), { total: 0 }),
+        // 2. Contest prizes awarded to winners
+        safe(db.get(`SELECT COALESCE(SUM(c.prize_amount / CASE WHEN c.num_winners > 0 THEN c.num_winners ELSE 1 END), 0) AS total
+          FROM contest_entries ce JOIN contests c ON ce.contest_id = c.id WHERE ce.is_winner = 1`), { total: 0 }),
+        // 3. Vote event prizes awarded to winners
+        safe(db.get(`SELECT COALESCE(SUM(ve.prize_amount / CASE WHEN (SELECT COUNT(*) FROM vote_event_participants vp2 WHERE vp2.vote_event_id = ve.id AND vp2.is_winner = 1) > 0
+          THEN (SELECT COUNT(*) FROM vote_event_participants vp2 WHERE vp2.vote_event_id = ve.id AND vp2.is_winner = 1) ELSE 1 END), 0) AS total
+          FROM vote_event_participants vep JOIN vote_events ve ON vep.vote_event_id = ve.id WHERE vep.is_winner = 1`), { total: 0 }),
+        // 4. Legacy task payouts (executed tasks)
+        safe(db.get("SELECT COALESCE(SUM(amount), 0) AS total FROM tasks WHERE status = 'completed' OR transaction_signature IS NOT NULL"), { total: 0 }),
+        // 5. Approved proof submissions (bulk task payout_amount per approved proof)
+        safe(db.get(`SELECT COALESCE(SUM(bt.payout_amount), 0) AS total
+          FROM proof_submissions ps
+          JOIN task_assignments ta ON ps.task_assignment_id = ta.id
+          JOIN bulk_tasks bt ON ta.bulk_task_id = bt.id
+          WHERE ps.status = 'approved'`), { total: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM contest_entries WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
@@ -2265,7 +2283,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Active servers = actual Discord guilds the bot is in (live count)
       const activeServers = discordClient?.guilds?.cache?.size || 0;
 
-      const totalPaidOutSOL = paidRow.total || 0;
+      // Sum all payout sources (avoid double-counting: transactions already records on-chain sends)
+      const totalPaidOutSOL = (paidTx.total || 0)
+        + (paidContestPrizes.total || 0)
+        + (paidVoteEventPrizes.total || 0)
+        + (paidLegacyTasks.total || 0)
+        + (paidApprovedProofs.total || 0);
 
       // ── Inline Solana helpers (utils/crypto not available in backend container) ──
       const LAMPORTS_PER_SOL = 1_000_000_000;
