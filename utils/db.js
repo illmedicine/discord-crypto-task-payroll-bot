@@ -407,6 +407,10 @@ const initDb = () => {
         chosen_slot INTEGER NOT NULL,
         bet_amount REAL DEFAULT 0,
         is_winner INTEGER DEFAULT 0,
+        payment_status TEXT DEFAULT 'none',
+        entry_tx_signature TEXT,
+        payout_tx_signature TEXT,
+        wallet_address TEXT,
         joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(gambling_event_id, user_id),
         FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id),
@@ -414,6 +418,12 @@ const initDb = () => {
         FOREIGN KEY(user_id) REFERENCES users(discord_id)
       )
     `);
+
+    // Migration: add payment columns if table already exists
+    db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payment_status TEXT DEFAULT 'none'`, () => {});
+    db.run(`ALTER TABLE gambling_event_bets ADD COLUMN entry_tx_signature TEXT`, () => {});
+    db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payout_tx_signature TEXT`, () => {});
+    db.run(`ALTER TABLE gambling_event_bets ADD COLUMN wallet_address TEXT`, () => {});
 
     // User stats table (fast counters for trust/risk scoring)
     db.run(`
@@ -1826,7 +1836,7 @@ const setGamblingEventWinningSlot = (eventId, winningSlot) => {
   });
 };
 
-const joinGamblingEvent = (eventId, guildId, userId, chosenSlot, betAmount) => {
+const joinGamblingEvent = (eventId, guildId, userId, chosenSlot, betAmount, paymentStatus, walletAddress) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
       db.run('BEGIN TRANSACTION');
@@ -1834,8 +1844,8 @@ const joinGamblingEvent = (eventId, guildId, userId, chosenSlot, betAmount) => {
         if (err) { db.run('ROLLBACK'); return reject(err); }
       });
       db.run(
-        `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`,
-        [eventId, guildId, userId, chosenSlot, betAmount || 0],
+        `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null],
         function (err) {
           if (err) { db.run('ROLLBACK'); return reject(err); }
           db.run('COMMIT', (commitErr) => {
@@ -1890,6 +1900,35 @@ const setGamblingEventWinners = (eventId, winnerUserIds) => {
       (err) => {
         if (err) reject(err);
         else resolve();
+      }
+    );
+  });
+};
+
+const updateGamblingBetPayment = (eventId, userId, paymentStatus, txSignatureField, txSignature) => {
+  return new Promise((resolve, reject) => {
+    const field = txSignatureField === 'payout' ? 'payout_tx_signature' : 'entry_tx_signature';
+    db.run(
+      `UPDATE gambling_event_bets SET payment_status = ?, ${field} = ? WHERE gambling_event_id = ? AND user_id = ?`,
+      [paymentStatus, txSignature, eventId, userId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+const getGamblingEventBetsWithWallets = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT b.*, u.solana_address FROM gambling_event_bets b
+       LEFT JOIN users u ON b.user_id = u.discord_id
+       WHERE b.gambling_event_id = ? ORDER BY b.joined_at ASC`,
+      [eventId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
       }
     );
   });
@@ -2554,5 +2593,7 @@ module.exports = {
   getGamblingEventBets,
   getGamblingBetResults,
   setGamblingEventWinners,
+  updateGamblingBetPayment,
+  getGamblingEventBetsWithWallets,
   deleteGamblingEvent,
 };

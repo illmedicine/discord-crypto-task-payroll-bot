@@ -450,11 +450,21 @@ db.serialize(() => {
       chosen_slot INTEGER NOT NULL,
       bet_amount REAL DEFAULT 0,
       is_winner INTEGER DEFAULT 0,
+      payment_status TEXT DEFAULT 'none',
+      entry_tx_signature TEXT,
+      payout_tx_signature TEXT,
+      wallet_address TEXT,
       joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(gambling_event_id, user_id),
       FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id)
     )`
   )
+
+  // Migration: add payment columns if table already exists
+  db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payment_status TEXT DEFAULT 'none'`, () => {})
+  db.run(`ALTER TABLE gambling_event_bets ADD COLUMN entry_tx_signature TEXT`, () => {})
+  db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payout_tx_signature TEXT`, () => {})
+  db.run(`ALTER TABLE gambling_event_bets ADD COLUMN wallet_address TEXT`, () => {})
 })
 
 function run(sql, params = []) {

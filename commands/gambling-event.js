@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/db');
+const crypto = require('../utils/crypto');
 const { processGamblingEvent } = require('../utils/gamblingEventProcessor');
 
 // ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
@@ -197,6 +198,20 @@ module.exports = {
       if (!event || event.guild_id !== interaction.guildId) {
         return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
       }
+
+      // If active pot event with entry fees, trigger cancellation with refunds instead of hard delete
+      const hasEntryFees = event.mode === 'pot' && (event.entry_fee || 0) > 0 && event.status === 'active';
+      if (hasEntryFees) {
+        const bets = await db.getGamblingEventBets(eventId);
+        const committedBets = bets.filter(b => b.payment_status === 'committed');
+        if (committedBets.length > 0) {
+          await interaction.deferReply({ ephemeral: true });
+          // Process as cancellation — will handle refunds
+          await processGamblingEvent(eventId, interaction.client, 'cancelled_by_admin');
+          return interaction.editReply({ content: `✅ Gambling event #${eventId} cancelled. Refunds are being processed for ${committedBets.length} participant(s).` });
+        }
+      }
+
       await db.deleteGamblingEvent(eventId);
       return interaction.reply({ content: `✅ Gambling event #${eventId} deleted.`, ephemeral: true });
     }
@@ -245,29 +260,81 @@ module.exports = {
       });
     }
 
-    // Check wallet if pot mode with entry fee
-    if (event.mode === 'pot' && event.entry_fee > 0) {
+    const isPotMode = event.mode === 'pot';
+    const entryFee = event.entry_fee || 0;
+    const requiresPayment = isPotMode && entryFee > 0;
+    let userWalletAddress = null;
+
+    // ---- PREPAYMENT VALIDATION (pot mode with entry fee) ----
+    if (requiresPayment) {
+      // 1. Require connected wallet
       const userData = await db.getUser(interaction.user.id);
       if (!userData || !userData.solana_address) {
         return interaction.reply({
-          content: '❌ You need to register a wallet first! Use `/wallet set` to add your Solana address.',
+          content: `❌ **Wallet Required!**\n\nThis event requires a **${entryFee} ${event.currency}** entry fee.\nYou must connect your Solana wallet first.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\`\n\nOnce connected, click the slot button again to enter.`,
           ephemeral: true
         });
       }
+      userWalletAddress = userData.solana_address;
+
+      // 2. Validate wallet address
+      if (!crypto.isValidSolanaAddress(userWalletAddress)) {
+        return interaction.reply({
+          content: '❌ Your connected wallet address is invalid. Please update it with `/user-wallet update`.', 
+          ephemeral: true
+        });
+      }
+
+      // 3. Verify guild treasury wallet exists
+      const guildWallet = await db.getGuildWallet(interaction.guildId);
+      if (!guildWallet || !guildWallet.wallet_address) {
+        return interaction.reply({
+          content: '❌ This server does not have a treasury wallet configured. Server owner must use `/wallet connect` first.',
+          ephemeral: true
+        });
+      }
+
+      // 4. Check on-chain balance (SOL only for now)
+      if (event.currency === 'SOL') {
+        await interaction.deferReply({ ephemeral: true });
+        try {
+          const balance = await crypto.getBalance(userWalletAddress);
+          if (balance < entryFee) {
+            return interaction.editReply({
+              content: `❌ **Insufficient Funds!**\n\n💰 Entry fee: **${entryFee} SOL**\n💳 Your wallet balance: **${balance.toFixed(4)} SOL**\n📉 Short by: **${(entryFee - balance).toFixed(4)} SOL**\n\nPlease fund your wallet and try again.\n\`${userWalletAddress}\``
+            });
+          }
+        } catch (balanceErr) {
+          console.warn('[GamblingEvent] Balance check error:', balanceErr.message);
+          // Continue anyway — balance check is best-effort
+        }
+      }
     }
 
-    const betAmount = event.mode === 'pot' ? (event.entry_fee || 0) : 0;
+    const betAmount = requiresPayment ? entryFee : 0;
+    const paymentStatus = requiresPayment ? 'committed' : 'none';
 
-    await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount);
+    // If we didn't defer yet (house mode / free entry), no deferral needed
+    const isDeferred = requiresPayment && event.currency === 'SOL';
+
+    await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, paymentStatus, userWalletAddress);
+
+    // Sync bet to backend
+    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount, paymentStatus, walletAddress: userWalletAddress });
 
     const slots = await db.getGamblingEventSlots(eventId);
     const chosenSlot = slots.find(s => s.slot_number === slotNumber);
     const newCount = event.current_players + 1;
 
-    await interaction.reply({
-      content: `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\nPlayers: ${newCount}/${event.max_players}`,
-      ephemeral: true
-    });
+    const confirmMsg = requiresPayment
+      ? `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Players: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if event is cancelled.`
+      : `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\n👥 Players: ${newCount}/${event.max_players}`;
+
+    if (isDeferred) {
+      await interaction.editReply({ content: confirmMsg });
+    } else {
+      await interaction.reply({ content: confirmMsg, ephemeral: true });
+    }
 
     // Announce milestone
     if (newCount === event.min_players) {
@@ -294,25 +361,53 @@ module.exports = {
   },
 };
 
-// ---- Helper: build embed ----
+// ---- Helper: build embed with rules & T&Cs ----
 function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount, currency, entryFee, currentPlayers, minPlayers, maxPlayers, durationMinutes, slots) {
   const modeLabel = mode === 'pot' ? '🏦 Pot Split' : '🏠 House-funded';
-  const prizeInfo = mode === 'pot'
-    ? `${entryFee} ${currency} entry → pot split`
+  const isPotMode = mode === 'pot';
+  const requiresPayment = isPotMode && entryFee > 0;
+
+  const prizeInfo = isPotMode
+    ? `${entryFee} ${currency} entry → pot split (90% to winners)`
     : `${prizeAmount} ${currency}`;
 
   const slotList = slots.map((s, i) => `${i + 1}. ${s.label}`).join('\n');
 
+  // Build description with rules
+  let desc = description || 'Place your bets on a slot!';
+  desc += '\n\n**📋 How it works:**\n';
+  desc += '1️⃣ Click a slot button below to place your bet\n';
+  desc += '2️⃣ The wheel spins when max players join or time runs out\n';
+  desc += '3️⃣ If your slot wins — you get paid! 💰\n';
+
+  if (requiresPayment) {
+    desc += `\n**💰 Entry Requirements:**\n`;
+    desc += `• Entry fee: **${entryFee} ${currency}** per player\n`;
+    desc += `• You MUST connect your wallet first: \`/user-wallet connect\`\n`;
+    desc += `• Your wallet must have at least **${entryFee} ${currency}** available\n`;
+    desc += `• Entry fee is committed when you place your bet\n`;
+    
+    desc += `\n**🏆 Prize Distribution:**\n`;
+    desc += `• Total pot = all entry fees combined\n`;
+    desc += `• **90%** of pot split evenly among winner(s)\n`;
+    desc += `• **10%** retained by the house (server treasury)\n`;
+    
+    desc += `\n**🔄 Refund Policy:**\n`;
+    desc += `• If event is cancelled (not enough players), all entries are refunded\n`;
+    desc += `• Refunds are sent to your connected wallet address\n`;
+    
+    desc += `\n**📜 Terms & Conditions:**\n`;
+    desc += `• One bet per player — no changes after entry\n`;
+    desc += `• Winners determined by random provably-fair wheel spin\n`;
+    desc += `• Payouts sent to your connected Solana wallet\n`;
+    desc += `• By entering, you agree to these terms and accept the outcome\n`;
+    desc += `• Must be 18+ to participate in wagering events`;
+  }
+
   const embed = new EmbedBuilder()
     .setColor('#E74C3C')
     .setTitle(`🎰 DCB Gambling Event: ${title}`)
-    .setDescription(
-      (description || 'Place your bets on a slot!') +
-      '\n\n**How it works:**\n' +
-      '1️⃣ Click a slot button to place your bet\n' +
-      '2️⃣ The wheel spins when max players join or time runs out\n' +
-      '3️⃣ If your slot wins — you get paid instantly! 💰'
-    )
+    .setDescription(desc)
     .addFields(
       { name: '🎲 Mode', value: modeLabel, inline: true },
       { name: '🪑 Players', value: `${currentPlayers}/${maxPlayers}`, inline: true },

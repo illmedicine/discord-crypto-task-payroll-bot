@@ -1477,25 +1477,53 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       }
 
       const modeLabel = event.mode === 'pot' ? '🏦 Pot Split' : '🏠 House-funded'
-      const entryInfo = event.entry_fee > 0 ? `${event.entry_fee} ${event.currency} per bet` : 'Free entry'
+      const isPotMode = event.mode === 'pot'
+      const entryFee = event.entry_fee || 0
+      const requiresPayment = isPotMode && entryFee > 0
+      const entryInfo = entryFee > 0 ? `${entryFee} ${event.currency} per bet` : 'Free entry'
 
       const slotList = slots.map(s => `${s.slot_number}. ${s.label}`).join('\n')
+
+      // Build description with rules & T&Cs
+      let desc = event.description || 'Place your bets!'
+      desc += '\n\n**📋 How it works:**\n'
+      desc += '1️⃣ Click a slot button below to place your bet\n'
+      desc += '2️⃣ The wheel spins when max players join or time runs out\n'
+      desc += '3️⃣ If your slot wins — you get paid! 💰\n'
+
+      if (requiresPayment) {
+        desc += `\n**💰 Entry Requirements:**\n`
+        desc += `• Entry fee: **${entryFee} ${event.currency}** per player\n`
+        desc += `• You MUST connect your wallet first: \`/user-wallet connect\`\n`
+        desc += `• Your wallet must have at least **${entryFee} ${event.currency}** available\n`
+        desc += `• Entry fee is committed when you place your bet\n`
+
+        desc += `\n**🏆 Prize Distribution:**\n`
+        desc += `• Total pot = all entry fees combined\n`
+        desc += `• **90%** of pot split evenly among winner(s)\n`
+        desc += `• **10%** retained by the house (server treasury)\n`
+
+        desc += `\n**🔄 Refund Policy:**\n`
+        desc += `• If event is cancelled (not enough players), all entries are refunded\n`
+        desc += `• Refunds are sent to your connected wallet address\n`
+
+        desc += `\n**📜 Terms & Conditions:**\n`
+        desc += `• One bet per player — no changes after entry\n`
+        desc += `• Winners determined by random provably-fair wheel spin\n`
+        desc += `• Payouts sent to your connected Solana wallet\n`
+        desc += `• By entering, you agree to these terms and accept the outcome\n`
+        desc += `• Must be 18+ to participate in wagering events`
+      }
 
       const mainEmbed = new EmbedBuilder()
         .setColor('#E74C3C')
         .setTitle(`🎰 DCB Gambling Event: ${event.title}`)
-        .setDescription(
-          (event.description || 'Place your bets!') +
-          '\n\n**How it works:**\n' +
-          '1️⃣ Click a slot button below to place your bet\n' +
-          '2️⃣ The wheel spins when max players join or time runs out\n' +
-          '3️⃣ If your slot wins — you get paid instantly! 💰'
-        )
+        .setDescription(desc)
         .addFields(
           { name: '🎲 Mode', value: modeLabel, inline: true },
           { name: '🪑 Players', value: `${event.current_players}/${event.max_players}`, inline: true },
           { name: '✅ Min to Spin', value: `${event.min_players}`, inline: true },
-          { name: '🎁 Prize Pool', value: event.mode === 'pot' ? `${entryInfo} (pot split)` : `${Number(event.prize_amount || 0)} ${event.currency}`, inline: true },
+          { name: '🎁 Prize Pool', value: isPotMode ? `${entryInfo} → pot split (90% to winners)` : `${Number(event.prize_amount || 0)} ${event.currency}`, inline: true },
           { name: '🎰 Slots', value: slotList || 'None', inline: false },
         )
         .setFooter({ text: `DisCryptoBank • Gamble #${eventId} • Provably Fair` })
@@ -2317,13 +2345,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Bot pushes gambling bet/status back to keep backend DB in sync
   app.post('/api/internal/gambling-event-sync', requireInternal, async (req, res) => {
     try {
-      const { eventId, action, userId, guildId, chosenSlot, betAmount, status } = req.body || {}
+      const { eventId, action, userId, guildId, chosenSlot, betAmount, paymentStatus, walletAddress, status } = req.body || {}
       if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
 
       if (action === 'bet' && userId && guildId) {
         await db.run(
-          `INSERT OR IGNORE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`,
-          [eventId, guildId, userId, chosenSlot, betAmount || 0]
+          `INSERT OR IGNORE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null]
         ).catch(() => {})
         await db.run(
           `UPDATE gambling_events SET current_players = (SELECT COUNT(*) FROM gambling_event_bets WHERE gambling_event_id = ?) WHERE id = ?`,

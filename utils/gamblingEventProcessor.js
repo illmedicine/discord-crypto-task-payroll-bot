@@ -1,5 +1,7 @@
 const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 
+const HOUSE_CUT_PERCENT = 10; // 10% house rake
+
 /** Fire-and-forget sync event status to backend */
 function syncStatusToBackend(eventId, status, guildId) {
   try {
@@ -15,9 +17,76 @@ function syncStatusToBackend(eventId, status, guildId) {
   } catch (_) {}
 }
 
+/** Send SOL via bot wallet (shared helper) */
+async function sendPayment(crypto, recipientAddress, amount) {
+  if (typeof crypto.sendSol === 'function') {
+    return crypto.sendSol(recipientAddress, amount);
+  }
+  // Fallback: manual transaction
+  const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+  const botWallet = crypto.getWallet();
+  if (!botWallet) return { success: false, error: 'Bot wallet not configured' };
+  const recipient = new PublicKey(recipientAddress);
+  const lamports = Math.floor(amount * 1e9);
+  const instruction = SystemProgram.transfer({ fromPubkey: botWallet.publicKey, toPubkey: recipient, lamports });
+  const tx = new Transaction().add(instruction);
+  const signature = await sendAndConfirmTransaction(connection, tx, [botWallet]);
+  return { success: true, signature, amount, recipient: recipientAddress };
+}
+
+/**
+ * Refund all participants when an event is cancelled.
+ * Only refunds bets with payment_status = 'committed' and entry_fee > 0.
+ */
+async function refundParticipants(event, bets, db, crypto, guildWallet) {
+  const refundResults = [];
+  const isPotMode = event.mode === 'pot';
+  const entryFee = event.entry_fee || 0;
+
+  if (!isPotMode || entryFee <= 0) return refundResults;
+
+  for (const bet of bets) {
+    if (bet.payment_status !== 'committed' || (bet.bet_amount || 0) <= 0) continue;
+
+    try {
+      // Get user's wallet address
+      const userData = await db.getUser(bet.user_id);
+      const recipientAddr = userData?.solana_address || bet.wallet_address;
+      if (!recipientAddr) {
+        refundResults.push({ userId: bet.user_id, success: false, reason: 'No wallet address' });
+        await db.updateGamblingBetPayment(event.id, bet.user_id, 'refund_failed', 'payout', null);
+        continue;
+      }
+
+      const res = await sendPayment(crypto, recipientAddr, bet.bet_amount);
+      if (res && res.success) {
+        await db.recordTransaction(event.guild_id, guildWallet?.wallet_address || 'treasury', recipientAddr, bet.bet_amount, res.signature);
+        await db.updateGamblingBetPayment(event.id, bet.user_id, 'refunded', 'payout', res.signature);
+        refundResults.push({ userId: bet.user_id, address: recipientAddr, amount: bet.bet_amount, success: true, signature: res.signature });
+      } else {
+        await db.updateGamblingBetPayment(event.id, bet.user_id, 'refund_failed', 'payout', null);
+        refundResults.push({ userId: bet.user_id, success: false, reason: res?.error || 'Refund failed' });
+      }
+    } catch (err) {
+      console.error(`[GamblingProcessor] Refund error for user ${bet.user_id}:`, err.message);
+      await db.updateGamblingBetPayment(event.id, bet.user_id, 'refund_failed', 'payout', null).catch(() => {});
+      refundResults.push({ userId: bet.user_id, success: false, reason: err.message });
+    }
+  }
+  return refundResults;
+}
+
 /**
  * Process a gambling event ending: spin the wheel, determine winners, pay out, announce.
  * Safe to call multiple times — no-ops if already ended/cancelled/completed.
+ * 
+ * POT MODE payout:
+ *   Total pot = sum of all entry fees
+ *   House cut = 10% of pot (retained in treasury)
+ *   Winner payout = 90% of pot / number of winners
+ *
+ * CANCELLATION:
+ *   All committed entry fees refunded to participants' wallets from treasury
  */
 const processGamblingEvent = async (eventId, client, reason = 'time', deps = {}) => {
   try {
@@ -39,9 +108,21 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     const bets = await db.getGamblingEventBets(eventId);
     const slots = await db.getGamblingEventSlots(eventId);
+    const guildWallet = await db.getGuildWallet(event.guild_id);
+    const isPotMode = event.mode === 'pot';
+    const hasEntryFee = isPotMode && (event.entry_fee || 0) > 0;
 
+    // ======== CANCELLATION: not enough players ========
     if (bets.length < event.min_players) {
-      // Cancel — not enough players
+      console.log(`[GamblingProcessor] Event #${eventId} cancelled — ${bets.length}/${event.min_players} players`);
+
+      // Refund participants if entry fees were committed
+      let refundResults = [];
+      if (hasEntryFee && guildWallet) {
+        refundResults = await refundParticipants(event, bets, db, crypto, guildWallet);
+      }
+
+      // Build cancellation embed
       try {
         const channel = await client.channels.fetch(event.channel_id);
         if (channel) {
@@ -55,7 +136,27 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
               { name: '👥 Joined', value: `${bets.length}`, inline: true }
             )
             .setTimestamp();
-          await channel.send({ embeds: [cancelEmbed] });
+
+          // Show refund info if applicable
+          if (refundResults.length > 0) {
+            let refundSummary = '';
+            for (const r of refundResults) {
+              if (r.success) {
+                refundSummary += `✅ <@${r.userId}>: ${r.amount.toFixed(4)} ${event.currency} refunded - [TX](https://solscan.io/tx/${r.signature})\n`;
+              } else {
+                refundSummary += `❌ <@${r.userId}>: Refund failed - ${r.reason}\n`;
+              }
+            }
+            cancelEmbed.addFields({ name: '🔄 Refunds', value: refundSummary || 'No refunds needed' });
+          } else if (hasEntryFee && !guildWallet) {
+            cancelEmbed.addFields({ name: '⚠️ Refund Issue', value: 'No treasury wallet configured. Server admin must manually refund participants.' });
+          }
+
+          const mentionContent = bets.length > 0
+            ? `🎰 **Event Cancelled** — ${bets.map(b => `<@${b.user_id}>`).join(', ')}, your event has been cancelled.${hasEntryFee ? ' Refunds are being processed.' : ''}`
+            : '🎰 **Gambling Event Cancelled** — Not enough players joined.';
+
+          await channel.send({ content: mentionContent, embeds: [cancelEmbed] });
         }
       } catch (e) {
         console.log(`[GamblingProcessor] Could not announce cancellation for #${event.id}:`, e.message);
@@ -66,7 +167,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       return;
     }
 
-    // ---- SPIN THE WHEEL: pick a random winning slot ----
+    // ======== SPIN THE WHEEL: pick a random winning slot ========
     const numSlots = slots.length || event.num_slots;
     const winningSlot = Math.floor(Math.random() * numSlots) + 1; // 1-based
     await db.setGamblingEventWinningSlot(eventId, winningSlot);
@@ -80,65 +181,79 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       await db.setGamblingEventWinners(eventId, winnerUserIds);
     }
 
-    // ---- Calculate prize ----
-    let totalPrize = 0;
-    if (event.mode === 'pot') {
+    // ======== Calculate prize with house cut ========
+    let totalPot = 0;
+    let houseCut = 0;
+    let winnerPool = 0;
+
+    if (isPotMode) {
       // Pot mode: sum of all entry fees
-      totalPrize = bets.reduce((sum, b) => sum + (b.bet_amount || 0), 0);
+      totalPot = bets.reduce((sum, b) => sum + (b.bet_amount || 0), 0);
+      houseCut = totalPot * (HOUSE_CUT_PERCENT / 100); // 10% house rake
+      winnerPool = totalPot - houseCut;                  // 90% to winners
     } else {
-      // House-funded mode
-      totalPrize = event.prize_amount || 0;
+      // House-funded mode: fixed prize, no house cut (owner set the prize)
+      totalPot = event.prize_amount || 0;
+      houseCut = 0;
+      winnerPool = totalPot;
     }
 
-    const prizePerWinner = (totalPrize > 0 && winnerUserIds.length > 0)
-      ? totalPrize / winnerUserIds.length
+    const prizePerWinner = (winnerPool > 0 && winnerUserIds.length > 0)
+      ? winnerPool / winnerUserIds.length
       : 0;
 
-    // ---- Solana payouts ----
-    const guildWallet = await db.getGuildWallet(event.guild_id);
+    // ======== Solana payouts to winners ========
     const paymentResults = [];
 
-    if (totalPrize > 0 && winnerUserIds.length > 0) {
+    if (prizePerWinner > 0 && winnerUserIds.length > 0) {
       if (!guildWallet) {
         console.log(`[GamblingProcessor] No treasury wallet for guild ${event.guild_id}, skipping payments`);
       } else {
-        const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
-
         for (const userId of winnerUserIds) {
           try {
             const userData = await db.getUser(userId);
-            if (userData && userData.solana_address) {
-              if (typeof crypto.sendSol === 'function') {
-                const res = await crypto.sendSol(userData.solana_address, prizePerWinner);
-                if (res && res.success) {
-                  await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, res.signature);
-                  paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature: res.signature });
-                } else {
-                  paymentResults.push({ userId, success: false, reason: res.error || 'Payment failed' });
-                }
+            const bet = winnerBets.find(b => b.user_id === userId);
+            const recipientAddr = userData?.solana_address || bet?.wallet_address;
+
+            if (recipientAddr) {
+              const res = await sendPayment(crypto, recipientAddr, prizePerWinner);
+              if (res && res.success) {
+                await db.recordTransaction(event.guild_id, guildWallet.wallet_address, recipientAddr, prizePerWinner, res.signature);
+                await db.updateGamblingBetPayment(eventId, userId, 'paid_out', 'payout', res.signature);
+                paymentResults.push({ userId, address: recipientAddr, amount: prizePerWinner, success: true, signature: res.signature });
               } else {
-                const recipientPubkey = new PublicKey(userData.solana_address);
-                const lamports = Math.floor(prizePerWinner * 1e9);
-                const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
-                const instruction = SystemProgram.transfer({ fromPubkey: treasuryPubkey, toPubkey: recipientPubkey, lamports });
-                const tx = new Transaction().add(instruction);
-                const botWallet = crypto.getWallet();
-                const signature = await sendAndConfirmTransaction(connection, tx, [botWallet]);
-                await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, signature);
-                paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature });
+                await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null);
+                paymentResults.push({ userId, success: false, reason: res?.error || 'Payment failed' });
               }
             } else {
+              await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null);
               paymentResults.push({ userId, success: false, reason: 'No wallet connected' });
             }
           } catch (err) {
             console.error(`[GamblingProcessor] Payment error for winner ${userId}:`, err);
+            await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null).catch(() => {});
             paymentResults.push({ userId, success: false, reason: err.message });
           }
         }
       }
     }
 
-    // ---- Build bet breakdown ----
+    // Mark non-winner bets as lost
+    for (const bet of bets) {
+      if (!winnerUserIds.includes(bet.user_id)) {
+        await db.updateGamblingBetPayment(eventId, bet.user_id, 'lost', 'payout', null).catch(() => {});
+      }
+    }
+
+    // Track house cut in guild budget
+    if (houseCut > 0 && guildWallet) {
+      try {
+        await db.addBudgetSpend(event.guild_id, -houseCut); // Negative = income to treasury
+        console.log(`[GamblingProcessor] House cut: ${houseCut.toFixed(4)} ${event.currency} retained for guild ${event.guild_id}`);
+      } catch (_) {}
+    }
+
+    // ======== Build bet breakdown ========
     let betBreakdown = '';
     for (const slot of slots) {
       const count = bets.filter(b => b.chosen_slot === slot.slot_number).length;
@@ -147,7 +262,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       betBreakdown += `${isWin}**${slot.label}**: ${count} bet(s) (${pct}%)\n`;
     }
 
-    // ---- Announce results ----
+    // ======== Announce results ========
     try {
       const channel = await client.channels.fetch(event.channel_id);
       if (channel) {
@@ -171,11 +286,25 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           resultsEmbed.addFields({ name: '🎊 Winners', value: 'No winners this round — nobody bet on the winning slot!' });
         }
 
-        if (totalPrize > 0 && winnerUserIds.length > 0) {
-          resultsEmbed.addFields(
-            { name: '🎁 Prize Pool', value: `${totalPrize} ${event.currency}`, inline: true },
-            { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${event.currency}`, inline: true }
-          );
+        // Prize pool + house cut breakdown
+        if (totalPot > 0) {
+          if (isPotMode && houseCut > 0) {
+            resultsEmbed.addFields(
+              { name: '🏦 Total Pot', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+              { name: '🏠 House Cut (10%)', value: `${houseCut.toFixed(4)} ${event.currency}`, inline: true },
+              { name: '🎁 Winner Pool (90%)', value: `${winnerPool.toFixed(4)} ${event.currency}`, inline: true },
+            );
+          } else {
+            resultsEmbed.addFields(
+              { name: '🎁 Prize Pool', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+            );
+          }
+
+          if (winnerUserIds.length > 0) {
+            resultsEmbed.addFields(
+              { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${event.currency}`, inline: true }
+            );
+          }
 
           if (paymentResults.length > 0) {
             let paymentSummary = '';
@@ -193,7 +322,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
         const mentionContent = winnerUserIds.length > 0
           ? `🎰 **GAMBLING EVENT RESULTS!** 🎰\n\nCongratulations ${winnerUserIds.map(id => `<@${id}>`).join(', ')}!`
-          : '🎰 **GAMBLING EVENT RESULTS!** — No winners this round.';
+          : '🎰 **GAMBLING EVENT RESULTS!** — No winners this round.' + (isPotMode && houseCut > 0 ? `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.` : '');
 
         await channel.send({ content: mentionContent, embeds: [resultsEmbed] });
       }
@@ -203,7 +332,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     await db.updateGamblingEventStatus(eventId, 'completed');
     syncStatusToBackend(eventId, 'completed', event.guild_id);
-    console.log(`[GamblingProcessor] Event #${eventId} completed with ${winnerUserIds.length} winner(s)`);
+    console.log(`[GamblingProcessor] Event #${eventId} completed with ${winnerUserIds.length} winner(s), house cut: ${houseCut.toFixed(4)}`);
   } catch (error) {
     console.error('[GamblingProcessor] Error processing gambling event:', error);
   }
