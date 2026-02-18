@@ -291,7 +291,8 @@ client.once('clientReady', async () => {
 const BUILD_TIMESTAMP = new Date().toISOString();
 console.log(`🔧 Build timestamp: ${BUILD_TIMESTAMP}`);
 client.on('interactionCreate', async interaction => {
-  console.log(`[${new Date().toISOString()}] 📨 Interaction received: type=${interaction.type}`);
+  try {
+  console.log(`[${new Date().toISOString()}] 📨 Interaction received: type=${interaction.type} (build: ${BUILD_TIMESTAMP})`);
   if (interaction.isChatInputCommand()) {
     console.log(`   Command: ${interaction.commandName}`);
   }
@@ -754,6 +755,28 @@ client.on('interactionCreate', async interaction => {
     }
     return;
   }
+
+  // Catch-all: if we reach here, interaction was not handled
+  console.warn(`[interactionCreate] ⚠️ Unhandled interaction: type=${interaction.type}, customId=${interaction.customId || 'N/A'}, commandName=${interaction.commandName || 'N/A'}`);
+  if (!interaction.replied && !interaction.deferred) {
+    try {
+      await interaction.reply({ content: '⚠️ This action is not recognized. Please try again.', ephemeral: true });
+    } catch (_) {}
+  }
+
+  } catch (globalErr) {
+    // Top-level safety: ensure Discord always gets SOME response
+    console.error(`[interactionCreate] ❌ UNCAUGHT ERROR:`, globalErr?.message, globalErr?.stack);
+    try {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: '❌ An unexpected error occurred. Please try again.', ephemeral: true });
+      } else if (interaction.deferred) {
+        await interaction.editReply({ content: '❌ An unexpected error occurred. Please try again.' });
+      }
+    } catch (_) {
+      console.error('[interactionCreate] Could not send error response');
+    }
+  }
 });
 
 // Track messages from DCB workers for activity stats
@@ -806,6 +829,19 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
       }).catch(() => {});
     }
   }
+});
+
+// Gateway status monitoring
+client.on('warn', (msg) => console.warn('[Discord WARN]', msg));
+client.on('error', (err) => console.error('[Discord ERROR]', err?.message || err));
+client.on('disconnect', () => console.error('[Discord] ❌ Disconnected from gateway!'));
+client.on('reconnecting', () => console.log('[Discord] 🔄 Reconnecting to gateway...'));
+client.on('invalidated', () => {
+  console.error('[Discord] ❌ Session INVALIDATED — forcing restart');
+  process.exit(1);
+});
+client.rest.on('rateLimited', (info) => {
+  console.warn(`[Discord] ⏳ Rate limited: ${info.method} ${info.url} (retry after ${info.retryAfter}ms)`);
 });
 
 // Login to Discord
