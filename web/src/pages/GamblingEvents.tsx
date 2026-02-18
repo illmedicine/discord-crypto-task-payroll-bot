@@ -70,7 +70,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
   const [prizeAmount, setPrizeAmount] = useState('')
   const [currency, setCurrency] = useState('SOL')
   const [entryFee, setEntryFee] = useState('')
-  const [minPlayers, setMinPlayers] = useState('2')
+  const [minPlayers, setMinPlayers] = useState('1')
   const [maxPlayers, setMaxPlayers] = useState('10')
   const [durationMinutes, setDurationMinutes] = useState('')
   const [numSlots, setNumSlots] = useState(6)
@@ -162,7 +162,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
       prize_amount: mode === 'house' ? (prizeAmount ? Number(prizeAmount) : 0) : 0,
       currency,
       entry_fee: mode === 'pot' ? (entryFee ? Number(entryFee) : 0) : 0,
-      min_players: Number(minPlayers) || 2,
+      min_players: Number(minPlayers) || 1,
       max_players: Number(maxPlayers) || 10,
       duration_minutes: durationMinutes ? Number(durationMinutes) : null,
       slots: slots.map(s => ({ label: s.label, color: s.color })),
@@ -172,7 +172,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
     setDescription('')
     setPrizeAmount('')
     setEntryFee('')
-    setMinPlayers('2')
+    setMinPlayers('1')
     setMaxPlayers('10')
     setDurationMinutes('')
     setNumSlots(6)
@@ -438,7 +438,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
             <div className="form-row">
               <div className="form-group">
                 <label className="form-label">Min Players</label>
-                <input className="form-input" type="number" min="2" value={minPlayers}
+                <input className="form-input" type="number" min="1" value={minPlayers}
                        onChange={e => setMinPlayers(e.target.value)} />
               </div>
               <div className="form-group">

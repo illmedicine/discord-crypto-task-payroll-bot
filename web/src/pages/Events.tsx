@@ -91,7 +91,7 @@ export default function Events({ guildId, isOwner = true }: Props) {
   const [description, setDescription] = useState('')
   const [prizeAmount, setPrizeAmount] = useState('')
   const [currency, setCurrency] = useState('SOL')
-  const [minParticipants, setMinParticipants] = useState('2')
+  const [minParticipants, setMinParticipants] = useState('1')
   const [maxParticipants, setMaxParticipants] = useState('10')
   const [durationMinutes, setDurationMinutes] = useState('')
   const [qualificationUrl, setQualificationUrl] = useState('')
@@ -250,7 +250,7 @@ export default function Events({ guildId, isOwner = true }: Props) {
       description,
       prize_amount: prizeAmount ? Number(prizeAmount) : 0,
       currency,
-      min_participants: Number(minParticipants) || 2,
+      min_participants: Number(minParticipants) || 1,
       max_participants: Number(maxParticipants) || 10,
       duration_minutes: durationMinutes ? Number(durationMinutes) : null,
       owner_favorite_image_id: imgPayload[favoriteIdx]?.id || null,
@@ -261,7 +261,7 @@ export default function Events({ guildId, isOwner = true }: Props) {
     setTitle('')
     setDescription('')
     setPrizeAmount('')
-    setMinParticipants('2')
+    setMinParticipants('1')
     setMaxParticipants('10')
     setDurationMinutes('')
     setQualificationUrl('')
@@ -589,7 +589,7 @@ export default function Events({ guildId, isOwner = true }: Props) {
             </div>
             <div className="form-group">
               <label className="form-label">Min Seats</label>
-              <input className="form-input" type="number" min="2" value={minParticipants}
+              <input className="form-input" type="number" min="1" value={minParticipants}
                      onChange={e => setMinParticipants(e.target.value)} />
             </div>
             <div className="form-group">
