@@ -3113,5 +3113,55 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ── One-time startup: backfill transactions from on-chain data ──
+  ;(async () => {
+    try {
+      const txCount = await safe(db.get('SELECT COUNT(*) AS c FROM transactions'), { c: 0 })
+      if ((txCount.c || 0) > 10) return // already has plenty of data, skip backfill
+      const LAMPORTS_PER_SOL = 1_000_000_000
+      const SOLANA_RPC = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const wallets = await safe(db.all('SELECT guild_id, wallet_address FROM guild_wallets WHERE wallet_address IS NOT NULL'), [])
+      let totalInserted = 0
+      for (const w of wallets) {
+        try {
+          const sigRes = await axios.post(SOLANA_RPC, {
+            jsonrpc: '2.0', id: 1,
+            method: 'getSignaturesForAddress',
+            params: [w.wallet_address, { limit: 50 }]
+          }, { timeout: 15000 })
+          for (const sigInfo of (sigRes.data?.result || [])) {
+            if (sigInfo.err) continue
+            const exists = await db.get('SELECT 1 FROM transactions WHERE signature = ?', [sigInfo.signature])
+            if (exists) continue
+            try {
+              const txRes = await axios.post(SOLANA_RPC, {
+                jsonrpc: '2.0', id: 1,
+                method: 'getTransaction',
+                params: [sigInfo.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }]
+              }, { timeout: 15000 })
+              const tx = txRes.data?.result
+              if (!tx?.transaction) continue
+              for (const ix of (tx.transaction.message.instructions || [])) {
+                if (ix.program === 'system' && ix.parsed?.type === 'transfer' && ix.parsed?.info?.source === w.wallet_address) {
+                  const solAmount = (ix.parsed.info.lamports || 0) / LAMPORTS_PER_SOL
+                  if (solAmount <= 0) continue
+                  await db.run(
+                    `INSERT INTO transactions (guild_id, from_address, to_address, amount, signature, status, currency)
+                     VALUES (?, ?, ?, ?, ?, 'confirmed', 'SOL') ON CONFLICT(signature) DO NOTHING`,
+                    [w.guild_id, w.wallet_address, ix.parsed.info.destination || '', solAmount, sigInfo.signature]
+                  )
+                  totalInserted++
+                }
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      if (totalInserted > 0) console.log(`[startup] Backfilled ${totalInserted} on-chain transactions`)
+    } catch (err) {
+      console.warn('[startup] backfill skipped:', err.message)
+    }
+  })()
+
   return app
 }
