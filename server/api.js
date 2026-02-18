@@ -41,8 +41,17 @@ module.exports = (client) => {
   }));
 
   // Basic health check
+  const BOT_BUILD_TS = new Date().toISOString();
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({
+      status: 'ok',
+      build: BOT_BUILD_TS,
+      gateway: client?.ws?.status === 0 ? 'connected' : `status_${client?.ws?.status}`,
+      user: client?.user?.tag || null,
+      guilds: client?.guilds?.cache?.size || 0,
+      commands: client?.commands?.size || 0,
+      uptime: client?.uptime || 0
+    });
   });
 
   // Check which auth providers are configured

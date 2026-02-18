@@ -423,6 +423,28 @@ module.exports = function buildApi({ discordClient }) {
   const BACKEND_BUILD_TS = new Date().toISOString()
   app.get('/api/health', (req, res) => res.json({ ok: true, build: BACKEND_BUILD_TS, mode: discordClient.user ? 'gateway' : 'rest-only' }))
 
+  // Diagnostics: check if Discord Interactions Endpoint URL is set
+  // If set, Discord sends interactions via HTTP instead of gateway — bot never receives them
+  app.get('/api/diagnostics', async (req, res) => {
+    try {
+      const appInfo = await discordBotAPI('/applications/@me')
+      res.json({
+        build: BACKEND_BUILD_TS,
+        mode: discordClient.user ? 'gateway' : 'rest-only',
+        interactions_endpoint_url: appInfo?.interactions_endpoint_url || null,
+        interactions_endpoint_set: !!appInfo?.interactions_endpoint_url,
+        app_id: appInfo?.id,
+        app_name: appInfo?.name,
+        bot_connected: !!discordClient.user,
+        warning: appInfo?.interactions_endpoint_url
+          ? 'CRITICAL: Interactions Endpoint URL is set! Discord sends all button clicks to this URL instead of the bot gateway. The bot never receives interactions. Remove this URL from Discord Developer Portal > General Information.'
+          : null
+      })
+    } catch (err) {
+      res.status(500).json({ error: err?.message })
+    }
+  })
+
   // Check which auth providers are configured
   app.get('/api/auth/providers', (req, res) => {
     res.json({
