@@ -88,7 +88,7 @@ module.exports = {
         .addNumberOption(opt => opt.setName('prize_amount').setDescription('Prize pool (house mode)').setRequired(false))
         .addStringOption(opt => opt.setName('currency').setDescription('Currency (SOL/USD)').setRequired(false))
         .addNumberOption(opt => opt.setName('entry_fee').setDescription('Entry fee per player (pot mode)').setRequired(false))
-        .addIntegerOption(opt => opt.setName('min_players').setDescription('Min players to race').setRequired(true))
+        .addIntegerOption(opt => opt.setName('min_players').setDescription('Min players to race (default 1)').setMinValue(1).setRequired(false))
         .addIntegerOption(opt => opt.setName('max_players').setDescription('Max players').setRequired(true))
         .addIntegerOption(opt => opt.setName('duration_minutes').setDescription('Duration in minutes').setRequired(false))
         .addIntegerOption(opt => opt.setName('num_slots').setDescription('Number of horses (2-6, default 6)').setRequired(false))
@@ -123,7 +123,7 @@ module.exports = {
       const prizeAmount = interaction.options.getNumber('prize_amount') || 0;
       const currency = interaction.options.getString('currency') || 'SOL';
       const entryFee = interaction.options.getNumber('entry_fee') || 0;
-      const minPlayers = interaction.options.getInteger('min_players');
+      const minPlayers = interaction.options.getInteger('min_players') || 1;
       const maxPlayers = interaction.options.getInteger('max_players');
       const durationMinutes = interaction.options.getInteger('duration_minutes') || null;
       const numSlots = Math.min(Math.max(interaction.options.getInteger('num_slots') || 6, 2), 6);
@@ -363,8 +363,8 @@ module.exports = {
       console.warn(`[GamblingEvent] Failed to update embed for event #${eventId}:`, embedErr.message);
     }
 
-    // Announce milestone
-    if (newCount === event.min_players) {
+    // Announce milestone (skip if min is 1, that's the first bet — not noteworthy)
+    if (event.min_players > 1 && newCount === event.min_players) {
       try {
         const channel = await interaction.client.channels.fetch(event.channel_id);
         if (channel) {
@@ -421,7 +421,8 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
     desc += `• **10%** retained by the house (server treasury)\n`;
 
     desc += `\n**🔄 Refund Policy:**\n`;
-    desc += `• If race is cancelled (not enough riders), all entries are refunded\n`;
+    desc += `• If the race is cancelled (no riders join), all entries are refunded\n`;
+    desc += `• Solo rider? You race against the house! 🏠\n`;
     desc += `• Refunds are sent to your connected wallet address\n`;
   } else {
     desc += `\n**🏆 Prize Distribution:**\n`;
@@ -438,6 +439,7 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
   desc += `• One horse per rider — no changes after entry\n`;
   desc += `• Winner determined by provably-fair random race\n`;
   desc += `• Payouts sent to your connected Solana wallet\n`;
+  desc += `• Solo entry = race against the house (your horse must win to collect) 🏠\n`;
   desc += `• By entering, you agree to these terms and accept the outcome\n`;
   desc += `• Must be 18+ to participate in wagering events`;
 
@@ -448,7 +450,7 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
     .addFields(
       { name: '🎲 Mode', value: modeLabel, inline: true },
       { name: '🪑 Riders', value: `${currentPlayers}/${maxPlayers}`, inline: true },
-      { name: '✅ Min to Race', value: `${minPlayers}`, inline: true },
+      { name: '✅ Min to Race', value: minPlayers <= 1 ? '1 (vs House 🏠)' : `${minPlayers}`, inline: true },
       { name: '🎁 Prize', value: prizeInfo, inline: true },
       { name: '🏇 Horses', value: horseList || 'None' },
     )

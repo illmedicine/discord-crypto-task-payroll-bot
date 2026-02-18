@@ -441,10 +441,10 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         const resultsEmbed = new EmbedBuilder()
           .setColor(winnerPreset.color)
           .setTitle(`🏇 Horse Race #${event.id} — Results!`)
-          .setDescription(`**${event.title}** — The race is over! 🏁`)
+          .setDescription(`**${event.title}** — The race is over! 🏁${isSoloRace ? '\n🏠 *Solo Race vs the House*' : ''}`)
           .addFields(
             { name: '🏆 Winning Horse', value: `**#${winningSlot} — ${winningSlotInfo?.label || winnerPreset.name}**`, inline: true },
-            { name: '👥 Total Riders', value: `${bets.length}`, inline: true },
+            { name: '👥 Total Riders', value: isSoloRace ? '1 (vs House)' : `${bets.length}`, inline: true },
             { name: '🏆 Winners', value: `${winnerUserIds.length}`, inline: true },
           );
 
@@ -454,7 +454,10 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
           resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
         } else {
-          resultsEmbed.addFields({ name: '🎊 Winners', value: 'No winners this race — nobody bet on the winning horse!' });
+          const noWinnerMsg = isSoloRace
+            ? '🏠 The house wins! Your horse didn\'t cross the finish line first.'
+            : 'No winners this race — nobody bet on the winning horse!';
+          resultsEmbed.addFields({ name: '🎊 Winners', value: noWinnerMsg });
         }
 
         // Prize pool + house cut breakdown — always show
@@ -500,9 +503,15 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         let mentionContent = '';
         if (winnerUserIds.length > 0) {
           const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
-          mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
-            `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
-            `👥 **Riders:** ${bets.length} | **Winners:** ${winnerUserIds.length}\n`;
+          if (isSoloRace) {
+            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+              `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
+              `🏠 **Solo Race vs the House** — You beat the house!\n`;
+          } else {
+            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+              `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
+              `👥 **Riders:** ${bets.length} | **Winners:** ${winnerUserIds.length}\n`;
+          }
           if (prizePerWinner > 0) {
             mentionContent += `💰 **Prize per winner:** ${prizePerWinner.toFixed(4)} ${event.currency}\n`;
           }
@@ -517,7 +526,12 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
             else mentionContent += `\n⚠️ Payout processing issue — check bot logs.`;
           }
         } else {
-          mentionContent = '🏇 **HORSE RACE RESULTS!** — No winners this race.';
+          if (isSoloRace) {
+            const soloUser = bets[0].user_id;
+            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n🏠 **Solo Race vs the House** — <@${soloUser}>, the house wins this time!`;
+          } else {
+            mentionContent = '🏇 **HORSE RACE RESULTS!** — No winners this race.';
+          }
           if (isPotMode && houseCut > 0) mentionContent += `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.`;
         }
 
