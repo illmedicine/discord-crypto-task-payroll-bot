@@ -57,6 +57,30 @@ module.exports = function buildApi({ discordClient }) {
     return res.json()
   }
 
+  // POST/PATCH/DELETE via raw REST
+  async function discordBotRequest(method, path, body) {
+    const opts = {
+      method,
+      headers: { Authorization: `Bot ${BOT_TOKEN}`, 'Content-Type': 'application/json' }
+    }
+    if (body !== undefined) opts.body = JSON.stringify(body)
+    const res = await fetch(`https://discord.com/api/v10${path}`, opts)
+    if (!res.ok) throw new Error(`Discord API ${method} ${res.status}: ${path}`)
+    if (res.status === 204) return null
+    return res.json()
+  }
+
+  // POST with multipart form data (for file uploads)
+  async function discordBotUpload(path, formData) {
+    const res = await fetch(`https://discord.com/api/v10${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bot ${BOT_TOKEN}` },
+      body: formData
+    })
+    if (!res.ok) throw new Error(`Discord API upload ${res.status}: ${path}`)
+    return res.json()
+  }
+
   // Cache guild info fetched via REST (avoids repeated API calls)
   const _guildInfoCache = new Map()
   async function getGuildInfoViaREST(guildId) {
@@ -309,11 +333,82 @@ module.exports = function buildApi({ discordClient }) {
     }
   }
 
+  // Fetch a text channel and return a wrapper with send/messages.fetch that works in REST-only mode
   async function fetchTextChannel(guildId, channelId) {
-    const channel = await discordClient.channels.fetch(channelId)
-    if (!channel || !('guildId' in channel) || channel.guildId !== guildId) throw new Error('invalid_channel')
-    if (!('send' in channel)) throw new Error('not_text_channel')
-    return channel
+    // Try discord.js first (works if client has proper state)
+    try {
+      const channel = await discordClient.channels.fetch(channelId)
+      if (channel && 'guildId' in channel && channel.guildId === guildId && 'send' in channel) {
+        return channel
+      }
+    } catch (err) {
+      console.warn(`[fetchTextChannel] discord.js fetch failed for ${channelId}:`, err?.message, '— using REST fallback')
+    }
+
+    // REST fallback: verify channel belongs to guild, then return wrapper
+    const channelData = await discordBotAPI(`/channels/${channelId}`)
+    if (!channelData || channelData.guild_id !== guildId) throw new Error('invalid_channel')
+    if (channelData.type !== 0 && channelData.type !== 5) throw new Error('not_text_channel')
+
+    // Return a channel-like wrapper using raw REST
+    return {
+      id: channelData.id,
+      guildId: channelData.guild_id,
+      name: channelData.name,
+      type: channelData.type,
+      _restOnly: true,
+
+      // Send a message via raw REST
+      async send(payload) {
+        // Convert discord.js Embed/ActionRow objects to JSON
+        const body = {}
+        if (typeof payload === 'string') {
+          body.content = payload
+        } else {
+          if (payload.content) body.content = payload.content
+          if (payload.embeds) body.embeds = payload.embeds.map(e => typeof e.toJSON === 'function' ? e.toJSON() : e)
+          if (payload.components) body.components = payload.components.map(c => typeof c.toJSON === 'function' ? c.toJSON() : c)
+        }
+
+        // Handle file uploads
+        if (payload.files && payload.files.length > 0) {
+          const FormData = (await import('node-fetch')).default ? globalThis.FormData : (await import('formdata-node')).FormData
+          const form = new FormData()
+          form.append('payload_json', JSON.stringify(body))
+          for (let i = 0; i < payload.files.length; i++) {
+            const f = payload.files[i]
+            const blob = new Blob([f.attachment], { type: 'application/octet-stream' })
+            form.append(`files[${i}]`, blob, f.name || 'file')
+          }
+          return await discordBotUpload(`/channels/${channelData.id}/messages`, form)
+        }
+
+        return await discordBotRequest('POST', `/channels/${channelData.id}/messages`, body)
+      },
+
+      // Messages sub-object for fetch/delete
+      messages: {
+        async fetch(opts) {
+          if (typeof opts === 'string') {
+            // Fetch single message by ID
+            return await discordBotAPI(`/channels/${channelData.id}/messages/${opts}`)
+          }
+          // Fetch multiple messages
+          const limit = opts?.limit || 50
+          const msgs = await discordBotAPI(`/channels/${channelData.id}/messages?limit=${limit}`)
+          // Return as a Map-like iterable
+          const map = new Map()
+          for (const m of msgs) {
+            m.attachments = new Map((m.attachments || []).map(a => [a.id, a]))
+            m.embeds = m.embeds || []
+            m.author = m.author || {}
+            m.createdAt = m.timestamp ? new Date(m.timestamp) : new Date()
+            map.set(m.id, m)
+          }
+          return map
+        }
+      }
+    }
   }
 
   // Serve a minimal favicon to avoid 404
@@ -1327,11 +1422,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Delete the Discord message if one was published
       if (event.message_id && event.channel_id) {
         try {
-          const channel = await discordClient.channels.fetch(event.channel_id)
-          if (channel) {
-            const msg = await channel.messages.fetch(event.message_id)
-            if (msg) await msg.delete()
-          }
+          await discordBotRequest('DELETE', `/channels/${event.channel_id}/messages/${event.message_id}`)
         } catch (discordErr) {
           console.warn(`[vote-events] Could not delete Discord message for event #${eventId}:`, discordErr?.message || discordErr)
         }
@@ -1357,11 +1448,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Delete the Discord message if one was published
       if (event.message_id && event.channel_id) {
         try {
-          const channel = await discordClient.channels.fetch(event.channel_id)
-          if (channel) {
-            const msg = await channel.messages.fetch(event.message_id)
-            if (msg) await msg.delete()
-          }
+          await discordBotRequest('DELETE', `/channels/${event.channel_id}/messages/${event.message_id}`)
         } catch (discordErr) {
           console.warn(`[vote-events] Could not delete Discord message for cancelled event #${eventId}:`, discordErr?.message || discordErr)
         }
@@ -1453,16 +1540,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // If file was uploaded, send it to the event channel as an attachment and use the URL
       if (req.file && event.channel_id) {
         try {
-          const channel = await discordClient.channels.fetch(event.channel_id)
-          if (channel && 'send' in channel) {
-            const { AttachmentBuilder } = require('discord.js')
-            const att = new AttachmentBuilder(req.file.buffer, { name: req.file.originalname || 'screenshot.png' })
-            const msg = await channel.send({
-              content: `📸 Qualification proof from **${username}** for event **${event.title}**`,
-              files: [att]
-            })
-            if (msg.attachments.size > 0) {
-              screenshotUrl = msg.attachments.first().url
+          const channel = await fetchTextChannel(event.guild_id, event.channel_id)
+          const msg = await channel.send({
+            content: `📸 Qualification proof from **${username}** for event **${event.title}**`,
+            files: [{ attachment: req.file.buffer, name: req.file.originalname || 'screenshot.png' }]
+          })
+          // Raw REST returns attachments as array, discord.js as Collection
+          const atts = msg.attachments
+          if (atts) {
+            if (typeof atts.first === 'function' && atts.size > 0) {
+              screenshotUrl = atts.first().url
+            } else if (Array.isArray(atts) && atts.length > 0) {
+              screenshotUrl = atts[0].url
+            } else if (atts instanceof Map && atts.size > 0) {
+              screenshotUrl = atts.values().next().value?.url
             }
           }
         } catch (uploadErr) {
@@ -1641,11 +1732,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Remove Discord message if published
       if (event.message_id && event.channel_id) {
         try {
-          const channel = await discordClient.channels.fetch(event.channel_id)
-          if (channel) {
-            const msg = await channel.messages.fetch(event.message_id).catch(() => null)
-            if (msg) await msg.delete().catch(() => {})
-          }
+          await discordBotRequest('DELETE', `/channels/${event.channel_id}/messages/${event.message_id}`)
         } catch (_) {}
       }
 
@@ -1670,11 +1757,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Remove Discord message if published
       if (event.message_id && event.channel_id) {
         try {
-          const channel = await discordClient.channels.fetch(event.channel_id)
-          if (channel) {
-            const msg = await channel.messages.fetch(event.message_id).catch(() => null)
-            if (msg) await msg.delete().catch(() => {})
-          }
+          await discordBotRequest('DELETE', `/channels/${event.channel_id}/messages/${event.message_id}`)
         } catch (_) {}
       }
 
@@ -2465,13 +2548,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Bot pushes gambling bet/status back to keep backend DB in sync
   app.post('/api/internal/gambling-event-sync', requireInternal, async (req, res) => {
     try {
-      const { eventId, action, userId, guildId, chosenSlot, betAmount, paymentStatus, walletAddress, status } = req.body || {}
+      const { eventId, action, userId, guildId, chosenSlot, slotNumber, betAmount, paymentStatus, walletAddress, status } = req.body || {}
       if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
+      // Accept both chosenSlot and slotNumber (bot sends slotNumber)
+      const slot = chosenSlot || slotNumber
 
       if (action === 'bet' && userId && guildId) {
         await db.run(
           `INSERT OR IGNORE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null]
+          [eventId, guildId, userId, slot, betAmount || 0, paymentStatus || 'none', walletAddress || null]
         ).catch(() => {})
         await db.run(
           `UPDATE gambling_events SET current_players = (SELECT COUNT(*) FROM gambling_event_bets WHERE gambling_event_id = ?) WHERE id = ?`,
