@@ -456,37 +456,6 @@ client.on('interactionCreate', async interaction => {
       }
       return;
     }
-
-    // Handle bulk task claim button (web-published)
-    if (interaction.customId.startsWith('bulk_task_claim_')) {
-      try {
-        const taskId = Number(interaction.customId.split('_')[3]);
-        const task = await db.getBulkTask(taskId);
-        if (!task || task.guild_id !== interaction.guildId) {
-          await interaction.reply({ content: '❌ Task not found in this server.', ephemeral: true });
-          return;
-        }
-        if (task.status !== 'active') {
-          await interaction.reply({ content: '❌ This task is not active.', ephemeral: true });
-          return;
-        }
-        if (task.filled_slots >= task.total_slots) {
-          await interaction.reply({ content: '❌ This task is full - all slots have been claimed.', ephemeral: true });
-          return;
-        }
-
-        const assignmentId = await db.assignTaskToUser(taskId, interaction.guildId, interaction.user.id, interaction.channelId);
-        await interaction.reply({ content: `✅ Slot claimed! Assignment ID: #${assignmentId}\nUse /submit-proof assignment_id: ${assignmentId} to submit proof.`, ephemeral: true });
-      } catch (error) {
-        console.error('❌ Error handling bulk task claim button:', error);
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-        } else {
-          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-        }
-      }
-      return;
-    }
   }
   
   // Handle select menu interactions

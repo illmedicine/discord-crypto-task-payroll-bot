@@ -4,7 +4,6 @@ import GamblingEvents from './pages/GamblingEvents'
 import History from './pages/History'
 import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
-import BulkTasks from './pages/BulkTasks'
 import QualifyPage from './pages/QualifyPage'
 
 import PerformanceMonitor from './components/PerformanceMonitor'
@@ -12,13 +11,12 @@ import ProfilerLogger from './components/ProfilerLogger'
 import EventTicker from './components/EventTicker'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'gambling' | 'history' | 'treasury' | 'workers' | 'bulk-tasks' | 'qualify'
+type Page = 'dashboard' | 'gambling' | 'history' | 'treasury' | 'workers' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
   { id: 'workers', label: 'Workers', icon: '👥' },
-  { id: 'bulk-tasks', label: 'Bulk Tasks', icon: '🎯' },
   { id: 'gambling', label: 'Horse Race', icon: '🏇' },
   { id: 'history', label: 'History & Proofs', icon: '📜' },
 ]
@@ -312,7 +310,6 @@ export default function App() {
             {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
             {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
             {page === 'gambling' && <GamblingEvents guildId={guildId} isOwner={isOwner} />}
-            {page === 'bulk-tasks' && <BulkTasks guildId={guildId} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} />}
