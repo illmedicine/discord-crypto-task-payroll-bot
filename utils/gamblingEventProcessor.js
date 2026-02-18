@@ -13,6 +13,22 @@ const HORSE_PRESETS = [
   { emoji: '🟣', horse: '🐎', name: 'Violet Fury',      color: '#9B59B6' },
 ];
 
+// Kentucky Derby bugle call — linked for race start atmosphere
+const DERBY_BUGLE_URL = 'https://www.youtube.com/watch?v=PSBL3_pFlS0';
+
+// No-winner house taunts (random pick)
+const HOUSE_WINS_MESSAGES = [
+  '🏠💰 **No Winner! The House Stays Rich!** 💰🏠',
+  '🏠🎩 **The House Always Wins!** Better luck next race, cowboys! 🤠',
+  '🏠💸 **Nobody picked the winner — House keeps the pot!** 💸',
+  '🏠👑 **House remains undefeated!** Try again if you dare! 🏇',
+  '🏠🤑 **All bets lost! The House is feasting tonight!** 🍗🥂',
+  '🏠🏆 **Zero winners! House stays on top!** The house ALWAYS eats. 🍽️',
+];
+function getHouseWinsMessage() {
+  return HOUSE_WINS_MESSAGES[Math.floor(Math.random() * HOUSE_WINS_MESSAGES.length)];
+}
+
 /**
  * Build a single frame of the horse race track.
  * Each horse has a progress 0..TRACK_LEN, the track is rendered as ASCII/emoji.
@@ -20,16 +36,23 @@ const HORSE_PRESETS = [
 const TRACK_LEN = 20;
 const FINISH_CHAR = '🏁';
 
-function buildRaceFrame(slots, positions, winningSlot, finished) {
+function buildRaceFrame(slots, positions, winningSlot, finished, frameNum, totalFrames) {
   let frame = '';
+  const pct = totalFrames > 0 ? Math.round((frameNum / totalFrames) * 100) : 0;
+  const progressBar = '█'.repeat(Math.floor(pct / 5)) + '░'.repeat(20 - Math.floor(pct / 5));
+
   if (!finished) {
     frame += '```\n';
-    frame += '🏇  D C B   H O R S E   R A C E  🏇\n';
-    frame += '━'.repeat(TRACK_LEN + 8) + '\n';
+    frame += '╔══════════════════════════════════════════╗\n';
+    frame += '║   🏇  D C B   H O R S E   R A C E  🏇   ║\n';
+    frame += '║          🎺 AND THEY\'RE OFF! 🎺          ║\n';
+    frame += '╠══════════════════════════════════════════╣\n';
   } else {
     frame += '```\n';
-    frame += '🏆  R A C E   F I N I S H E D !  🏆\n';
-    frame += '━'.repeat(TRACK_LEN + 8) + '\n';
+    frame += '╔══════════════════════════════════════════╗\n';
+    frame += '║  🏆  R A C E   F I N I S H E D !  🏆    ║\n';
+    frame += '║       🎊 WHAT A RACE! 🎊                ║\n';
+    frame += '╠══════════════════════════════════════════╣\n';
   }
 
   for (let i = 0; i < slots.length; i++) {
@@ -38,23 +61,26 @@ function buildRaceFrame(slots, positions, winningSlot, finished) {
     const pos = positions[i];
     const horse = '🏇';
 
-    // Build track line:  [emoji] ----🏇-----------|🏁
-    const before = '▬'.repeat(Math.min(pos, TRACK_LEN));
-    const after = '▬'.repeat(Math.max(0, TRACK_LEN - pos - 1));
-    const isFinished = pos >= TRACK_LEN;
+    const isAtFinish = pos >= TRACK_LEN;
 
     let lane;
-    if (isFinished) {
-      lane = '▬'.repeat(TRACK_LEN) + '|' + FINISH_CHAR + ' ' + horse;
+    if (isAtFinish) {
+      lane = '═'.repeat(TRACK_LEN) + '║' + FINISH_CHAR + ' ' + horse;
     } else {
-      lane = before + horse + after + '|' + FINISH_CHAR;
+      const before = '─'.repeat(Math.min(pos, TRACK_LEN));
+      const after = '─'.repeat(Math.max(0, TRACK_LEN - pos - 1));
+      lane = before + horse + after + '║' + FINISH_CHAR;
     }
 
-    const label = (slot.label || preset.name).padEnd(18).slice(0, 18);
-    frame += `${label} ${lane}\n`;
+    const rank = isAtFinish && finished ? '🏆' : `${preset.emoji} `;
+    const label = (slot.label || preset.name).padEnd(16).slice(0, 16);
+    frame += `${rank}${label} ${lane}\n`;
   }
 
-  frame += '━'.repeat(TRACK_LEN + 8) + '\n';
+  frame += '╚══════════════════════════════════════════╝\n';
+  if (!finished) {
+    frame += `  Progress: [${progressBar}] ${pct}%\n`;
+  }
   frame += '```';
   return frame;
 }
@@ -70,19 +96,40 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
   const positions = new Array(numHorses).fill(0);
   const winIdx = winningSlot - 1; // 0-based
 
-  const FRAMES = 10; // number of animation frames
-  const FRAME_DELAY = 1500; // ms between frames
+  const FRAMES = 16; // more frames for a longer, more dramatic race
+  const FRAME_DELAY = 2000; // 2 seconds between frames — slower, more tension
 
   // Pre-calculate per-frame speeds. Winner guaranteed to finish exactly on last frame.
-  // Other horses are random but always finish behind.
   const winnerPerFrame = TRACK_LEN / FRAMES;
 
+  // ── Pre-race bugle call announcement ──
+  try {
+    const { EmbedBuilder } = require('discord.js');
+    const bugleEmbed = new EmbedBuilder()
+      .setColor('#DAA520')
+      .setTitle('🎺 THE CALL TO POST! 🎺')
+      .setDescription(
+        `**Horse Race #${eventId}** is about to begin!\n\n` +
+        `🏇 Riders, mount your horses!\n` +
+        `🎺 [**Listen to the Kentucky Derby Bugle Call**](${DERBY_BUGLE_URL})\n\n` +
+        `*"And they\'re at the post..."*`
+      )
+      .setThumbnail('https://upload.wikimedia.org/wikipedia/en/9/93/Kd-logo.svg')
+      .setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcHFtNnE0aGRyb3U3ZGF6azRybGdubXE0Z3VhcWpzam5mczYyNnZ3dyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3o7TKSjRrfIPjeiVyM/giphy.gif')
+      .setFooter({ text: 'DisCryptoBank Horse Racing • 🏇 Provably Fair' });
+    await channel.send({ embeds: [bugleEmbed] });
+    // Dramatic pause after bugle call
+    await new Promise(resolve => setTimeout(resolve, 4000));
+  } catch (bugleErr) {
+    console.warn(`[HorseRace] Bugle announcement failed:`, bugleErr.message);
+  }
+
   // Send initial frame
-  const initialFrame = buildRaceFrame(slots, positions, winningSlot, false);
+  const initialFrame = buildRaceFrame(slots, positions, winningSlot, false, 0, FRAMES);
   let raceMsg;
   try {
     raceMsg = await channel.send({
-      content: `🏇 **Horse Race #${eventId}** — The race is starting! 🏁\n${initialFrame}`
+      content: `🏇 **Horse Race #${eventId}** — 🎺 **AND THEY'RE OFF!** 🏁\n${initialFrame}`
     });
   } catch (err) {
     console.error(`[HorseRace] Could not send race animation:`, err.message);
@@ -104,8 +151,17 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
         const maxPos = TRACK_LEN - 1 - Math.floor(Math.random() * 4);
         positions[h] = Math.min(positions[h] + Math.ceil(winnerPerFrame), maxPos);
       } else {
-        // Random advancement: 0 to 1.2x winner speed (can be temporarily ahead for drama)
-        const speed = winnerPerFrame * (0.3 + Math.random() * 0.9);
+        // Random advancement with more variance for drama
+        // Horses can surge ahead or fall behind, creating exciting back-and-forth
+        const surgeChance = Math.random();
+        let speed;
+        if (surgeChance > 0.85) {
+          speed = winnerPerFrame * (1.0 + Math.random() * 0.5); // burst of speed!
+        } else if (surgeChance < 0.15) {
+          speed = winnerPerFrame * (0.1 + Math.random() * 0.3); // stumble/slow
+        } else {
+          speed = winnerPerFrame * (0.3 + Math.random() * 0.8); // normal
+        }
         positions[h] = Math.min(
           Math.round(positions[h] + speed),
           TRACK_LEN - 1  // can't finish before last frame
@@ -119,18 +175,27 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
     }
 
     const isFinished = frame === FRAMES;
-    const frameContent = buildRaceFrame(slots, positions, winningSlot, isFinished);
+    const frameContent = buildRaceFrame(slots, positions, winningSlot, isFinished, frame, FRAMES);
     const winnerPreset = HORSE_PRESETS[winIdx] || HORSE_PRESETS[0];
     const winnerName = slots[winIdx]?.label || winnerPreset.name;
+
+    // Race commentary for extra immersion
+    let commentary = '';
+    if (frame <= 3) commentary = '🏇 The horses are finding their stride...';
+    else if (frame <= 6) commentary = '🔥 They\'re heading into the first turn!';
+    else if (frame <= 9) commentary = '⚡ Down the backstretch they go!';
+    else if (frame <= 12) commentary = '🌪️ Into the final turn — it\'s getting tight!';
+    else if (frame <= 14) commentary = '💨 THE HOME STRETCH! Who wants it more?!';
+    else if (frame < FRAMES) commentary = '🏁 HERE THEY COME! It\'s a photo finish!';
 
     try {
       if (isFinished) {
         await raceMsg.edit({
-          content: `🏇 **Horse Race #${eventId}** — 🏁 **FINISH!** 🏆 **${winnerName}** wins! 🏆\n${frameContent}`
+          content: `🏇 **Horse Race #${eventId}** — 🏁 **FINISH!** 🏆 **${winnerName}** WINS THE RACE! 🏆\n${frameContent}`
         });
       } else {
         await raceMsg.edit({
-          content: `🏇 **Horse Race #${eventId}** — Racing... (lap ${frame}/${FRAMES}) 🏁\n${frameContent}`
+          content: `🏇 **Horse Race #${eventId}** — ${commentary} (${frame}/${FRAMES}) 🏁\n${frameContent}`
         });
       }
     } catch (editErr) {
@@ -317,6 +382,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     const winningSlotInfo = slots.find(s => s.slot_number === winningSlot);
     const winnerBets = bets.filter(b => b.chosen_slot === winningSlot);
     const winnerUserIds = winnerBets.map(b => b.user_id);
+    const isSoloRace = bets.length === 1;
 
     // Mark winners
     if (winnerUserIds.length > 0) {
@@ -455,9 +521,11 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
         } else {
           const noWinnerMsg = isSoloRace
-            ? '🏠 The house wins! Your horse didn\'t cross the finish line first.'
-            : 'No winners this race — nobody bet on the winning horse!';
-          resultsEmbed.addFields({ name: '🎊 Winners', value: noWinnerMsg });
+            ? '🏠💰 **The House Wins!** Your horse didn\'t cross the finish line first. Better luck next race! 🏇'
+            : getHouseWinsMessage();
+          resultsEmbed.addFields({ name: '🏠 No Winners', value: noWinnerMsg });
+          // Add a special "House Wins" image for dramatic effect
+          resultsEmbed.setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN2RmejN1Z2RkM2RxZm5lbGFiemQzZGNhdG5nNGZncXZ1MXh3dnNiNyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/GCvktC0KFy9l6/giphy.gif');
         }
 
         // Prize pool + house cut breakdown — always show
@@ -528,11 +596,18 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         } else {
           if (isSoloRace) {
             const soloUser = bets[0].user_id;
-            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n🏠 **Solo Race vs the House** — <@${soloUser}>, the house wins this time!`;
+            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+              `🏠💰 **THE HOUSE WINS!** 💰🏠\n` +
+              `<@${soloUser}>, your horse came up short! The house stays rich today! 🤑\n` +
+              `Better luck next time, cowboy! 🤠`;
           } else {
-            mentionContent = '🏇 **HORSE RACE RESULTS!** — No winners this race.';
+            const houseMsg = getHouseWinsMessage();
+            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+              `${houseMsg}\n` +
+              `Nobody picked **${winningSlotInfo?.label || 'the winning horse'}**! 🐴`;
           }
-          if (isPotMode && houseCut > 0) mentionContent += `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.`;
+          if (isPotMode && houseCut > 0) mentionContent += `\n\n🏦 House retains **${houseCut.toFixed(4)} ${event.currency}** — the treasury grows! 💰`;
+          if (isPotMode && totalPot > 0 && houseCut <= 0) mentionContent += `\n\n🏦 All entry fees stay in the house pot!`;
         }
 
         console.log(`[HorseRace] Sending results: paymentResults=${JSON.stringify(paymentResults)}`);

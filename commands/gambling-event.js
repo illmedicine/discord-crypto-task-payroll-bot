@@ -444,9 +444,11 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
   desc += `• Must be 18+ to participate in wagering events`;
 
   const embed = new EmbedBuilder()
-    .setColor('#E74C3C')
-    .setTitle(`🏇 DCB Horse Race: ${title}`)
+    .setColor('#DAA520') // Gold — Kentucky Derby style
+    .setTitle(`🏇🏆 DCB HORSE RACE: ${title.toUpperCase()} 🏆🏇`)
     .setDescription(desc)
+    .setThumbnail('https://upload.wikimedia.org/wikipedia/en/9/93/Kd-logo.svg')
+    .setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcHFtNnE0aGRyb3U3ZGF6azRybGdubXE0Z3VhcWpzam5mczYyNnZ3dyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/3o7TKSjRrfIPjeiVyM/giphy.gif')
     .addFields(
       { name: '🎲 Mode', value: modeLabel, inline: true },
       { name: '🪑 Riders', value: `${currentPlayers}/${maxPlayers}`, inline: true },
@@ -454,7 +456,7 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
       { name: '🎁 Prize', value: prizeInfo, inline: true },
       { name: '🏇 Horses', value: horseList || 'None' },
     )
-    .setFooter({ text: `DisCryptoBank • Horse Race #${eventId} • Provably Fair` })
+    .setFooter({ text: `🏇 DisCryptoBank Horse Racing • Race #${eventId} • Provably Fair 🏇` })
     .setTimestamp();
 
   if (durationMinutes) {
@@ -469,11 +471,20 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
 // ---- Helper: build horse buttons ----
 function buildSlotButtons(eventId, slots) {
   const components = [];
+  // Alternate button styles for visual variety
+  const buttonStyles = [
+    ButtonStyle.Danger,    // Red  — Crimson Blaze
+    ButtonStyle.Secondary, // Grey — Shadow Runner
+    ButtonStyle.Success,   // Green — Emerald Thunder
+    ButtonStyle.Primary,   // Blue — Sapphire Storm
+    ButtonStyle.Success,   // Green(ish) — Golden Lightning
+    ButtonStyle.Secondary, // Grey — Violet Fury
+  ];
   const buttons = slots.map((s, i) =>
     new ButtonBuilder()
       .setCustomId(`gamble_bet_${eventId}_${i + 1}`)
       .setLabel(`🏇 ${s.label}`)
-      .setStyle(ButtonStyle.Primary)
+      .setStyle(buttonStyles[i % buttonStyles.length])
   );
 
   for (let i = 0; i < buttons.length; i += 5) {
