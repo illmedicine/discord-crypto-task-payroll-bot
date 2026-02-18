@@ -963,8 +963,8 @@ module.exports = (client) => {
       const [
         txRow, contestRow, voteEventRow, eventRow,
         bulkTaskRow, taskRow,
-        paidTx,
-        prizePoolSOL, prizePoolUSD,
+        paidTxSOL,
+        paidTxUSD,
         contestWinners, voteWinners, proofPayouts,
         usersRow, treasuryWalletCount, userWalletCount,
         siteVisitors, totalCommandsRun, managerClicks,
@@ -976,22 +976,10 @@ module.exports = (client) => {
         safe(dbGet('SELECT COUNT(*) AS c FROM events'), { c: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM bulk_tasks'), { c: 0 }),
         safe(dbGet('SELECT COUNT(*) AS c FROM tasks'), { c: 0 }),
-        // On-chain transactions (direct SOL transfers)
-        safe(dbGet('SELECT COALESCE(SUM(amount), 0) AS total FROM transactions'), { total: 0 }),
-        // Total prize pool offered (SOL-denominated events)
-        safe(dbGet(`SELECT COALESCE(SUM(prize_amount), 0) AS total FROM (
-          SELECT prize_amount FROM vote_events WHERE currency = 'SOL' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM contests WHERE currency = 'SOL' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM events WHERE currency = 'SOL' AND prize_amount > 0
-          UNION ALL SELECT payout_amount AS prize_amount FROM bulk_tasks WHERE payout_currency = 'SOL' AND payout_amount > 0
-        )`), { total: 0 }),
-        // Total prize pool offered (USD-denominated events)
-        safe(dbGet(`SELECT COALESCE(SUM(prize_amount), 0) AS total FROM (
-          SELECT prize_amount FROM vote_events WHERE currency = 'USD' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM contests WHERE currency = 'USD' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM events WHERE currency = 'USD' AND prize_amount > 0
-          UNION ALL SELECT payout_amount AS prize_amount FROM bulk_tasks WHERE payout_currency = 'USD' AND payout_amount > 0
-        )`), { total: 0 }),
+        // On-chain transactions: SOL-denominated
+        safe(dbGet("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE currency IS NULL OR currency = 'SOL'"), { total: 0 }),
+        // On-chain transactions: USD-denominated (original_amount stored for reference)
+        safe(dbGet("SELECT COALESCE(SUM(original_amount), 0) AS total FROM transactions WHERE original_currency = 'USD' AND original_amount IS NOT NULL"), { total: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM contest_entries WHERE is_winner = 1"), { c: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
         safe(dbGet("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
@@ -1008,10 +996,10 @@ module.exports = (client) => {
       // Active servers = actual Discord guilds the bot is in (live count)
       const activeServers = client?.guilds?.cache?.size || 0;
 
-      // Prize pool raw values (computed after solPrice is fetched below)
-      const txSOL = paidTx.total || 0;
-      const poolSOL = prizePoolSOL.total || 0;
-      const poolUSD = prizePoolUSD.total || 0;
+      // Actual on-chain SOL paid out (from transactions table only — no prize pool configs)
+      const txSOL = paidTxSOL.total || 0;
+      // Original USD amounts for display reference
+      const txOriginalUSD = paidTxUSD.total || 0;
 
       // ── Inline Solana helpers (avoids dependency on utils/crypto) ──
       const LAMPORTS_PER_SOL = 1_000_000_000;
@@ -1064,9 +1052,9 @@ module.exports = (client) => {
       const treasuryWalletValue = treasuryBalanceSOL * solPrice;
       const userWalletValue = userBalanceSOL * solPrice;
 
-      // Total prize pool (computed after solPrice is known)
-      const totalPaidOutSOL = txSOL + poolSOL + (solPrice > 0 ? poolUSD / solPrice : 0);
-      const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
+      // Total paid out = actual on-chain SOL transfers converted to USD
+      const totalPaidOutSOL = txSOL;
+      const totalPaidOutUSD = txSOL * solPrice;
 
       res.json({
         totalTransactions: payWalletCommands?.c || 0,

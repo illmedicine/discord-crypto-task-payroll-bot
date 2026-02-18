@@ -181,6 +181,10 @@ db.serialize(() => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   )
+  // Add extra columns for richer transaction data (safe if already exist)
+  db.run(`ALTER TABLE transactions ADD COLUMN currency TEXT DEFAULT 'SOL'`, () => {})
+  db.run(`ALTER TABLE transactions ADD COLUMN original_amount REAL`, () => {})
+  db.run(`ALTER TABLE transactions ADD COLUMN original_currency TEXT`, () => {})
 
   // Task assignments
   db.run(

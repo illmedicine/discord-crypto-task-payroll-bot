@@ -186,6 +186,10 @@ const initDb = () => {
         FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
       )
     `);
+    // Add extra columns for richer transaction data (safe if already exist)
+    db.run(`ALTER TABLE transactions ADD COLUMN currency TEXT DEFAULT 'SOL'`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN original_amount REAL`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN original_currency TEXT`, () => {});
 
     // Wallet history table
     db.run(`

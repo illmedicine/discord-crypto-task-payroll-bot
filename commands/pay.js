@@ -166,6 +166,30 @@ module.exports = {
       // Log transaction to database
       await db.recordTransaction(guildId, treasuryAddress, targetUserData.solana_address, solAmount, signature);
 
+      // Push transaction to backend for stats tracking
+      try {
+        const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+        const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+        if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+          fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/log-transaction`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+            body: JSON.stringify({
+              guildId,
+              fromAddress: treasuryAddress,
+              toAddress: targetUserData.solana_address,
+              amount: solAmount,
+              signature,
+              currency: 'SOL',
+              originalAmount: amount,
+              originalCurrency: currency
+            })
+          }).catch(err => console.error('[pay] Backend sync error:', err.message));
+        }
+      } catch (syncErr) {
+        console.error('[pay] Backend sync error:', syncErr.message);
+      }
+
       // Send success embed
       const successEmbed = new EmbedBuilder()
         .setColor('#14F195')

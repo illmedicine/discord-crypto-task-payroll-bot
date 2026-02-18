@@ -2761,6 +2761,95 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot pushes on-chain transaction records here
+  app.post('/api/internal/log-transaction', requireInternal, async (req, res) => {
+    try {
+      const { guildId, fromAddress, toAddress, amount, signature, currency, originalAmount, originalCurrency } = req.body || {}
+      if (!guildId || !amount) return res.status(400).json({ error: 'missing_fields' })
+
+      await db.run(
+        `INSERT INTO transactions (guild_id, from_address, to_address, amount, signature, status, currency, original_amount, original_currency)
+         VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)
+         ON CONFLICT(signature) DO NOTHING`,
+        [guildId, fromAddress || null, toAddress || null, amount, signature || null, currency || 'SOL', originalAmount || null, originalCurrency || null]
+      )
+      console.log(`[internal] transaction logged for guild ${guildId}: ${amount} ${currency || 'SOL'}`)
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] log-transaction error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Backfill transactions from on-chain data for all treasury wallets
+  app.post('/api/internal/backfill-transactions', requireInternal, async (req, res) => {
+    try {
+      const LAMPORTS_PER_SOL = 1_000_000_000
+      const SOLANA_RPC = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const wallets = await safe(db.all('SELECT guild_id, wallet_address FROM guild_wallets WHERE wallet_address IS NOT NULL'), [])
+      if (!wallets.length) return res.json({ ok: true, inserted: 0, message: 'no wallets' })
+
+      let totalInserted = 0
+      for (const w of wallets) {
+        try {
+          // Get recent outgoing transaction signatures for this wallet
+          const sigRes = await axios.post(SOLANA_RPC, {
+            jsonrpc: '2.0', id: 1,
+            method: 'getSignaturesForAddress',
+            params: [w.wallet_address, { limit: 50 }]
+          }, { timeout: 15000 })
+          const sigs = sigRes.data?.result || []
+
+          for (const sigInfo of sigs) {
+            if (sigInfo.err) continue // skip failed txs
+            // Check if already recorded
+            const exists = await db.get('SELECT 1 FROM transactions WHERE signature = ?', [sigInfo.signature])
+            if (exists) continue
+
+            // Fetch full transaction to get transfer details
+            try {
+              const txRes = await axios.post(SOLANA_RPC, {
+                jsonrpc: '2.0', id: 1,
+                method: 'getTransaction',
+                params: [sigInfo.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }]
+              }, { timeout: 15000 })
+              const tx = txRes.data?.result
+              if (!tx?.meta || !tx?.transaction) continue
+
+              // Look for SOL transfer instructions FROM this wallet
+              const instructions = tx.transaction.message.instructions || []
+              for (const ix of instructions) {
+                if (ix.program === 'system' && ix.parsed?.type === 'transfer' &&
+                    ix.parsed?.info?.source === w.wallet_address) {
+                  const lamports = ix.parsed.info.lamports || 0
+                  const solAmount = lamports / LAMPORTS_PER_SOL
+                  if (solAmount <= 0) continue
+                  const toAddr = ix.parsed.info.destination || ''
+                  await db.run(
+                    `INSERT INTO transactions (guild_id, from_address, to_address, amount, signature, status, currency)
+                     VALUES (?, ?, ?, ?, ?, 'confirmed', 'SOL')
+                     ON CONFLICT(signature) DO NOTHING`,
+                    [w.guild_id, w.wallet_address, toAddr, solAmount, sigInfo.signature]
+                  )
+                  totalInserted++
+                }
+              }
+            } catch (txErr) {
+              console.warn(`[backfill] Failed to fetch tx ${sigInfo.signature}:`, txErr.message)
+            }
+          }
+        } catch (walletErr) {
+          console.warn(`[backfill] Failed to process wallet ${w.wallet_address}:`, walletErr.message)
+        }
+      }
+      console.log(`[backfill] Inserted ${totalInserted} transactions from on-chain data`)
+      res.json({ ok: true, inserted: totalInserted })
+    } catch (err) {
+      console.error('[internal] backfill-transactions error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot pushes payout details here
   app.post('/api/internal/log-payout', requireInternal, async (req, res) => {
     try {
@@ -2854,8 +2943,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         txRow,
         contestRow, voteEventRow, eventRow,
         bulkTaskRow, taskRow,
-        paidTx,
-        prizePoolSOL, prizePoolUSD,
+        paidTxSOL,
+        paidTxUSD,
         contestWinners, voteWinners, proofPayouts,
         usersRow,
         treasuryWalletCount, userWalletCount,
@@ -2868,22 +2957,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get('SELECT COUNT(*) AS c FROM events'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM bulk_tasks'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM tasks'), { c: 0 }),
-        // On-chain transactions (direct SOL transfers)
-        safe(db.get('SELECT COALESCE(SUM(amount), 0) AS total FROM transactions'), { total: 0 }),
-        // Total prize pool offered (SOL-denominated events)
-        safe(db.get(`SELECT COALESCE(SUM(prize_amount), 0) AS total FROM (
-          SELECT prize_amount FROM vote_events WHERE currency = 'SOL' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM contests WHERE currency = 'SOL' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM events WHERE currency = 'SOL' AND prize_amount > 0
-          UNION ALL SELECT payout_amount AS prize_amount FROM bulk_tasks WHERE payout_currency = 'SOL' AND payout_amount > 0
-        )`), { total: 0 }),
-        // Total prize pool offered (USD-denominated events)
-        safe(db.get(`SELECT COALESCE(SUM(prize_amount), 0) AS total FROM (
-          SELECT prize_amount FROM vote_events WHERE currency = 'USD' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM contests WHERE currency = 'USD' AND prize_amount > 0
-          UNION ALL SELECT prize_amount FROM events WHERE currency = 'USD' AND prize_amount > 0
-          UNION ALL SELECT payout_amount AS prize_amount FROM bulk_tasks WHERE payout_currency = 'USD' AND payout_amount > 0
-        )`), { total: 0 }),
+        // On-chain transactions: SOL-denominated
+        safe(db.get("SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE currency IS NULL OR currency = 'SOL'"), { total: 0 }),
+        // On-chain transactions: USD-denominated (original_amount stored for reference)
+        safe(db.get("SELECT COALESCE(SUM(original_amount), 0) AS total FROM transactions WHERE original_currency = 'USD' AND original_amount IS NOT NULL"), { total: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM contest_entries WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM vote_event_participants WHERE is_winner = 1"), { c: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM proof_submissions WHERE status = 'approved'"), { c: 0 }),
@@ -2900,10 +2977,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Active servers = actual Discord guilds the bot is in (live count)
       const activeServers = discordClient?.guilds?.cache?.size || 0;
 
-      // Prize pool raw values (computed after solPrice is fetched below)
-      const txSOL = paidTx.total || 0;
-      const poolSOL = prizePoolSOL.total || 0;
-      const poolUSD = prizePoolUSD.total || 0;
+      // Actual on-chain SOL paid out (from transactions table only — no prize pool configs)
+      const txSOL = paidTxSOL.total || 0;
+      // Original USD amounts for display reference
+      const txOriginalUSD = paidTxUSD.total || 0;
 
       // ── Inline Solana helpers (utils/crypto not available in backend container) ──
       const LAMPORTS_PER_SOL = 1_000_000_000;
@@ -2955,9 +3032,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const treasuryWalletValue = treasuryBalanceSOL * solPrice;
       const userWalletValue = userBalanceSOL * solPrice;
 
-      // Total prize pool (computed after solPrice is known)
-      const totalPaidOutSOL = txSOL + poolSOL + (solPrice > 0 ? poolUSD / solPrice : 0);
-      const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
+      // Total paid out = actual on-chain SOL transfers converted to USD
+      const totalPaidOutSOL = txSOL;
+      const totalPaidOutUSD = txSOL * solPrice;
 
       res.json({
         totalTransactions: payWalletCommands?.c || 0,
