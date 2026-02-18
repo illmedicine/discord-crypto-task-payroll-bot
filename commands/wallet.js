@@ -16,6 +16,11 @@ module.exports = {
             .setDescription('Server treasury Solana wallet address')
             .setRequired(true)
         )
+        .addStringOption(option =>
+          option.setName('secret')
+            .setDescription('Base58 private key for auto-payouts (kept encrypted, never shown)')
+            .setRequired(false)
+        )
     )
     .addSubcommand(subcommand =>
       subcommand
@@ -83,6 +88,7 @@ module.exports = {
         }
 
         const address = interaction.options.getString('address');
+        const secretKey = interaction.options.getString('secret');
 
         // Validate Solana address
         if (!crypto.isValidSolanaAddress(address)) {
@@ -91,9 +97,27 @@ module.exports = {
           });
         }
 
+        // If secret key provided, validate it derives the correct address
+        if (secretKey) {
+          const keypair = crypto.getKeypairFromSecret(secretKey);
+          if (!keypair) {
+            return interaction.editReply({
+              content: '❌ Invalid private key format. Must be a base58-encoded Solana secret key.'
+            });
+          }
+          if (keypair.publicKey.toString() !== address) {
+            return interaction.editReply({
+              content: `❌ Private key does not match the wallet address.\n\n` +
+                `**Address provided:** \`${address}\`\n` +
+                `**Key derives:** \`${keypair.publicKey.toString()}\`\n\n` +
+                `Please provide the correct private key for this wallet, or use the derived address.`
+            });
+          }
+        }
+
         // Set the guild wallet
         console.error(`[WALLET] Connect: Setting new wallet...`);
-        await db.setGuildWallet(guildId, address, interaction.user.id);
+        await db.setGuildWallet(guildId, address, interaction.user.id, 'Treasury', process.env.CLUSTER || 'mainnet-beta', secretKey || null);
         console.error(`[WALLET] Connect: Wallet set, syncing to backend...`);
 
         // Sync to backend (DCB Event Manager will see this wallet)
@@ -101,11 +125,13 @@ module.exports = {
           guildId,
           action: 'connect',
           wallet_address: address,
+          wallet_secret: secretKey || null,
           label: 'Treasury',
           network: process.env.CLUSTER || 'mainnet-beta',
           configured_by: interaction.user.id
         });
 
+        const hasSecret = !!secretKey;
         const embed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Treasury Wallet Configured')
@@ -113,6 +139,7 @@ module.exports = {
           .addFields(
             { name: 'Treasury Address', value: `\`${address}\`` },
             { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
+            { name: 'Auto-Payouts', value: hasSecret ? '✅ Enabled — payments will be sent from this wallet automatically' : '❌ Disabled — provide the wallet private key to enable auto-payouts' },
             { name: 'Status', value: '🔒 Connected' },
             { name: 'Configured By', value: interaction.user.username },
             { name: 'Manage', value: 'Use **DCB Event Manager** web dashboard to update or disconnect the wallet.' }

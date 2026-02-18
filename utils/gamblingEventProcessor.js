@@ -154,15 +154,20 @@ function syncStatusToBackend(eventId, status, guildId) {
   } catch (_) {}
 }
 
-/** Send SOL via bot wallet (shared helper) */
-async function sendPayment(crypto, recipientAddress, amount) {
+/** Send SOL via guild treasury wallet (shared helper) */
+async function sendPayment(crypto, recipientAddress, amount, guildWallet) {
+  // Use guild treasury keypair if available
+  if (guildWallet && guildWallet.wallet_secret) {
+    return crypto.sendSolFrom(guildWallet.wallet_secret, recipientAddress, amount);
+  }
+  // Fallback: use bot wallet
   if (typeof crypto.sendSol === 'function') {
     return crypto.sendSol(recipientAddress, amount);
   }
-  // Fallback: manual transaction
+  // Fallback: manual transaction with bot wallet
   const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
   const botWallet = crypto.getWallet();
-  if (!botWallet) return { success: false, error: 'Bot wallet not configured' };
+  if (!botWallet) return { success: false, error: 'No wallet configured for payments' };
   const recipient = new PublicKey(recipientAddress);
   const lamports = Math.floor(amount * 1e9);
   const instruction = SystemProgram.transfer({ fromPubkey: botWallet.publicKey, toPubkey: recipient, lamports });
@@ -195,7 +200,7 @@ async function refundParticipants(event, bets, db, crypto, guildWallet) {
         continue;
       }
 
-      const res = await sendPayment(crypto, recipientAddr, bet.bet_amount);
+      const res = await sendPayment(crypto, recipientAddr, bet.bet_amount, guildWallet);
       if (res && res.success) {
         await db.recordTransaction(event.guild_id, guildWallet?.wallet_address || 'treasury', recipientAddr, bet.bet_amount, res.signature);
         await db.updateGamblingBetPayment(event.id, bet.user_id, 'refunded', 'payout', res.signature);
@@ -361,22 +366,10 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       if (!guildWallet) {
         console.log(`[HorseRace] No treasury wallet for guild ${event.guild_id}, skipping payments`);
       } else {
-        // Check bot wallet balance before attempting payouts
-        const botWallet = crypto.getWallet();
-        const botAddress = botWallet ? botWallet.publicKey.toString() : null;
-        const isBotTreasury = botAddress && botAddress === guildWallet.wallet_address;
-        const botBalance = botAddress ? await crypto.getBalance(botAddress) : 0;
-        const totalPayout = prizePerWinner * winnerUserIds.length;
-
-        if (botBalance < totalPayout) {
-          const shortfall = (totalPayout - botBalance).toFixed(4);
-          if (!isBotTreasury) {
-            const treasuryBal = await crypto.getBalance(guildWallet.wallet_address);
-            console.error(`[HorseRace] WALLET MISMATCH: Treasury (${guildWallet.wallet_address}) has ${treasuryBal} SOL but bot wallet (${botAddress}) has ${botBalance} SOL. Cannot pay.`);
-            paymentResults.push({ userId: 'all', success: false, reason: `Treasury wallet mismatch — bot wallet (${botAddress}) has ${botBalance.toFixed(4)} SOL, needs ${totalPayout.toFixed(4)} SOL. Set bot wallet as treasury in DCB Event Manager.` });
-          } else {
-            console.warn(`[HorseRace] Insufficient bot wallet balance: ${botBalance} SOL, need ${totalPayout} SOL (short ${shortfall} SOL)`);
-          }
+        if (!guildWallet.wallet_secret) {
+          console.log(`[HorseRace] Treasury wallet has no secret key for guild ${event.guild_id}, falling back to bot wallet`);
+        } else {
+          console.log(`[HorseRace] Using guild treasury keypair for payouts (guild ${event.guild_id})`);
         }
 
         for (const userId of winnerUserIds) {
@@ -387,7 +380,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
             console.log(`[HorseRace] Payment attempt: userId=${userId}, recipientAddr=${recipientAddr}, amount=${prizePerWinner}`);
 
             if (recipientAddr) {
-              const res = await sendPayment(crypto, recipientAddr, prizePerWinner);
+              const res = await sendPayment(crypto, recipientAddr, prizePerWinner, guildWallet);
               console.log(`[HorseRace] Payment result for ${userId}:`, JSON.stringify(res));
               if (res && res.success) {
                 await db.recordTransaction(event.guild_id, guildWallet.wallet_address, recipientAddr, prizePerWinner, res.signature);

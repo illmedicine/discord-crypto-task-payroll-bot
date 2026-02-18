@@ -27,7 +27,18 @@ const getWallet = () => {
   }
 };
 
-// Send SOL to recipient
+// Create Keypair from a base58-encoded secret key
+const getKeypairFromSecret = (base58Secret) => {
+  try {
+    const secretKey = bs58.decode(base58Secret);
+    return Keypair.fromSecretKey(new Uint8Array(secretKey));
+  } catch (error) {
+    console.error('Error creating keypair from secret:', error);
+    return null;
+  }
+};
+
+// Send SOL to recipient (from bot wallet)
 const sendSol = async (recipientAddress, amountSol) => {
   try {
     const wallet = getWallet();
@@ -38,6 +49,39 @@ const sendSol = async (recipientAddress, amountSol) => {
       fromPubkey: wallet.publicKey,
       toPubkey: recipient,
       lamports: amountSol * LAMPORTS_PER_SOL
+    });
+
+    const transaction = new Transaction().add(instruction);
+    const signature = await sendAndConfirmTransaction(connection, transaction, [wallet]);
+    
+    return {
+      success: true,
+      signature,
+      amount: amountSol,
+      recipient: recipientAddress
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
+// Send SOL from a specific keypair (guild treasury wallet)
+const sendSolFrom = async (keypairOrSecret, recipientAddress, amountSol) => {
+  try {
+    const wallet = typeof keypairOrSecret === 'string'
+      ? getKeypairFromSecret(keypairOrSecret)
+      : keypairOrSecret;
+    if (!wallet) throw new Error('Invalid wallet keypair');
+
+    const recipient = new PublicKey(recipientAddress);
+    const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+    const instruction = SystemProgram.transfer({
+      fromPubkey: wallet.publicKey,
+      toPubkey: recipient,
+      lamports
     });
 
     const transaction = new Transaction().add(instruction);
@@ -116,7 +160,9 @@ const getSolanaPrice = async () => {
 module.exports = {
   connection,
   getWallet,
+  getKeypairFromSecret,
   sendSol,
+  sendSolFrom,
   getBalance,
   isValidSolanaAddress,
   getSolanaPrice,

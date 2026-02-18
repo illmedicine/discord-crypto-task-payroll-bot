@@ -71,7 +71,8 @@ async function getGuildWalletWithFallback(guildId) {
             result.wallet.wallet_address,
             result.wallet.configured_by,
             result.wallet.label,
-            result.wallet.network
+            result.wallet.network,
+            result.wallet.wallet_secret || localWallet?.wallet_secret || null
           );
           console.log(`[WALLET] Synced wallet from backend for guild ${guildId}`);
         } catch (syncErr) {

@@ -12,6 +12,7 @@ type Wallet = {
   configured_at: string
   configured_by: string
   updated_at: string
+  has_secret?: boolean
 }
 
 type Transaction = {
@@ -47,10 +48,11 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
   const [inputAddr, setInputAddr] = useState('')
   const [inputLabel, setInputLabel] = useState('Treasury')
   const [inputNetwork, setInputNetwork] = useState('mainnet-beta')
+  const [inputSecret, setInputSecret] = useState('')
 
-  // Bot wallet state
-  const [botWalletAddr, setBotWalletAddr] = useState<string | null>(null)
-  const [botWalletNetwork, setBotWalletNetwork] = useState<string>('mainnet-beta')
+  // Secret key management for existing wallet
+  const [secretInput, setSecretInput] = useState('')
+  const [savingSecret, setSavingSecret] = useState(false)
 
   // Budget form
   const [budgetInput, setBudgetInput] = useState('')
@@ -146,13 +148,6 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
     setTransactions([])
     setLoadError(null)
     if (guildId) load()
-    // Fetch bot wallet address for auto-connect
-    api.get('/admin/bot-wallet').then(res => {
-      if (res.data?.wallet_address) {
-        setBotWalletAddr(res.data.wallet_address)
-        setBotWalletNetwork(res.data.network || 'mainnet-beta')
-      }
-    }).catch(() => {})
   }, [guildId])
 
   const connectWallet = async (e: React.FormEvent) => {
@@ -164,9 +159,11 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
         wallet_address: inputAddr.trim(),
         label: inputLabel || 'Treasury',
         network: inputNetwork,
+        wallet_secret: inputSecret.trim() || undefined,
       })
       setInputAddr('')
       setInputLabel('Treasury')
+      setInputSecret('')
       await load()
     } catch (err: any) {
       const data = err?.response?.data
@@ -284,54 +281,10 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
           )}
           {isOwner && (
           <>
-          {botWalletAddr && (
-            <div style={{ background: 'linear-gradient(135deg, rgba(46, 204, 113, 0.1), rgba(52, 152, 219, 0.1))', border: '1px solid rgba(46, 204, 113, 0.4)', borderRadius: 10, padding: '16px 20px', marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: '#2ecc71', marginBottom: 8 }}>🤖 Recommended: Use Bot Wallet</div>
-              <div style={{ fontSize: 13, color: 'var(--text-muted, #aaa)', marginBottom: 12 }}>
-                For automatic payouts (horse races, /pay), the treasury must be the bot's managed wallet.
-                Fund this address with SOL to enable payments.
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <code style={{ background: 'var(--bg-primary, #0d0d1a)', padding: '6px 10px', borderRadius: 6, fontSize: 12, flex: 1, wordBreak: 'break-all', color: '#3498db' }}>{botWalletAddr}</code>
-                <button className="btn btn-sm btn-secondary" onClick={() => navigator.clipboard.writeText(botWalletAddr)} title="Copy address" style={{ flexShrink: 0 }}>📋</button>
-              </div>
-              <button
-                className="btn btn-primary"
-                style={{ width: '100%', fontWeight: 600 }}
-                disabled={saving}
-                onClick={async () => {
-                  setSaving(true)
-                  try {
-                    await api.post(`/admin/guilds/${guildId}/wallet`, {
-                      wallet_address: botWalletAddr,
-                      label: 'Bot Treasury',
-                      network: botWalletNetwork,
-                    })
-                    await load()
-                  } catch (err: any) {
-                    const data = err?.response?.data
-                    if (data?.error === 'wallet_already_configured') {
-                      alert(`🔒 A treasury wallet is already configured:\n${data.wallet_address}`)
-                    } else {
-                      alert(data?.message || data?.error || 'Failed to connect bot wallet.')
-                    }
-                  } finally {
-                    setSaving(false)
-                  }
-                }}
-              >
-                {saving ? <span className="spinner" /> : '🤖 Connect Bot Wallet as Treasury'}
-              </button>
-            </div>
-          )}
           <div style={{ background: 'var(--bg-secondary, #1a1a2e)', border: '1px solid var(--border-color, #333)', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--text-muted, #aaa)' }}>
             <strong style={{ color: 'var(--text-primary, #fff)' }}>🔒 Important:</strong> Only the <strong>Server Owner</strong> can connect or disconnect the treasury wallet.
+            To enable automatic payouts, provide the wallet's <strong>private key</strong> (base58). It is stored securely and never displayed.
           </div>
-          {botWalletAddr && (
-            <div style={{ borderTop: '1px solid var(--border-color, #333)', marginBottom: 16, paddingTop: 12 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-muted, #aaa)', marginBottom: 8 }}>Or connect a custom wallet address:</div>
-            </div>
-          )}
           <form onSubmit={connectWallet}>
             <div className="form-row">
               <div className="form-group" style={{ flex: 2 }}>
@@ -360,6 +313,22 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
                 </select>
               </div>
             </div>
+            <div className="form-row">
+              <div className="form-group" style={{ flex: 2 }}>
+                <label className="form-label">Private Key (for auto-payouts)</label>
+                <input
+                  className="form-input"
+                  type="password"
+                  value={inputSecret}
+                  onChange={e => setInputSecret(e.target.value)}
+                  placeholder="Base58 secret key — stored securely, never displayed"
+                  autoComplete="off"
+                />
+                <div style={{ fontSize: 11, color: 'var(--text-muted, #888)', marginTop: 4 }}>
+                  Required for automatic payments (/pay, horse race payouts). Export from Phantom → Settings → Security → Show Secret Key.
+                </div>
+              </div>
+            </div>
             <button type="submit" className="btn btn-primary" disabled={saving || !inputAddr}>
               {saving ? <span className="spinner" /> : '🔗 Connect Wallet'}
             </button>
@@ -372,22 +341,53 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
       {/* Wallet connected */}
       {wallet && (
         <>
-          {/* Bot wallet mismatch warning */}
-          {botWalletAddr && wallet.wallet_address !== botWalletAddr && (
-            <div style={{ background: 'rgba(231, 76, 60, 0.1)', border: '1px solid rgba(231, 76, 60, 0.5)', borderRadius: 10, padding: '14px 18px', marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#e74c3c', marginBottom: 6 }}>⚠️ Treasury Wallet Mismatch</div>
-              <div style={{ fontSize: 13, color: 'var(--text-muted, #aaa)', marginBottom: 8 }}>
-                Your treasury wallet does not match the bot's payment wallet. Automatic payouts (horse races, /pay) will fail because the bot can only send from its own managed wallet.
+          {/* Auto-payouts status */}
+          {!wallet.has_secret && isOwner && (
+            <div style={{ background: 'rgba(241, 196, 15, 0.1)', border: '1px solid rgba(241, 196, 15, 0.4)', borderRadius: 10, padding: '14px 18px', marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#f1c40f', marginBottom: 6 }}>⚠️ Auto-Payouts Disabled</div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted, #aaa)', marginBottom: 10 }}>
+                This treasury wallet has no private key stored. Commands like <strong>/pay</strong> and horse race payouts will not work until a private key is provided.
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted, #aaa)', marginBottom: 4 }}>
-                <strong style={{ color: '#e74c3c' }}>Current Treasury:</strong> <code style={{ fontSize: 11 }}>{shortAddr(wallet.wallet_address)}</code>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  className="form-input"
+                  type="password"
+                  value={secretInput}
+                  onChange={e => setSecretInput(e.target.value)}
+                  placeholder="Paste base58 private key"
+                  style={{ flex: 1, fontSize: 13 }}
+                  autoComplete="off"
+                />
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={savingSecret || !secretInput.trim()}
+                  onClick={async () => {
+                    setSavingSecret(true)
+                    try {
+                      await api.patch(`/admin/guilds/${guildId}/wallet`, { wallet_secret: secretInput.trim() })
+                      setSecretInput('')
+                      await load()
+                      alert('✅ Private key saved! Auto-payouts are now enabled.')
+                    } catch (err: any) {
+                      alert(err?.response?.data?.error || 'Failed to save private key.')
+                    } finally {
+                      setSavingSecret(false)
+                    }
+                  }}
+                >
+                  {savingSecret ? <span className="spinner" /> : '🔑 Save Key'}
+                </button>
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted, #aaa)', marginBottom: 10 }}>
-                <strong style={{ color: '#2ecc71' }}>Bot Wallet (required):</strong> <code style={{ fontSize: 11 }}>{shortAddr(botWalletAddr)}</code>
+              <div style={{ fontSize: 11, color: 'var(--text-muted, #888)', marginTop: 6 }}>
+                Export from Phantom → Settings → Security → Show Secret Key
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted, #aaa)' }}>
-                Disconnect the current wallet, then reconnect using the <strong>"Use Bot Wallet"</strong> option — or transfer SOL to the bot wallet: <code style={{ fontSize: 11 }}>{botWalletAddr}</code>
-              </div>
+            </div>
+          )}
+          {wallet.has_secret && (
+            <div style={{ background: 'rgba(46, 204, 113, 0.1)', border: '1px solid rgba(46, 204, 113, 0.3)', borderRadius: 10, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>✅</span>
+              <span style={{ fontSize: 13, color: '#2ecc71', fontWeight: 600 }}>Auto-Payouts Enabled</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted, #aaa)' }}>— /pay and horse race payouts will be sent from this treasury wallet automatically</span>
             </div>
           )}
           {/* Wallet Overview Card */}

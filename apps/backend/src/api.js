@@ -1995,7 +1995,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildMember, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
-      res.json(wallet || null)
+      if (wallet) {
+        // Never expose wallet_secret to the web frontend — just indicate if it's set
+        const { wallet_secret, ...safeWallet } = wallet
+        res.json({ ...safeWallet, has_secret: !!wallet_secret })
+      } else {
+        res.json(null)
+      }
     } catch (err) {
       res.status(500).json({ error: 'failed_to_get_wallet' })
     }
@@ -2003,20 +2009,21 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
     try {
-      const { wallet_address, label, network } = req.body || {}
+      const { wallet_address, label, network, wallet_secret } = req.body || {}
       if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
         return res.status(400).json({ error: 'invalid_wallet_address' })
       }
       await db.run(
-        `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, configured_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, wallet_secret, configured_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT(guild_id) DO UPDATE SET
            wallet_address = excluded.wallet_address,
            configured_by = excluded.configured_by,
            label = excluded.label,
            network = excluded.network,
+           wallet_secret = excluded.wallet_secret,
            updated_at = CURRENT_TIMESTAMP`,
-        [req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta']
+        [req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta', wallet_secret || null]
       )
       await db.run(
         'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -2039,6 +2046,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (updates.budget_spent !== undefined) { fields.push('budget_spent = ?'); params.push(Number(updates.budget_spent)) }
       if (updates.budget_currency !== undefined) { fields.push('budget_currency = ?'); params.push(updates.budget_currency) }
       if (updates.network !== undefined) { fields.push('network = ?'); params.push(updates.network) }
+      if (updates.wallet_secret !== undefined) { fields.push('wallet_secret = ?'); params.push(updates.wallet_secret) }
       if (fields.length) {
         fields.push('updated_at = CURRENT_TIMESTAMP')
         params.push(req.guild.id)
@@ -2786,27 +2794,6 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // ── Internal Wallet Sync (bot pulls / pushes wallet data) ──────
 
-  // Bot syncs its public wallet address so the web dashboard can show it
-  let botWalletAddress = null
-  let botWalletNetwork = 'mainnet-beta'
-
-  app.post('/api/internal/bot-wallet', requireInternal, (req, res) => {
-    const { wallet_address, network } = req.body || {}
-    if (!wallet_address) return res.status(400).json({ error: 'missing_wallet_address' })
-    botWalletAddress = wallet_address
-    botWalletNetwork = network || 'mainnet-beta'
-    console.log(`[internal] Bot wallet address registered: ${wallet_address.slice(0,8)}...`)
-    res.json({ ok: true })
-  })
-
-  // Web dashboard fetches the bot's wallet address (for "Use Bot Wallet" feature)
-  app.get('/api/admin/bot-wallet', requireAuth, (req, res) => {
-    res.json({
-      wallet_address: botWalletAddress,
-      network: botWalletNetwork,
-    })
-  })
-
   // Bot pulls wallet from backend DB (authoritative when set via web UI)
   app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {
     try {
@@ -2821,7 +2808,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Bot pushes wallet connect/update to backend DB
   app.post('/api/internal/guild-wallet-sync', requireInternal, async (req, res) => {
     try {
-      const { guildId, action, wallet_address, label, network, configured_by } = req.body || {}
+      const { guildId, action, wallet_address, label, network, configured_by, wallet_secret } = req.body || {}
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
 
       if (action === 'disconnect') {
@@ -2832,15 +2819,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       if (!wallet_address) return res.status(400).json({ error: 'missing_wallet_address' })
       await db.run(
-        `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, configured_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, wallet_secret, configured_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT(guild_id) DO UPDATE SET
            wallet_address = excluded.wallet_address,
            configured_by = excluded.configured_by,
            label = excluded.label,
            network = excluded.network,
+           wallet_secret = excluded.wallet_secret,
            updated_at = CURRENT_TIMESTAMP`,
-        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta']
+        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta', wallet_secret || null]
       )
       console.log(`[internal] wallet synced for guild ${guildId}: ${wallet_address.slice(0,8)}...`)
       res.json({ ok: true })

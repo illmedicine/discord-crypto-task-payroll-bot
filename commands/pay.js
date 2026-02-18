@@ -107,50 +107,45 @@ module.exports = {
         });
       }
 
-      // Get the bot's wallet which will sign and fund the transaction
-      const botWallet = crypto.getWallet();
-      if (!botWallet) {
+      // Get the guild's treasury keypair for signing
+      const treasurySecret = guildWallet.wallet_secret;
+      if (!treasurySecret) {
         return interaction.editReply({
-          content: '❌ Bot wallet not configured.'
+          content: `❌ **Auto-payouts not enabled for this server's treasury wallet.**\n\n` +
+            `The treasury wallet (\`${guildWallet.wallet_address.slice(0,6)}...${guildWallet.wallet_address.slice(-4)}\`) is connected but has no private key stored.\n\n` +
+            `**How to fix:**\n` +
+            `• Use \`/wallet connect\` with the \`secret\` option to provide the wallet's private key\n` +
+            `• Or go to **DCB Event Manager** → Treasury → enter your wallet's secret key\n\n` +
+            `The private key is stored securely and never shown. It's needed so the bot can sign payment transactions from the treasury.`
         });
       }
 
-      const botAddress = botWallet.publicKey.toString();
-      const treasuryAddress = guildWallet.wallet_address;
-      const isBotTreasury = botAddress === treasuryAddress;
-
-      // Check balance of the wallet that will actually send the payment
-      const botBalance = await crypto.getBalance(botAddress);
-      if (botBalance < solAmount) {
-        // If treasury is different from bot wallet, explain the mismatch
-        if (!isBotTreasury) {
-          const treasuryBalance = await crypto.getBalance(treasuryAddress);
-          return interaction.editReply({
-            content: `❌ **Payment failed — Treasury Wallet Mismatch**\n\n` +
-              `Your server's treasury wallet (\`${treasuryAddress.slice(0,6)}...${treasuryAddress.slice(-4)}\`) has **${treasuryBalance.toFixed(4)} SOL**, ` +
-              `but the bot can only send from its own managed wallet.\n\n` +
-              `**Bot Wallet:** \`${botAddress}\` (${botBalance.toFixed(4)} SOL)\n` +
-              `**Treasury Wallet:** \`${treasuryAddress}\` (${treasuryBalance.toFixed(4)} SOL)\n\n` +
-              `**How to fix:**\n` +
-              `1️⃣ Go to **DCB Event Manager** → Treasury → click **"Use Bot Wallet"**\n` +
-              `2️⃣ Transfer SOL to the bot wallet: \`${botAddress}\`\n\n` +
-              `The bot wallet IS the payment wallet — it must be set as your treasury for automatic payouts to work.`
-          });
-        }
+      const treasuryKeypair = crypto.getKeypairFromSecret(treasurySecret);
+      if (!treasuryKeypair) {
         return interaction.editReply({
-          content: `❌ Insufficient treasury balance. Current: ${botBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL\n\n` +
-            `Fund the treasury wallet: \`${botAddress}\``
+          content: '❌ Treasury wallet private key is invalid. Please reconnect the wallet with a valid key.'
         });
       }
 
-      // Execute the payment from bot wallet to user
+      const treasuryAddress = treasuryKeypair.publicKey.toString();
+
+      // Check treasury wallet balance
+      const treasuryBalance = await crypto.getBalance(treasuryAddress);
+      if (treasuryBalance < solAmount) {
+        return interaction.editReply({
+          content: `❌ Insufficient treasury balance. Current: ${treasuryBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL\n\n` +
+            `Fund the treasury wallet: \`${treasuryAddress}\``
+        });
+      }
+
+      // Execute the payment from treasury wallet to user
       const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
       const recipientPubkey = new PublicKey(targetUserData.solana_address);
 
       // Create transfer instruction (convert SOL to lamports)
       const lamports = Math.floor(solAmount * 1e9);
       const instruction = SystemProgram.transfer({
-        fromPubkey: botWallet.publicKey,
+        fromPubkey: treasuryKeypair.publicKey,
         toPubkey: recipientPubkey,
         lamports: lamports
       });
@@ -161,22 +156,22 @@ module.exports = {
       // Get latest blockhash for the transaction
       const { blockhash } = await connection.getLatestBlockhash('confirmed');
       transaction.recentBlockhash = blockhash;
-      transaction.feePayer = botWallet.publicKey;
+      transaction.feePayer = treasuryKeypair.publicKey;
       
-      const signature = await sendAndConfirmTransaction(connection, transaction, [botWallet], {
+      const signature = await sendAndConfirmTransaction(connection, transaction, [treasuryKeypair], {
         commitment: 'confirmed',
         maxRetries: 3
       });
 
       // Log transaction to database
-      await db.recordTransaction(guildId, botWallet.publicKey.toString(), targetUserData.solana_address, solAmount, signature);
+      await db.recordTransaction(guildId, treasuryAddress, targetUserData.solana_address, solAmount, signature);
 
       // Send success embed
       const successEmbed = new EmbedBuilder()
         .setColor('#14F195')
         .setTitle('✅ Payment Sent Successfully')
         .addFields(
-          { name: 'From', value: `Bot Wallet\n\`${botWallet.publicKey.toString()}\`` },
+          { name: 'From', value: `Treasury Wallet\n\`${treasuryAddress}\`` },
           { name: 'To', value: `${targetUser.username}\n\`${targetUserData.solana_address}\`` },
           { name: 'Amount', value: `${solAmount.toFixed(4)} SOL${currency === 'USD' ? ` (~$${amount.toFixed(2)} USD)` : ''}` },
           { name: 'Transaction', value: `[View on Explorer](https://solscan.io/tx/${signature})` },

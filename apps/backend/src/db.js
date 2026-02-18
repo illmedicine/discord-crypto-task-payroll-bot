@@ -166,6 +166,7 @@ db.serialize(() => {
   db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_currency TEXT DEFAULT 'SOL'`, () => {})
   db.run(`ALTER TABLE guild_wallets ADD COLUMN network TEXT DEFAULT 'mainnet-beta'`, () => {})
   db.run(`ALTER TABLE guild_wallets ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`, () => {})
+  db.run(`ALTER TABLE guild_wallets ADD COLUMN wallet_secret TEXT`, () => {})
 
   // Transactions
   db.run(

@@ -75,6 +75,7 @@ const initDb = () => {
     db.run(`ALTER TABLE guild_wallets ADD COLUMN budget_currency TEXT DEFAULT 'SOL'`, () => {});
     db.run(`ALTER TABLE guild_wallets ADD COLUMN network TEXT DEFAULT 'mainnet-beta'`, () => {});
     db.run(`ALTER TABLE guild_wallets ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`, () => {});
+    db.run(`ALTER TABLE guild_wallets ADD COLUMN wallet_secret TEXT`, () => {});
 
     // Guild Settings - approve roles, etc
     db.run(`
@@ -565,18 +566,19 @@ const initDb = () => {
 };
 
 // Guild Wallet operations
-const setGuildWallet = (guildId, walletAddress, configuredByUserId, label, network) => {
+const setGuildWallet = (guildId, walletAddress, configuredByUserId, label, network, walletSecret) => {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, configured_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, wallet_secret, configured_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT(guild_id) DO UPDATE SET
          wallet_address = excluded.wallet_address,
          configured_by = excluded.configured_by,
          label = excluded.label,
          network = excluded.network,
+         wallet_secret = excluded.wallet_secret,
          updated_at = CURRENT_TIMESTAMP`,
-      [guildId, walletAddress, configuredByUserId, label || 'Treasury', network || 'mainnet-beta'],
+      [guildId, walletAddress, configuredByUserId, label || 'Treasury', network || 'mainnet-beta', walletSecret || null],
       function(err) {
         if (err) reject(err);
         else resolve();
