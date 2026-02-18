@@ -203,6 +203,35 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
     }
   }
 
+  const disconnectWallet = async () => {
+    if (!guildId) return
+    const confirmed = confirm(
+      '⚠️ Disconnect Treasury Wallet?\n\n' +
+      'This will remove the wallet from this server.\n' +
+      'Active gambling events and payouts that depend on this wallet may stop working.\n\n' +
+      'You can reconnect a wallet later.\n\n' +
+      'Are you sure?'
+    )
+    if (!confirmed) return
+    setSaving(true)
+    try {
+      await api.delete(`/admin/guilds/${guildId}/wallet`)
+      setWallet(null)
+      setSolBalance(null)
+      setTransactions([])
+      setInputAddr('')
+      setInputLabel('Treasury')
+    } catch (err: any) {
+      if (err?.response?.status === 403) {
+        alert('🔒 Only the Server Owner can disconnect the treasury wallet.')
+      } else {
+        alert(err?.response?.data?.error || 'Failed to disconnect wallet.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (!guildId) {
     return (
       <div className="container">
@@ -245,7 +274,7 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
           {isOwner && (
           <>
           <div style={{ background: 'var(--bg-secondary, #1a1a2e)', border: '1px solid var(--border-color, #333)', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--text-muted, #aaa)' }}>
-            <strong style={{ color: 'var(--text-primary, #fff)' }}>🔒 Important:</strong> Only the <strong>Server Owner</strong> can connect the treasury wallet. Once connected, the wallet is <strong>permanently locked</strong> to this server and cannot be changed.
+            <strong style={{ color: 'var(--text-primary, #fff)' }}>🔒 Important:</strong> Only the <strong>Server Owner</strong> can connect or disconnect the treasury wallet.
           </div>
           <form onSubmit={connectWallet}>
             <div className="form-row">
@@ -327,10 +356,28 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
                 </div>
               </div>
 
-              <div className="treasury-actions">
+              <div className="treasury-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
                 <span className="badge badge-active" style={{ fontSize: 12, padding: '4px 10px' }}>
-                  🔒 Locked &amp; Immutable
+                  🔒 Connected
                 </span>
+                {isOwner && (
+                  <button
+                    className="btn btn-sm"
+                    onClick={disconnectWallet}
+                    disabled={saving}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--danger, #e74c3c)',
+                      color: 'var(--danger, #e74c3c)',
+                      fontSize: 12,
+                      padding: '4px 12px',
+                      cursor: 'pointer',
+                    }}
+                    title="Remove treasury wallet from this server"
+                  >
+                    {saving ? <span className="spinner" /> : '🔌 Disconnect Wallet'}
+                  </button>
+                )}
               </div>
 
             </div>
