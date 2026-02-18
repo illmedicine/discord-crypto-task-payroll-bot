@@ -191,9 +191,10 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
         channel_id: publishChannelId || channelId,
       })
       await load()
-    } catch (err) {
+    } catch (err: any) {
       console.error('Publish failed:', err)
-      alert('Failed to publish. Check channel permissions.')
+      const detail = err?.response?.data?.detail || err?.message || 'Unknown error'
+      alert(`Failed to publish: ${detail}`)
     } finally {
       setPublishing(null)
     }

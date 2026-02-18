@@ -335,18 +335,25 @@ module.exports = function buildApi({ discordClient }) {
 
   // Fetch a text channel and return a wrapper with send/messages.fetch that works in REST-only mode
   async function fetchTextChannel(guildId, channelId) {
-    // Try discord.js first (works if client has proper state)
-    try {
-      const channel = await discordClient.channels.fetch(channelId)
-      if (channel && 'guildId' in channel && channel.guildId === guildId && 'send' in channel) {
-        return channel
+    // Only try discord.js if client is fully connected (has gateway session)
+    // In REST-only mode (no client.login), discord.js channels.fetch works but
+    // channel.send() crashes when constructing the returned Message object
+    // because the guild is a stub without proper managers.
+    if (discordClient.user) {
+      try {
+        const channel = await discordClient.channels.fetch(channelId)
+        if (channel && 'guildId' in channel && channel.guildId === guildId && 'send' in channel) {
+          return channel
+        }
+      } catch (err) {
+        console.warn(`[fetchTextChannel] discord.js fetch failed for ${channelId}:`, err?.message, '— using REST fallback')
       }
-    } catch (err) {
-      console.warn(`[fetchTextChannel] discord.js fetch failed for ${channelId}:`, err?.message, '— using REST fallback')
     }
 
     // REST fallback: verify channel belongs to guild, then return wrapper
+    console.log(`[fetchTextChannel] Using REST fallback for channel ${channelId}`)
     const channelData = await discordBotAPI(`/channels/${channelId}`)
+    console.log(`[fetchTextChannel] REST channel data: id=${channelData?.id}, guild_id=${channelData?.guild_id}, type=${channelData?.type}`)
     if (!channelData || channelData.guild_id !== guildId) throw new Error('invalid_channel')
     if (channelData.type !== 0 && channelData.type !== 5) throw new Error('not_text_channel')
 
@@ -370,9 +377,8 @@ module.exports = function buildApi({ discordClient }) {
           if (payload.components) body.components = payload.components.map(c => typeof c.toJSON === 'function' ? c.toJSON() : c)
         }
 
-        // Handle file uploads
+        // Handle file uploads (Node 20 has native FormData & Blob)
         if (payload.files && payload.files.length > 0) {
-          const FormData = (await import('node-fetch')).default ? globalThis.FormData : (await import('formdata-node')).FormData
           const form = new FormData()
           form.append('payload_json', JSON.stringify(body))
           for (let i = 0; i < payload.files.length; i++) {
@@ -414,7 +420,8 @@ module.exports = function buildApi({ discordClient }) {
   // Serve a minimal favicon to avoid 404
   app.get('/favicon.ico', (req, res) => res.status(204).end())
 
-  app.get('/api/health', (req, res) => res.json({ ok: true }))
+  const BACKEND_BUILD_TS = new Date().toISOString()
+  app.get('/api/health', (req, res) => res.json({ ok: true, build: BACKEND_BUILD_TS, mode: discordClient.user ? 'gateway' : 'rest-only' }))
 
   // Check which auth providers are configured
   app.get('/api/auth/providers', (req, res) => {
@@ -1619,11 +1626,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
+      console.log(`[gambling-event] publish requested for event #${eventId}, guild=${req.guild.id}, clientUser=${!!discordClient.user}`)
       const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
       if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'gambling_event_not_found' })
 
       const channelId = req.body?.channel_id || event.channel_id
+      console.log(`[gambling-event] fetching channel ${channelId} for guild ${req.guild.id}`)
       const channel = await fetchTextChannel(req.guild.id, channelId)
+      console.log(`[gambling-event] channel fetched: restOnly=${!!channel._restOnly}, id=${channel.id}`)
       const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [eventId])
 
       // Recalculate ends_at from NOW
@@ -1713,13 +1723,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         components.push(new ActionRowBuilder().addComponents(...slotButtons.slice(i, i + 5)))
       }
 
+      console.log(`[gambling-event] sending message to channel ${channel.id} with ${components.length} action rows, ${slotButtons.length} buttons`)
       const msg = await channel.send({ embeds: [mainEmbed], components })
+      console.log(`[gambling-event] message sent, msg.id=${msg?.id}`)
       await db.run('UPDATE gambling_events SET message_id = ?, channel_id = ? WHERE id = ?', [msg.id, String(channelId), eventId])
 
       res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
     } catch (err) {
       console.error('[gambling-event] publish error:', err?.message || err)
-      res.status(500).json({ error: 'publish_failed' })
+      console.error('[gambling-event] publish stack:', err?.stack)
+      res.status(500).json({ error: 'publish_failed', detail: err?.message })
     }
   })
 
