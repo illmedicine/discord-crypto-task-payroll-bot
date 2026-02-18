@@ -331,10 +331,37 @@ module.exports = {
     const newCount = event.current_players + 1;
 
     const confirmMsg = requiresPayment
-      ? `� **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Riders: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if race is cancelled.`
+      ? `🏇 **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Riders: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if race is cancelled.`
       : `🏇 **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n👥 Riders: ${newCount}/${event.max_players}`;
 
     await interaction.editReply({ content: confirmMsg });
+
+    // ---- Update the original event embed with new rider count ----
+    try {
+      if (event.message_id && event.channel_id) {
+        const channel = await interaction.client.channels.fetch(event.channel_id);
+        if (channel) {
+          const originalMsg = await channel.messages.fetch(event.message_id);
+          if (originalMsg) {
+            const updatedEmbed = createGamblingEventEmbed(
+              eventId, event.title, event.description, event.mode,
+              event.prize_amount, event.currency, event.entry_fee,
+              newCount, event.min_players, event.max_players,
+              null, // duration doesn't matter for rebuild — timestamp already set
+              slots.map(s => ({ label: s.label, color: s.color }))
+            );
+            // Preserve original timestamp field if present
+            const existingTimerField = originalMsg.embeds[0]?.fields?.find(f => f.name === '⏱️ Ends');
+            if (existingTimerField) {
+              updatedEmbed.addFields({ name: '⏱️ Ends', value: existingTimerField.value, inline: true });
+            }
+            await originalMsg.edit({ embeds: [updatedEmbed], components: originalMsg.components });
+          }
+        }
+      }
+    } catch (embedErr) {
+      console.warn(`[GamblingEvent] Failed to update embed for event #${eventId}:`, embedErr.message);
+    }
 
     // Announce milestone
     if (newCount === event.min_players) {
