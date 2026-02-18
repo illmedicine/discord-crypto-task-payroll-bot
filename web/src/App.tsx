@@ -5,6 +5,11 @@ import GamblingEvents from './pages/GamblingEvents'
 import History from './pages/History'
 import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
+import Tasks from './pages/Tasks'
+import BulkTasks from './pages/BulkTasks'
+import Contests from './pages/Contests'
+import ScheduledPosts from './pages/ScheduledPosts'
+import Proofs from './pages/Proofs'
 import QualifyPage from './pages/QualifyPage'
 
 import PerformanceMonitor from './components/PerformanceMonitor'
@@ -12,15 +17,21 @@ import ProfilerLogger from './components/ProfilerLogger'
 import EventTicker from './components/EventTicker'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'votes' | 'gambling' | 'history' | 'treasury' | 'workers' | 'qualify'
+type Page = 'dashboard' | 'votes' | 'gambling' | 'history' | 'treasury' | 'workers' | 'tasks' | 'bulk-tasks' | 'contests' | 'events' | 'scheduled-posts' | 'proofs' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
   { id: 'workers', label: 'Workers', icon: '👥' },
+  { id: 'tasks', label: 'Tasks', icon: '📋' },
+  { id: 'bulk-tasks', label: 'Bulk Tasks', icon: '🎯' },
+  { id: 'contests', label: 'Contests', icon: '🏆' },
   { id: 'votes', label: 'Vote Events', icon: '🗳️' },
   { id: 'gambling', label: 'Horse Race', icon: '🏇' },
+  { id: 'events', label: 'Events', icon: '📅' },
   { id: 'history', label: 'History', icon: '📜' },
+  { id: 'scheduled-posts', label: 'Scheduled Posts', icon: '📬' },
+  { id: 'proofs', label: 'Proofs', icon: '✅' },
 ]
 
 export default function App() {
@@ -313,9 +324,15 @@ export default function App() {
             {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
             {page === 'votes' && <Events guildId={guildId} isOwner={isOwner} />}
             {page === 'gambling' && <GamblingEvents guildId={guildId} isOwner={isOwner} />}
+            {page === 'tasks' && <Tasks guildId={guildId} />}
+            {page === 'bulk-tasks' && <BulkTasks guildId={guildId} />}
+            {page === 'contests' && <Contests guildId={guildId} />}
+            {page === 'events' && <Events guildId={guildId} isOwner={isOwner} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} />}
+            {page === 'scheduled-posts' && <ScheduledPosts />}
+            {page === 'proofs' && <Proofs guildId={guildId} />}
           </ProfilerLogger>
         </main>
 
