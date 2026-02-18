@@ -5,7 +5,6 @@ import History from './pages/History'
 import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
 import BulkTasks from './pages/BulkTasks'
-import Proofs from './pages/Proofs'
 import QualifyPage from './pages/QualifyPage'
 
 import PerformanceMonitor from './components/PerformanceMonitor'
@@ -13,7 +12,7 @@ import ProfilerLogger from './components/ProfilerLogger'
 import EventTicker from './components/EventTicker'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'gambling' | 'history' | 'treasury' | 'workers' | 'bulk-tasks' | 'proofs' | 'qualify'
+type Page = 'dashboard' | 'gambling' | 'history' | 'treasury' | 'workers' | 'bulk-tasks' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -21,8 +20,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'workers', label: 'Workers', icon: '👥' },
   { id: 'bulk-tasks', label: 'Bulk Tasks', icon: '🎯' },
   { id: 'gambling', label: 'Horse Race', icon: '🏇' },
-  { id: 'history', label: 'History', icon: '📜' },
-  { id: 'proofs', label: 'Proofs', icon: '✅' },
+  { id: 'history', label: 'History & Proofs', icon: '📜' },
 ]
 
 export default function App() {
@@ -318,7 +316,6 @@ export default function App() {
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} />}
-            {page === 'proofs' && <Proofs guildId={guildId} />}
           </ProfilerLogger>
         </main>
 
