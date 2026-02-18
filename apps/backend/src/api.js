@@ -2697,6 +2697,51 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ── Internal Wallet Sync (bot pulls / pushes wallet data) ──────
+
+  // Bot pulls wallet from backend DB (authoritative when set via web UI)
+  app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {
+    try {
+      const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.params.guildId])
+      res.json({ wallet: wallet || null })
+    } catch (err) {
+      console.error('[internal] guild-wallet GET error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot pushes wallet connect/update to backend DB
+  app.post('/api/internal/guild-wallet-sync', requireInternal, async (req, res) => {
+    try {
+      const { guildId, action, wallet_address, label, network, configured_by } = req.body || {}
+      if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
+
+      if (action === 'disconnect') {
+        await db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [guildId])
+        console.log(`[internal] wallet disconnected for guild ${guildId}`)
+        return res.json({ ok: true })
+      }
+
+      if (!wallet_address) return res.status(400).json({ error: 'missing_wallet_address' })
+      await db.run(
+        `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, configured_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(guild_id) DO UPDATE SET
+           wallet_address = excluded.wallet_address,
+           configured_by = excluded.configured_by,
+           label = excluded.label,
+           network = excluded.network,
+           updated_at = CURRENT_TIMESTAMP`,
+        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta']
+      )
+      console.log(`[internal] wallet synced for guild ${guildId}: ${wallet_address.slice(0,8)}...`)
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] guild-wallet-sync error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // ══════════════════════════════════════════════════════════════════
   //  PUBLIC STATS — website ticker (no auth required)
   // ══════════════════════════════════════════════════════════════════

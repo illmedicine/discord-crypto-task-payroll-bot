@@ -1,6 +1,7 @@
 // db and crypto are required lazily inside processVoteEvent to make testing/mocking easier
 // EmbedBuilder is required lazily inside functions to avoid heavy module load during tests
 const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
+const { getGuildWalletWithFallback } = require('./walletSync');
 
 /** Fire-and-forget sync event status to backend */
 function syncStatusToBackend(eventId, status, guildId) {
@@ -98,7 +99,7 @@ const processVoteEvent = async (eventId, client, reason = 'time', deps = {}) => 
       ? event.prize_amount / winnerUserIds.length
       : 0;
 
-    const guildWallet = await db.getGuildWallet(event.guild_id);
+    const guildWallet = await getGuildWalletWithFallback(event.guild_id);
     const paymentResults = [];
 
     if (event.prize_amount > 0 && winnerUserIds.length > 0) {

@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const db = require('../utils/db');
+const { getGuildWalletWithFallback } = require('../utils/walletSync');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -77,10 +78,10 @@ module.exports = {
     }
 
     // Check if user is the treasury owner (wallet configured by)
-    const guildWallet = await db.getGuildWallet(guildId);
+    const guildWallet = await getGuildWalletWithFallback(guildId);
     if (!guildWallet) {
       return interaction.editReply({
-        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` to set up the treasury wallet.'
+        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` or **DCB Event Manager** to set up the treasury wallet.'
       });
     }
 

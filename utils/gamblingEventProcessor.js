@@ -1,4 +1,5 @@
 const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
+const { getGuildWalletWithFallback } = require('./walletSync');
 
 const HOUSE_CUT_PERCENT = 10; // 10% house rake
 
@@ -108,7 +109,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     const bets = await db.getGamblingEventBets(eventId);
     const slots = await db.getGamblingEventSlots(eventId);
-    const guildWallet = await db.getGuildWallet(event.guild_id);
+    const guildWallet = await getGuildWalletWithFallback(event.guild_id);
     const isPotMode = event.mode === 'pot';
     const hasEntryFee = isPotMode && (event.entry_fee || 0) > 0;
 

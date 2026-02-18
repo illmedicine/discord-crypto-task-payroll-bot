@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const crypto = require('../utils/crypto');
 const db = require('../utils/db');
+const { syncWalletToBackend, getGuildWalletWithFallback } = require('../utils/walletSync');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -58,20 +59,20 @@ module.exports = {
         }
 
         console.error(`[WALLET] Connect: Getting existing wallet...`);
-        // Check if wallet is already configured for this server
-        const existingWallet = await db.getGuildWallet(guildId);
+        // Check if wallet is already configured (local + backend)
+        const existingWallet = await getGuildWalletWithFallback(guildId);
         console.error(`[WALLET] Connect: Got wallet result`);
         
         if (existingWallet) {
           const embed = new EmbedBuilder()
             .setColor('#FF0000')
-            .setTitle('🔒 Treasury Wallet Locked')
-            .setDescription('This Discord server already has a treasury wallet configured.')
+            .setTitle('🔒 Treasury Wallet Already Configured')
+            .setDescription('This Discord server already has a treasury wallet connected.')
             .addFields(
               { name: 'Configured Wallet', value: `\`${existingWallet.wallet_address}\`` },
-              { name: 'Status', value: '🔒 Immutable - Cannot be changed' },
+              { name: 'Status', value: '🔒 Locked via Discord' },
               { name: 'Configured On', value: new Date(existingWallet.configured_at).toLocaleString() },
-              { name: 'Note', value: 'The treasury wallet for this server was locked when first configured and cannot be changed.' }
+              { name: 'Need to change?', value: 'Server owners can disconnect and reconnect the wallet from **DCB Event Manager** (web dashboard).' }
             )
             .setTimestamp();
 
@@ -90,21 +91,31 @@ module.exports = {
           });
         }
 
-        // Set the guild wallet (one-time configuration)
+        // Set the guild wallet
         console.error(`[WALLET] Connect: Setting new wallet...`);
         await db.setGuildWallet(guildId, address, interaction.user.id);
-        console.error(`[WALLET] Connect: Wallet set, sending response`);
+        console.error(`[WALLET] Connect: Wallet set, syncing to backend...`);
+
+        // Sync to backend (DCB Event Manager will see this wallet)
+        syncWalletToBackend({
+          guildId,
+          action: 'connect',
+          wallet_address: address,
+          label: 'Treasury',
+          network: process.env.CLUSTER || 'mainnet-beta',
+          configured_by: interaction.user.id
+        });
 
         const embed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Treasury Wallet Configured')
-          .setDescription('Server treasury wallet has been set and locked.')
+          .setDescription('Server treasury wallet has been connected and synced to DCB Event Manager.')
           .addFields(
             { name: 'Treasury Address', value: `\`${address}\`` },
             { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
-            { name: 'Status', value: '🔒 Locked & Immutable' },
+            { name: 'Status', value: '🔒 Connected' },
             { name: 'Configured By', value: interaction.user.username },
-            { name: 'Important', value: 'This wallet cannot be changed. It is now the permanent treasury for this Discord server.' }
+            { name: 'Manage', value: 'Use **DCB Event Manager** web dashboard to update or disconnect the wallet.' }
           )
           .setTimestamp();
 
@@ -122,12 +133,12 @@ module.exports = {
 
       try {
         console.error(`[WALLET] Balance: Getting guild wallet...`);
-        const guildWallet = await db.getGuildWallet(guildId);
+        const guildWallet = await getGuildWalletWithFallback(guildId);
         console.error(`[WALLET] Balance: Got wallet, now fetching balance...`);
         
         if (!guildWallet) {
           return interaction.editReply({
-            content: '❌ No treasury wallet configured for this server. Ask the **Server Owner** to configure one with `/wallet connect`.'
+            content: '❌ No treasury wallet configured for this server. Ask the **Server Owner** to configure one with `/wallet connect` or via **DCB Event Manager**.'
           });
         }
 
@@ -162,12 +173,12 @@ module.exports = {
       await interaction.deferReply();
       try {
         console.error(`[WALLET] Info: Getting guild wallet...`);
-        const guildWallet = await db.getGuildWallet(guildId);
+        const guildWallet = await getGuildWalletWithFallback(guildId);
         console.error(`[WALLET] Info: Got wallet result`);
         
         if (!guildWallet) {
           return interaction.editReply({
-            content: '❌ No treasury wallet configured for this server.'
+            content: '❌ No treasury wallet configured for this server. Use `/wallet connect` or **DCB Event Manager** to set one up.'
           });
         }
 
@@ -178,7 +189,8 @@ module.exports = {
             { name: 'Public Address', value: `\`${guildWallet.wallet_address}\`` },
             { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
             { name: 'Wallet Type', value: 'Server Treasury (Phantom)' },
-            { name: 'Status', value: '🔒 Locked & Immutable' },
+            { name: 'Status', value: '🔒 Connected' },
+            { name: 'Manage', value: 'Use **DCB Event Manager** to update or disconnect' },
             { name: 'Configured At', value: new Date(guildWallet.configured_at).toLocaleString() },
             { name: 'RPC Endpoint', value: process.env.SOLANA_RPC_URL || 'api.mainnet-beta.solana.com' },
             { name: 'Purpose', value: 'Permanent treasury for all server payroll & transactions' }

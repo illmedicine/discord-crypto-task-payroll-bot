@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const crypto = require('../utils/crypto');
 const db = require('../utils/db');
+const { getGuildWalletWithFallback } = require('../utils/walletSync');
 const { Connection, PublicKey, Transaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js');
 
 module.exports = {
@@ -72,11 +73,11 @@ module.exports = {
         solAmount = amount / solPrice;
       }
 
-      // Get guild's treasury wallet (for display purposes)
-      const guildWallet = await db.getGuildWallet(guildId);
+      // Get guild's treasury wallet (with backend sync fallback)
+      const guildWallet = await getGuildWalletWithFallback(guildId);
       if (!guildWallet) {
         return interaction.editReply({
-          content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` to set up the treasury wallet.'
+          content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` or **DCB Event Manager** to set up the treasury wallet.'
         });
       }
 

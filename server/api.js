@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const db = require('../utils/db');
+const { syncWalletToBackend } = require('../utils/walletSync');
 
 module.exports = (client) => {
   const app = express();
@@ -652,6 +653,15 @@ module.exports = (client) => {
       }
       await db.setGuildWallet(req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta');
       await db.logActivity(req.guild.id, 'wallet', 'Treasury Wallet Connected', `Wallet ${wallet_address.slice(0,8)}...${wallet_address.slice(-4)} connected`, `@${req.user.username}`, 0, 'SOL', null);
+      // Sync to backend (DCB Event Manager)
+      syncWalletToBackend({
+        guildId: req.guild.id,
+        action: 'connect',
+        wallet_address: wallet_address.trim(),
+        label: label || 'Treasury',
+        network: network || 'mainnet-beta',
+        configured_by: req.user.id
+      });
       const wallet = await db.getGuildWallet(req.guild.id);
       return res.json(wallet);
     } catch (err) {
@@ -677,6 +687,8 @@ module.exports = (client) => {
     try {
       await db.deleteGuildWallet(req.guild.id);
       await db.logActivity(req.guild.id, 'wallet', 'Treasury Wallet Disconnected', 'Treasury wallet removed', `@${req.user.username}`, 0, 'SOL', null);
+      // Sync disconnect to backend
+      syncWalletToBackend({ guildId: req.guild.id, action: 'disconnect' });
       return res.json({ ok: true });
     } catch (err) {
       return res.status(500).json({ error: 'failed_to_delete_wallet' });

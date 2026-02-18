@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const db = require('../utils/db');
 const crypto = require('../utils/crypto');
 const { processGamblingEvent } = require('../utils/gamblingEventProcessor');
+const { getGuildWalletWithFallback } = require('../utils/walletSync');
 
 // ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
@@ -296,11 +297,11 @@ module.exports = {
         });
       }
 
-      // 3. Verify guild treasury wallet exists
-      const guildWallet = await db.getGuildWallet(interaction.guildId);
+      // 3. Verify guild treasury wallet exists (with backend sync fallback)
+      const guildWallet = await getGuildWalletWithFallback(interaction.guildId);
       if (!guildWallet || !guildWallet.wallet_address) {
         return interaction.editReply({
-          content: '❌ This server does not have a treasury wallet configured. Server owner must use `/wallet connect` first.'
+          content: '❌ This server does not have a treasury wallet configured. Server owner must use `/wallet connect` or **DCB Event Manager** first.'
         });
       }
 
