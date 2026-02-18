@@ -361,6 +361,24 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       if (!guildWallet) {
         console.log(`[HorseRace] No treasury wallet for guild ${event.guild_id}, skipping payments`);
       } else {
+        // Check bot wallet balance before attempting payouts
+        const botWallet = crypto.getWallet();
+        const botAddress = botWallet ? botWallet.publicKey.toString() : null;
+        const isBotTreasury = botAddress && botAddress === guildWallet.wallet_address;
+        const botBalance = botAddress ? await crypto.getBalance(botAddress) : 0;
+        const totalPayout = prizePerWinner * winnerUserIds.length;
+
+        if (botBalance < totalPayout) {
+          const shortfall = (totalPayout - botBalance).toFixed(4);
+          if (!isBotTreasury) {
+            const treasuryBal = await crypto.getBalance(guildWallet.wallet_address);
+            console.error(`[HorseRace] WALLET MISMATCH: Treasury (${guildWallet.wallet_address}) has ${treasuryBal} SOL but bot wallet (${botAddress}) has ${botBalance} SOL. Cannot pay.`);
+            paymentResults.push({ userId: 'all', success: false, reason: `Treasury wallet mismatch — bot wallet (${botAddress}) has ${botBalance.toFixed(4)} SOL, needs ${totalPayout.toFixed(4)} SOL. Set bot wallet as treasury in DCB Event Manager.` });
+          } else {
+            console.warn(`[HorseRace] Insufficient bot wallet balance: ${botBalance} SOL, need ${totalPayout} SOL (short ${shortfall} SOL)`);
+          }
+        }
+
         for (const userId of winnerUserIds) {
           try {
             const userData = await db.getUser(userId);

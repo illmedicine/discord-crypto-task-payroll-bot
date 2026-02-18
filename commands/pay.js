@@ -115,11 +115,31 @@ module.exports = {
         });
       }
 
-      // Check bot wallet has sufficient balance for the payment
-      const botBalance = await crypto.getBalance(botWallet.publicKey.toString());
+      const botAddress = botWallet.publicKey.toString();
+      const treasuryAddress = guildWallet.wallet_address;
+      const isBotTreasury = botAddress === treasuryAddress;
+
+      // Check balance of the wallet that will actually send the payment
+      const botBalance = await crypto.getBalance(botAddress);
       if (botBalance < solAmount) {
+        // If treasury is different from bot wallet, explain the mismatch
+        if (!isBotTreasury) {
+          const treasuryBalance = await crypto.getBalance(treasuryAddress);
+          return interaction.editReply({
+            content: `❌ **Payment failed — Treasury Wallet Mismatch**\n\n` +
+              `Your server's treasury wallet (\`${treasuryAddress.slice(0,6)}...${treasuryAddress.slice(-4)}\`) has **${treasuryBalance.toFixed(4)} SOL**, ` +
+              `but the bot can only send from its own managed wallet.\n\n` +
+              `**Bot Wallet:** \`${botAddress}\` (${botBalance.toFixed(4)} SOL)\n` +
+              `**Treasury Wallet:** \`${treasuryAddress}\` (${treasuryBalance.toFixed(4)} SOL)\n\n` +
+              `**How to fix:**\n` +
+              `1️⃣ Go to **DCB Event Manager** → Treasury → click **"Use Bot Wallet"**\n` +
+              `2️⃣ Transfer SOL to the bot wallet: \`${botAddress}\`\n\n` +
+              `The bot wallet IS the payment wallet — it must be set as your treasury for automatic payouts to work.`
+          });
+        }
         return interaction.editReply({
-          content: `❌ Insufficient bot wallet balance. Current: ${botBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL`
+          content: `❌ Insufficient treasury balance. Current: ${botBalance.toFixed(4)} SOL, Required: ${solAmount.toFixed(4)} SOL\n\n` +
+            `Fund the treasury wallet: \`${botAddress}\``
         });
       }
 

@@ -2786,6 +2786,27 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // ── Internal Wallet Sync (bot pulls / pushes wallet data) ──────
 
+  // Bot syncs its public wallet address so the web dashboard can show it
+  let botWalletAddress = null
+  let botWalletNetwork = 'mainnet-beta'
+
+  app.post('/api/internal/bot-wallet', requireInternal, (req, res) => {
+    const { wallet_address, network } = req.body || {}
+    if (!wallet_address) return res.status(400).json({ error: 'missing_wallet_address' })
+    botWalletAddress = wallet_address
+    botWalletNetwork = network || 'mainnet-beta'
+    console.log(`[internal] Bot wallet address registered: ${wallet_address.slice(0,8)}...`)
+    res.json({ ok: true })
+  })
+
+  // Web dashboard fetches the bot's wallet address (for "Use Bot Wallet" feature)
+  app.get('/api/admin/bot-wallet', requireAuth, (req, res) => {
+    res.json({
+      wallet_address: botWalletAddress,
+      network: botWalletNetwork,
+    })
+  })
+
   // Bot pulls wallet from backend DB (authoritative when set via web UI)
   app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {
     try {

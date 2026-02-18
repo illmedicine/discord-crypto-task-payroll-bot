@@ -189,6 +189,21 @@ client.once('clientReady', async () => {
   // Re-register commands on startup to ensure they're fresh
   console.log(`🔄 Performing command sync on startup...`);
   registerCommands().catch(() => {});
+
+  // ---- Sync bot wallet address to backend so web dashboard can show it ----
+  const botWallet = crypto.getWallet();
+  if (botWallet && process.env.DCB_BACKEND_URL && process.env.DCB_INTERNAL_SECRET) {
+    const walletAddr = botWallet.publicKey.toString();
+    const url = `${process.env.DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/bot-wallet`;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET },
+      body: JSON.stringify({ wallet_address: walletAddr, network: process.env.CLUSTER || 'mainnet-beta' })
+    }).then(r => {
+      if (r.ok) console.log(`[WALLET] Bot wallet address synced to backend: ${walletAddr.slice(0,8)}...`);
+      else console.warn(`[WALLET] Bot wallet sync failed: ${r.status}`);
+    }).catch(err => console.warn(`[WALLET] Bot wallet sync error: ${err.message}`));
+  }
   
   // Set bot presence with version and latest feature
   const featureIndex = Math.floor(Date.now() / 60000) % LATEST_FEATURES.length;
