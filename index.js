@@ -851,9 +851,12 @@ client.login(process.env.DISCORD_TOKEN).catch((err) => {
 
 // Start integrated API server (provides HTTP endpoints for the web UI)
 try {
+  console.log('[API] Starting API server...');
   require('./server/api')(client);
+  console.log('[API] ✅ API server module loaded successfully');
 } catch (err) {
-  console.error('[API] Unable to start API server:', err.message);
+  console.error('[API] ❌ Unable to start API server:', err.message);
+  console.error('[API] Stack:', err.stack);
 }
 // Start scheduler for scheduled posts
 try {
