@@ -9,6 +9,7 @@ import QualifyPage from './pages/QualifyPage'
 
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
+import EventTicker from './components/EventTicker'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
 type Page = 'dashboard' | 'votes' | 'gambling' | 'history' | 'treasury' | 'workers' | 'qualify'
@@ -302,6 +303,8 @@ export default function App() {
             </span>
           </div>
         </div>
+
+        {guildId && <EventTicker guildId={guildId} />}
 
         <main>
           <PerformanceMonitor />
