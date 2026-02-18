@@ -350,6 +350,10 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       ? winnerPool / winnerUserIds.length
       : 0;
 
+    console.log(`[HorseRace] Event #${eventId}: mode=${event.mode}, totalPot=${totalPot}, houseCut=${houseCut}, winnerPool=${winnerPool}, prizePerWinner=${prizePerWinner}, winners=${winnerUserIds.length}, bets=${bets.length}`);
+    console.log(`[HorseRace] Event #${eventId}: entry_fee=${event.entry_fee}, prize_amount=${event.prize_amount}, currency=${event.currency}`);
+    console.log(`[HorseRace] Event #${eventId}: guildWallet=${guildWallet ? guildWallet.wallet_address : 'NULL'}`);
+
     // ======== Solana payouts to winners ========
     const paymentResults = [];
 
@@ -362,18 +366,22 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
             const userData = await db.getUser(userId);
             const bet = winnerBets.find(b => b.user_id === userId);
             const recipientAddr = userData?.solana_address || bet?.wallet_address;
+            console.log(`[HorseRace] Payment attempt: userId=${userId}, recipientAddr=${recipientAddr}, amount=${prizePerWinner}`);
 
             if (recipientAddr) {
               const res = await sendPayment(crypto, recipientAddr, prizePerWinner);
+              console.log(`[HorseRace] Payment result for ${userId}:`, JSON.stringify(res));
               if (res && res.success) {
                 await db.recordTransaction(event.guild_id, guildWallet.wallet_address, recipientAddr, prizePerWinner, res.signature);
                 await db.updateGamblingBetPayment(eventId, userId, 'paid_out', 'payout', res.signature);
                 paymentResults.push({ userId, address: recipientAddr, amount: prizePerWinner, success: true, signature: res.signature });
               } else {
+                console.error(`[HorseRace] Payment FAILED for ${userId}: ${res?.error || 'Unknown error'}`);
                 await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null);
                 paymentResults.push({ userId, success: false, reason: res?.error || 'Payment failed' });
               }
             } else {
+              console.warn(`[HorseRace] No wallet address for winner ${userId}`);
               await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null);
               paymentResults.push({ userId, success: false, reason: 'No wallet connected' });
             }
@@ -438,49 +446,75 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           resultsEmbed.addFields({ name: '🎊 Winners', value: 'No winners this race — nobody bet on the winning horse!' });
         }
 
-        // Prize pool + house cut breakdown
-        if (totalPot > 0) {
-          if (isPotMode && houseCut > 0) {
-            resultsEmbed.addFields(
-              { name: '🏦 Total Pot', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
-              { name: '🏠 House Cut (10%)', value: `${houseCut.toFixed(4)} ${event.currency}`, inline: true },
-              { name: '🎁 Winner Pool (90%)', value: `${winnerPool.toFixed(4)} ${event.currency}`, inline: true },
-            );
-          } else {
-            resultsEmbed.addFields(
-              { name: '🎁 Prize Pool', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
-            );
-          }
+        // Prize pool + house cut breakdown — always show
+        if (isPotMode && houseCut > 0) {
+          resultsEmbed.addFields(
+            { name: '🏦 Total Pot', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+            { name: '🏠 House Cut (10%)', value: `${houseCut.toFixed(4)} ${event.currency}`, inline: true },
+            { name: '🎁 Winner Pool (90%)', value: `${winnerPool.toFixed(4)} ${event.currency}`, inline: true },
+          );
+        } else if (totalPot > 0) {
+          resultsEmbed.addFields(
+            { name: '🎁 Prize Pool', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+          );
+        } else {
+          resultsEmbed.addFields(
+            { name: '🎁 Prize', value: isPotMode ? 'No entry fees collected' : 'No prize amount set', inline: true },
+          );
+        }
 
-          if (winnerUserIds.length > 0) {
-            resultsEmbed.addFields(
-              { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${event.currency}`, inline: true }
-            );
-          }
+        if (winnerUserIds.length > 0 && prizePerWinner > 0) {
+          resultsEmbed.addFields(
+            { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${event.currency}`, inline: true }
+          );
+        }
 
-          if (paymentResults.length > 0) {
-            let paymentSummary = '';
-            for (const r of paymentResults) {
-              if (r.success) paymentSummary += `✅ <@${r.userId}>: ${r.amount.toFixed(4)} ${event.currency} - [View TX](https://solscan.io/tx/${r.signature})\n`;
-              else paymentSummary += `❌ <@${r.userId}>: Payment failed - ${r.reason}\n`;
-            }
-            resultsEmbed.addFields({ name: '💸 Prize Distribution', value: paymentSummary });
-          } else if (!guildWallet) {
-            resultsEmbed.addFields({ name: '⚠️ Payment Issue', value: 'No treasury wallet configured. Server admin must manually pay winners.' });
+        if (paymentResults.length > 0) {
+          let paymentSummary = '';
+          for (const r of paymentResults) {
+            if (r.success) paymentSummary += `✅ <@${r.userId}>: ${r.amount.toFixed(4)} ${event.currency} — [View TX](https://solscan.io/tx/${r.signature})\n`;
+            else paymentSummary += `❌ <@${r.userId}>: Payment failed — ${r.reason}\n`;
           }
+          resultsEmbed.addFields({ name: '💸 Payouts', value: paymentSummary });
+        } else if (prizePerWinner > 0 && !guildWallet) {
+          resultsEmbed.addFields({ name: '⚠️ Payment Issue', value: 'No treasury wallet configured. Server admin must manually pay winners.' });
+        } else if (prizePerWinner > 0 && winnerUserIds.length > 0) {
+          resultsEmbed.addFields({ name: '⚠️ Payment Issue', value: 'Payments were attempted but produced no results. Check bot logs.' });
         }
 
         resultsEmbed.setTimestamp();
         resultsEmbed.setFooter({ text: `DisCryptoBank • Horse Race #${event.id} • Provably Fair` });
 
-        const mentionContent = winnerUserIds.length > 0
-          ? `🏇 **HORSE RACE RESULTS!** 🏁\n\nCongratulations ${winnerUserIds.map(id => `<@${id}>`).join(', ')}! 🏆`
-          : '🏇 **HORSE RACE RESULTS!** — No winners this race.' + (isPotMode && houseCut > 0 ? `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.` : '');
+        // Build content text with key info inline (always visible even if embed fails)
+        let mentionContent = '';
+        if (winnerUserIds.length > 0) {
+          const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
+          mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+            `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
+            `👥 **Riders:** ${bets.length} | **Winners:** ${winnerUserIds.length}\n`;
+          if (prizePerWinner > 0) {
+            mentionContent += `💰 **Prize per winner:** ${prizePerWinner.toFixed(4)} ${event.currency}\n`;
+          }
+          mentionContent += `\nCongratulations ${winnerMentions}! 🏆`;
+          // Add payment status summary
+          const paidCount = paymentResults.filter(r => r.success).length;
+          const failedCount = paymentResults.filter(r => !r.success).length;
+          if (paidCount > 0) mentionContent += `\n✅ ${paidCount} payout(s) sent successfully!`;
+          if (failedCount > 0) mentionContent += `\n❌ ${failedCount} payout(s) failed — check embed for details.`;
+          if (paymentResults.length === 0 && prizePerWinner > 0) {
+            if (!guildWallet) mentionContent += `\n⚠️ No treasury wallet — admin must pay manually.`;
+            else mentionContent += `\n⚠️ Payout processing issue — check bot logs.`;
+          }
+        } else {
+          mentionContent = '🏇 **HORSE RACE RESULTS!** — No winners this race.';
+          if (isPotMode && houseCut > 0) mentionContent += `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.`;
+        }
 
+        console.log(`[HorseRace] Sending results: paymentResults=${JSON.stringify(paymentResults)}`);
         await channel.send({ content: mentionContent, embeds: [resultsEmbed] });
       }
     } catch (e) {
-      console.log(`[HorseRace] Could not announce results for #${event.id}:`, e.message);
+      console.error(`[HorseRace] Could not announce results for #${event.id}:`, e.message, e.stack);
     }
 
     await db.updateGamblingEventStatus(eventId, 'completed');
