@@ -592,12 +592,6 @@ module.exports = (client) => {
     }
   });
 
-  // Start listening
-  
-app.listen(port, () => {
-    console.log(`[API] Server listening on port ${port}`);
-  });
-
   // ---- Dashboard Stats ----
   app.get('/api/admin/guilds/:guildId/dashboard/stats', requireAuth, requireGuildOwner, async (req, res) => {
     try {
