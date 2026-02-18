@@ -19,7 +19,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'treasury', label: 'Treasury', icon: '💰' },
   { id: 'workers', label: 'Workers', icon: '👥' },
   { id: 'votes', label: 'Vote Events', icon: '🗳️' },
-  { id: 'gambling', label: 'Gambling', icon: '🎰' },
+  { id: 'gambling', label: 'Horse Race', icon: '🏇' },
   { id: 'history', label: 'History', icon: '📜' },
 ]
 

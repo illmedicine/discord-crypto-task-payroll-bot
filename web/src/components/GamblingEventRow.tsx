@@ -41,7 +41,7 @@ function GamblingEventRow({ event, style }: Props & { style?: React.CSSPropertie
         <Countdown endsAt={event.ends_at} prefix='⏱️ ' endedText='—' />
       </td>
       <td>
-        {event.winning_slot ? `🏆 Slot #${event.winning_slot}` : '—'}
+        {event.winning_slot ? `🏆 Horse #${event.winning_slot}` : '—'}
       </td>
     </tr>
   )

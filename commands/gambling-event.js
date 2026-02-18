@@ -1,7 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/db');
 const crypto = require('../utils/crypto');
-const { processGamblingEvent } = require('../utils/gamblingEventProcessor');
+const { processGamblingEvent, HORSE_PRESETS } = require('../utils/gamblingEventProcessor');
 const { getGuildWalletWithFallback } = require('../utils/walletSync');
 
 // ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
@@ -62,23 +62,19 @@ function syncBetToBackend(body) {
   }).catch(err => console.error('[GamblingEvent] Backend sync error:', err.message));
 }
 
-// Default roulette-style slot presets
-const DEFAULT_SLOTS = [
-  { label: '🔴 Red',    color: '#E74C3C' },
-  { label: '⚫ Black',  color: '#2C3E50' },
-  { label: '🟢 Green',  color: '#27AE60' },
-  { label: '🔵 Blue',   color: '#3498DB' },
-  { label: '🟡 Gold',   color: '#F1C40F' },
-  { label: '🟣 Purple', color: '#9B59B6' },
-];
+// Default horse presets (mapped from HORSE_PRESETS in processor)
+const DEFAULT_SLOTS = HORSE_PRESETS.map(h => ({
+  label: `${h.emoji} ${h.name}`,
+  color: h.color,
+}));
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('gambling-event')
-    .setDescription('Create and manage roulette-style gambling events')
+    .setDescription('Create and manage horse race gambling events')
     .addSubcommand(sub =>
       sub.setName('create')
-        .setDescription('Create a new gambling event')
+        .setDescription('Create a new horse race event')
         .addStringOption(opt => opt.setName('title').setDescription('Event title').setRequired(true))
         .addStringOption(opt => opt.setName('description').setDescription('Event description').setRequired(false))
         .addStringOption(opt =>
@@ -92,28 +88,28 @@ module.exports = {
         .addNumberOption(opt => opt.setName('prize_amount').setDescription('Prize pool (house mode)').setRequired(false))
         .addStringOption(opt => opt.setName('currency').setDescription('Currency (SOL/USD)').setRequired(false))
         .addNumberOption(opt => opt.setName('entry_fee').setDescription('Entry fee per player (pot mode)').setRequired(false))
-        .addIntegerOption(opt => opt.setName('min_players').setDescription('Min players to spin').setRequired(true))
+        .addIntegerOption(opt => opt.setName('min_players').setDescription('Min players to race').setRequired(true))
         .addIntegerOption(opt => opt.setName('max_players').setDescription('Max players').setRequired(true))
         .addIntegerOption(opt => opt.setName('duration_minutes').setDescription('Duration in minutes').setRequired(false))
-        .addIntegerOption(opt => opt.setName('num_slots').setDescription('Number of slots (2-6, default 6)').setRequired(false))
+        .addIntegerOption(opt => opt.setName('num_slots').setDescription('Number of horses (2-6, default 6)').setRequired(false))
     )
     .addSubcommand(sub =>
       sub.setName('list')
-        .setDescription('List active gambling events')
+        .setDescription('List active horse race events')
     )
     .addSubcommand(sub =>
       sub.setName('info')
-        .setDescription('View gambling event details')
+        .setDescription('View horse race event details')
         .addIntegerOption(opt => opt.setName('event_id').setDescription('Event ID').setRequired(true))
     )
     .addSubcommand(sub =>
       sub.setName('remove')
-        .setDescription('Remove a gambling event')
+        .setDescription('Remove a horse race event')
         .addIntegerOption(opt => opt.setName('event_id').setDescription('Event ID').setRequired(true))
     )
     .addSubcommand(sub =>
       sub.setName('process')
-        .setDescription('Manually process (spin) a gambling event')
+        .setDescription('Manually start (race) a horse race event')
         .addIntegerOption(opt => opt.setName('event_id').setDescription('Event ID').setRequired(true))
     ),
 
@@ -159,19 +155,19 @@ module.exports = {
     if (sub === 'list') {
       const events = await db.getActiveGamblingEvents(interaction.guildId);
       if (events.length === 0) {
-        return interaction.reply({ content: '🎰 No active gambling events in this server.', ephemeral: true });
+        return interaction.reply({ content: '� No active horse race events in this server.', ephemeral: true });
       }
       const lines = events.map(e =>
-        `**#${e.id}** — ${e.title} | ${e.current_players}/${e.max_players} players | ${e.mode} | ${e.status}`
+        `**#${e.id}** — ${e.title} | ${e.current_players}/${e.max_players} riders | ${e.mode} | ${e.status}`
       );
-      return interaction.reply({ content: `🎰 **Active Gambling Events:**\n${lines.join('\n')}`, ephemeral: true });
+      return interaction.reply({ content: `🏇 **Active Horse Race Events:**\n${lines.join('\n')}`, ephemeral: true });
     }
 
     if (sub === 'info') {
       const eventId = interaction.options.getInteger('event_id');
       const event = await db.getGamblingEvent(eventId);
       if (!event || event.guild_id !== interaction.guildId) {
-        return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
+        return interaction.reply({ content: '❌ Horse race event not found.', ephemeral: true });
       }
       const slots = await db.getGamblingEventSlots(eventId);
       const bets = await db.getGamblingEventBets(eventId);
@@ -182,20 +178,20 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setColor('#E74C3C')
-        .setTitle(`🎰 Gambling Event #${event.id}`)
+        .setTitle(`🏇 Horse Race #${event.id}`)
         .setDescription(event.description || event.title)
         .addFields(
           { name: 'Mode', value: event.mode === 'pot' ? 'Pot Split' : 'House-funded', inline: true },
           { name: 'Prize', value: event.mode === 'pot' ? `Pot: ${bets.reduce((s, b) => s + (b.bet_amount || 0), 0)} ${event.currency}` : `${event.prize_amount} ${event.currency}`, inline: true },
-          { name: 'Players', value: `${event.current_players}/${event.max_players}`, inline: true },
+          { name: 'Riders', value: `${event.current_players}/${event.max_players}`, inline: true },
           { name: 'Status', value: event.status, inline: true },
-          { name: 'Bets by Slot', value: slotList || 'None' },
+          { name: 'Bets by Horse', value: slotList || 'None' },
         )
         .setTimestamp();
 
       if (event.winning_slot) {
         const ws = slots.find(s => s.slot_number === event.winning_slot);
-        embed.addFields({ name: '🏆 Winning Slot', value: `#${event.winning_slot} — ${ws?.label || '?'}` });
+        embed.addFields({ name: '🏆 Winning Horse', value: `#${event.winning_slot} — ${ws?.label || '?'}` });
       }
 
       return interaction.reply({ embeds: [embed], ephemeral: true });
@@ -205,7 +201,7 @@ module.exports = {
       const eventId = interaction.options.getInteger('event_id');
       const event = await db.getGamblingEvent(eventId);
       if (!event || event.guild_id !== interaction.guildId) {
-        return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
+        return interaction.reply({ content: '❌ Horse race event not found.', ephemeral: true });
       }
 
       // If active pot event with entry fees, trigger cancellation with refunds instead of hard delete
@@ -215,28 +211,27 @@ module.exports = {
         const committedBets = bets.filter(b => b.payment_status === 'committed');
         if (committedBets.length > 0) {
           await interaction.deferReply({ ephemeral: true });
-          // Process as cancellation — will handle refunds
           await processGamblingEvent(eventId, interaction.client, 'cancelled_by_admin');
-          return interaction.editReply({ content: `✅ Gambling event #${eventId} cancelled. Refunds are being processed for ${committedBets.length} participant(s).` });
+          return interaction.editReply({ content: `✅ Horse race #${eventId} cancelled. Refunds are being processed for ${committedBets.length} rider(s).` });
         }
       }
 
       await db.deleteGamblingEvent(eventId);
-      return interaction.reply({ content: `✅ Gambling event #${eventId} deleted.`, ephemeral: true });
+      return interaction.reply({ content: `✅ Horse race #${eventId} deleted.`, ephemeral: true });
     }
 
     if (sub === 'process') {
       const eventId = interaction.options.getInteger('event_id');
       const event = await db.getGamblingEvent(eventId);
       if (!event || event.guild_id !== interaction.guildId) {
-        return interaction.reply({ content: '❌ Gambling event not found.', ephemeral: true });
+        return interaction.reply({ content: '❌ Horse race event not found.', ephemeral: true });
       }
       if (event.status !== 'active') {
         return interaction.reply({ content: `❌ Event is already ${event.status}.`, ephemeral: true });
       }
       await interaction.deferReply({ ephemeral: true });
       await processGamblingEvent(eventId, interaction.client, 'manual');
-      return interaction.editReply({ content: `🎰 Gambling event #${eventId} has been processed!` });
+      return interaction.editReply({ content: `🏇 Horse race #${eventId} is off! Watch the race in the channel! 🏁` });
     }
   },
 
@@ -254,11 +249,11 @@ module.exports = {
     const event = await getGamblingEventWithFallback(eventId);
     if (!event) {
       console.log(`[GamblingEvent] Event #${eventId} not found in local or backend DB`);
-      return interaction.editReply({ content: '❌ Gambling event not found.' });
+      return interaction.editReply({ content: '❌ Horse race event not found.' });
     }
     console.log(`[GamblingEvent] Event #${eventId} fetched: mode=${event.mode}, currency=${event.currency}, entry_fee=${event.entry_fee}, status=${event.status}`);
     if (event.status !== 'active') {
-      return interaction.editReply({ content: '❌ This gambling event is no longer active.' });
+      return interaction.editReply({ content: '❌ This horse race is no longer active.' });
     }
     if (event.current_players >= event.max_players) {
       return interaction.editReply({ content: '❌ This event is full.' });
@@ -270,7 +265,7 @@ module.exports = {
       const slots = await db.getGamblingEventSlots(eventId);
       const chosen = slots.find(s => s.slot_number === existing.chosen_slot);
       return interaction.editReply({
-        content: `❌ You already placed a bet on **${chosen?.label || `Slot #${existing.chosen_slot}`}**. One bet per player!`
+        content: `❌ You already picked **${chosen?.label || `Horse #${existing.chosen_slot}`}**. One bet per rider!`
       });
     }
 
@@ -285,7 +280,7 @@ module.exports = {
       const userData = await db.getUser(interaction.user.id);
       if (!userData || !userData.solana_address) {
         return interaction.editReply({
-          content: `❌ **Wallet Required!**\n\nThis event requires a **${entryFee} ${event.currency}** entry fee.\nYou must connect your Solana wallet first.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\`\n\nOnce connected, click the slot button again to enter.`
+          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\nYou must connect your Solana wallet first.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\`\n\nOnce connected, click the horse button again to enter.`
         });
       }
       userWalletAddress = userData.solana_address;
@@ -336,8 +331,8 @@ module.exports = {
     const newCount = event.current_players + 1;
 
     const confirmMsg = requiresPayment
-      ? `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Players: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if event is cancelled.`
-      : `🎰 **Bet placed!** You bet on **${chosenSlot?.label || `Slot #${slotNumber}`}**.\n👥 Players: ${newCount}/${event.max_players}`;
+      ? `� **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Riders: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if race is cancelled.`
+      : `🏇 **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n👥 Riders: ${newCount}/${event.max_players}`;
 
     await interaction.editReply({ content: confirmMsg });
 
@@ -347,7 +342,7 @@ module.exports = {
         const channel = await interaction.client.channels.fetch(event.channel_id);
         if (channel) {
           await channel.send({
-            content: `🎰 **Gambling Event #${eventId}** — Minimum players reached! The wheel will spin when ${event.max_players} players join or time runs out. 🎲`
+            content: `� **Horse Race #${eventId}** — Minimum riders reached! The race will start when ${event.max_players} riders join or time runs out. 🏁`
           });
         }
       } catch (_) {}
@@ -358,7 +353,7 @@ module.exports = {
       try {
         const channel = await interaction.client.channels.fetch(event.channel_id);
         if (channel) {
-          await channel.send({ content: `🎰 **Gambling Event #${eventId}** is FULL! Spinning the wheel... 🎡` });
+          await channel.send({ content: `🏇 **Horse Race #${eventId}** — All riders in! The race is starting... 🏁` });
         }
       } catch (_) {}
       await processGamblingEvent(eventId, interaction.client, 'full');
@@ -376,21 +371,22 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
     ? `${entryFee} ${currency} entry → pot split (90% to winners)`
     : `${prizeAmount} ${currency}`;
 
-  const slotList = slots.map((s, i) => `${i + 1}. ${s.label}`).join('\n');
+  const horseList = slots.map((s, i) => `${i + 1}. 🏇 ${s.label}`).join('\n');
 
-  // Build description with rules
-  let desc = description || 'Place your bets on a slot!';
+  // Build description with horse race rules
+  let desc = description || 'Pick your horse and bet on the winner!';
   desc += '\n\n**📋 How it works:**\n';
-  desc += '1️⃣ Click a slot button below to place your bet\n';
-  desc += '2️⃣ The wheel spins when max players join or time runs out\n';
-  desc += '3️⃣ If your slot wins — you get paid! 💰\n';
+  desc += '1️⃣ Click a horse button below to place your bet\n';
+  desc += '2️⃣ The race starts when max riders join or time runs out\n';
+  desc += '3️⃣ Watch the horses race down the track in real-time! 🏁\n';
+  desc += '4️⃣ If your horse wins — you get paid! 💰\n';
 
   if (requiresPayment) {
     desc += `\n**💰 Entry Requirements:**\n`;
-    desc += `• Entry fee: **${entryFee} ${currency}** per player\n`;
+    desc += `• Entry fee: **${entryFee} ${currency}** per rider\n`;
     desc += `• You MUST connect your wallet first: \`/user-wallet connect\`\n`;
     desc += `• Your wallet must have at least **${entryFee} ${currency}** available\n`;
-    desc += `• Entry fee is committed when you place your bet\n`;
+    desc += `• Entry fee is committed when you pick your horse\n`;
 
     desc += `\n**🏆 Prize Distribution:**\n`;
     desc += `• Total pot = all entry fees combined\n`;
@@ -398,7 +394,7 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
     desc += `• **10%** retained by the house (server treasury)\n`;
 
     desc += `\n**🔄 Refund Policy:**\n`;
-    desc += `• If event is cancelled (not enough players), all entries are refunded\n`;
+    desc += `• If race is cancelled (not enough riders), all entries are refunded\n`;
     desc += `• Refunds are sent to your connected wallet address\n`;
   } else {
     desc += `\n**🏆 Prize Distribution:**\n`;
@@ -412,24 +408,24 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
   }
 
   desc += `\n**📜 Rules & Terms:**\n`;
-  desc += `• One bet per player — no changes after entry\n`;
-  desc += `• Winners determined by random provably-fair wheel spin\n`;
+  desc += `• One horse per rider — no changes after entry\n`;
+  desc += `• Winner determined by provably-fair random race\n`;
   desc += `• Payouts sent to your connected Solana wallet\n`;
   desc += `• By entering, you agree to these terms and accept the outcome\n`;
   desc += `• Must be 18+ to participate in wagering events`;
 
   const embed = new EmbedBuilder()
     .setColor('#E74C3C')
-    .setTitle(`🎰 DCB Gambling Event: ${title}`)
+    .setTitle(`🏇 DCB Horse Race: ${title}`)
     .setDescription(desc)
     .addFields(
       { name: '🎲 Mode', value: modeLabel, inline: true },
-      { name: '🪑 Players', value: `${currentPlayers}/${maxPlayers}`, inline: true },
-      { name: '✅ Min to Spin', value: `${minPlayers}`, inline: true },
+      { name: '🪑 Riders', value: `${currentPlayers}/${maxPlayers}`, inline: true },
+      { name: '✅ Min to Race', value: `${minPlayers}`, inline: true },
       { name: '🎁 Prize', value: prizeInfo, inline: true },
-      { name: '🎰 Slots', value: slotList || 'None' },
+      { name: '🏇 Horses', value: horseList || 'None' },
     )
-    .setFooter({ text: `DisCryptoBank • Gamble #${eventId} • Provably Fair` })
+    .setFooter({ text: `DisCryptoBank • Horse Race #${eventId} • Provably Fair` })
     .setTimestamp();
 
   if (durationMinutes) {
@@ -441,13 +437,13 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
   return embed;
 }
 
-// ---- Helper: build slot buttons ----
+// ---- Helper: build horse buttons ----
 function buildSlotButtons(eventId, slots) {
   const components = [];
   const buttons = slots.map((s, i) =>
     new ButtonBuilder()
       .setCustomId(`gamble_bet_${eventId}_${i + 1}`)
-      .setLabel(s.label)
+      .setLabel(`🏇 ${s.label}`)
       .setStyle(ButtonStyle.Primary)
   );
 

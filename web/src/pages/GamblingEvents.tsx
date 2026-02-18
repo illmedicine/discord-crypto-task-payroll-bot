@@ -33,12 +33,12 @@ type SlotEntry = { label: string; color: string }
 type Props = { guildId: string; isOwner?: boolean }
 
 const DEFAULT_SLOTS: SlotEntry[] = [
-  { label: '🔴 Red',    color: '#E74C3C' },
-  { label: '⚫ Black',  color: '#2C3E50' },
-  { label: '🟢 Green',  color: '#27AE60' },
-  { label: '🔵 Blue',   color: '#3498DB' },
-  { label: '🟡 Gold',   color: '#F1C40F' },
-  { label: '🟣 Purple', color: '#9B59B6' },
+  { label: '🔴 Crimson Blaze',    color: '#E74C3C' },
+  { label: '⚫ Shadow Runner',    color: '#2C3E50' },
+  { label: '🟢 Emerald Thunder',  color: '#27AE60' },
+  { label: '🔵 Sapphire Storm',   color: '#3498DB' },
+  { label: '🟡 Golden Lightning', color: '#F1C40F' },
+  { label: '🟣 Violet Fury',      color: '#9B59B6' },
 ]
 
 function badgeClass(status: string): string {
@@ -204,7 +204,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
   /*  Delete                                                           */
   /* ================================================================ */
   const handleDelete = async (eventId: number) => {
-    if (!confirm('Delete this gambling event? This cannot be undone.')) return
+    if (!confirm('Delete this horse race event? This cannot be undone.')) return
     try {
       await api.delete(`/admin/guilds/${guildId}/gambling-events/${eventId}`)
       await load()
@@ -217,7 +217,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
   /*  Cancel                                                           */
   /* ================================================================ */
   const handleCancel = async (eventId: number) => {
-    if (!confirm('Cancel this gambling event?')) return
+    if (!confirm('Cancel this horse race event?')) return
     try {
       await api.patch(`/admin/guilds/${guildId}/gambling-events/${eventId}/cancel`)
       await load()
@@ -233,8 +233,8 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
     return (
       <div className="container">
         <div className="empty-state">
-          <div className="empty-state-icon">🎰</div>
-          <div className="empty-state-text">Select a server to manage gambling events.</div>
+          <div className="empty-state-icon">�</div>
+          <div className="empty-state-text">Select a server to manage horse race events.</div>
         </div>
       </div>
     )
@@ -246,14 +246,14 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
   return (
     <div className="container">
       <div className="section-header">
-        <h2 style={{ marginBottom: 0 }}>🎰 Gambling Events</h2>
+        <h2 style={{ marginBottom: 0 }}>� Horse Race Gambling</h2>
         <button className="btn btn-secondary btn-sm" onClick={load} disabled={loading}>
           {loading ? <span className="spinner" /> : 'Refresh'}
         </button>
       </div>
 
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
-        Create roulette-style betting events. Players pick a slot, the wheel spins, and winners earn crypto rewards instantly.
+        Create horse race betting events. Riders pick a horse, the race runs with animated results, and winners earn crypto rewards instantly.
       </p>
 
       {/* ============================================================ */}
@@ -261,7 +261,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
       {/* ============================================================ */}
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-header">
-          <div className="card-title">All Gambling Events ({events.length})</div>
+          <div className="card-title">All Horse Race Events ({events.length})</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Publish to:</span>
             <select className="form-select" style={{ width: 160, fontSize: 12 }} value={publishChannelId} onChange={e => setPublishChannelId(e.target.value)}>
@@ -272,8 +272,8 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
 
         {events.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-icon">🎰</div>
-            <div className="empty-state-text">No gambling events yet. Create one below.</div>
+            <div className="empty-state-icon">�</div>
+            <div className="empty-state-text">No horse race events yet. Create one below.</div>
           </div>
         ) : (
           <table className="data-table">
@@ -311,7 +311,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
                     <td>{ev.current_players}/{ev.max_players}</td>
                     <td><span className={badgeClass(ev.status)}>{ev.status}</span></td>
                     <td style={{ fontSize: 12 }}><Countdown endsAt={ev.ends_at} prefix='⏱️ ' endedText='—' /></td>
-                    <td style={{ fontSize: 12 }}>{ev.winning_slot ? `🏆 Slot #${ev.winning_slot}` : '—'}</td>
+                    <td style={{ fontSize: 12 }}>{ev.winning_slot ? `🏆 Horse #${ev.winning_slot}` : '—'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 4 }}>
                         {isOwner && ev.status === 'active' && !ev.message_id && (
@@ -353,10 +353,10 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
                               <strong style={{ fontSize: 13 }}>Details</strong>
                               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
                                 <div>Mode: {ev.mode === 'pot' ? 'Pot Split' : 'House-funded'}</div>
-                                <div>Slots: {ev.num_slots}</div>
-                                <div>Min players: {ev.min_players}</div>
+                                <div>Horses: {ev.num_slots}</div>
+                                <div>Min riders: {ev.min_players}</div>
                                 <div>Created: {formatTimeAgo(ev.created_at)}</div>
-                                {ev.winning_slot && <div style={{ color: 'var(--accent-green)', fontWeight: 600 }}>Winning Slot: #{ev.winning_slot}</div>}
+                                {ev.winning_slot && <div style={{ color: 'var(--accent-green)', fontWeight: 600 }}>Winning Horse: #{ev.winning_slot}</div>}
                               </div>
                             </div>
                           </div>
@@ -377,7 +377,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
       {isOwner && (
         <div className="card">
           <div className="card-header">
-            <div className="card-title">Create New Gambling Event</div>
+            <div className="card-title">Create New Horse Race Event</div>
           </div>
 
           <form onSubmit={handleCreate}>
@@ -386,7 +386,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
               <div className="form-group" style={{ flex: 2 }}>
                 <label className="form-label">Title *</label>
                 <input className="form-input" value={title} onChange={e => setTitle(e.target.value)}
-                       placeholder="e.g. Friday Night Roulette" required />
+                       placeholder="e.g. Friday Night Derby" required />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
                 <label className="form-label">Channel *</label>
@@ -400,7 +400,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
             <div className="form-group">
               <label className="form-label">Description</label>
               <textarea className="form-textarea" value={description} onChange={e => setDescription(e.target.value)}
-                        placeholder="Describe the gambling event..." rows={2} />
+                        placeholder="Describe the horse race event..." rows={2} />
             </div>
 
             {/* Row 2: Mode + Prize/Fee */}
@@ -453,14 +453,14 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
               </div>
             </div>
 
-            {/* Slot configuration */}
+            {/* Horse configuration */}
             <div className="form-group">
-              <label className="form-label">Slots ({numSlots})</label>
+              <label className="form-label">Horses ({numSlots})</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
                 <input className="form-input" type="number" min="2" max="6" value={numSlots}
                        onChange={e => handleNumSlotsChange(Number(e.target.value))}
                        style={{ width: 80 }} />
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>2–6 slots</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>2–6 horses</span>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {slots.map((slot, idx) => (
@@ -486,10 +486,10 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
             <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
               <button type="submit" className="btn btn-primary"
                       disabled={slots.length < 2 || !title}>
-                Create Gambling Event
+                Create Horse Race
               </button>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {!title ? 'Enter a title' : slots.length < 2 ? 'Need at least 2 slots' : '✅ Ready'}
+                {!title ? 'Enter a title' : slots.length < 2 ? 'Need at least 2 horses' : '✅ Ready'}
               </span>
             </div>
           </form>
@@ -501,17 +501,17 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
       {/* ============================================================ */}
       <div className="card" style={{ marginTop: 24 }}>
         <div className="card-header">
-          <div className="card-title">How DCB Gambling Events Work</div>
+          <div className="card-title">How DCB Horse Race Gambling Works</div>
         </div>
         <div style={{ padding: '4px 0', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-          <p><strong>1. Create</strong> — Set up slots (colors/numbers), choose house-funded or pot-split mode, and set player limits.</p>
-          <p><strong>2. Publish</strong> — An interactive Discord post is sent with slot buttons for players to bet on.</p>
-          <p><strong>3. Bet</strong> — Players click a slot button to place their bet. One bet per player.</p>
-          <p><strong>4. Spin</strong> — The wheel spins automatically when max players join or time runs out.</p>
-          <p><strong>5. Instant Payouts</strong> — A random winning slot is chosen. Players who bet on it split the prize. 💰</p>
+          <p><strong>1. Create</strong> — Set up horses (names/colors), choose house-funded or pot-split mode, and set rider limits.</p>
+          <p><strong>2. Publish</strong> — An interactive Discord post is sent with horse buttons for riders to bet on.</p>
+          <p><strong>3. Bet</strong> — Riders click a horse button to pick their horse. One pick per rider.</p>
+          <p><strong>4. Race</strong> — When all riders are in or time runs out, an animated horse race plays in Discord! 🏇</p>
+          <p><strong>5. Instant Payouts</strong> — The winning horse crosses the finish line first. Riders who picked it split the prize. 💰</p>
           <p style={{ marginTop: 8 }}><strong>Modes:</strong></p>
           <p>🏠 <strong>House-funded</strong> — You set a fixed prize pool from the guild treasury.</p>
-          <p>🏦 <strong>Pot Split</strong> — Each player pays an entry fee; the pot is split among winners.</p>
+          <p>🏦 <strong>Pot Split</strong> — Each rider pays an entry fee; the pot is split among winners.</p>
         </div>
       </div>
     </div>

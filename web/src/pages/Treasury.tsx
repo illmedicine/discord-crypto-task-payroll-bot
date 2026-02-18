@@ -208,7 +208,7 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
     const confirmed = confirm(
       '⚠️ Disconnect Treasury Wallet?\n\n' +
       'This will remove the wallet from this server.\n' +
-      'Active gambling events and payouts that depend on this wallet may stop working.\n\n' +
+      'Active horse race events and payouts that depend on this wallet may stop working.\n\n' +
       'You can reconnect a wallet later.\n\n' +
       'Are you sure?'
     )

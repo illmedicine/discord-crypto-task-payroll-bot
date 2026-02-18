@@ -3,6 +3,142 @@ const { getGuildWalletWithFallback } = require('./walletSync');
 
 const HOUSE_CUT_PERCENT = 10; // 10% house rake
 
+// Horse emoji + name mapped to each slot color
+const HORSE_PRESETS = [
+  { emoji: '🔴', horse: '🐴', name: 'Crimson Blaze',    color: '#E74C3C' },
+  { emoji: '⚫', horse: '🐎', name: 'Shadow Runner',    color: '#2C3E50' },
+  { emoji: '🟢', horse: '🐴', name: 'Emerald Thunder',  color: '#27AE60' },
+  { emoji: '🔵', horse: '🐎', name: 'Sapphire Storm',   color: '#3498DB' },
+  { emoji: '🟡', horse: '🐴', name: 'Golden Lightning', color: '#F1C40F' },
+  { emoji: '🟣', horse: '🐎', name: 'Violet Fury',      color: '#9B59B6' },
+];
+
+/**
+ * Build a single frame of the horse race track.
+ * Each horse has a progress 0..TRACK_LEN, the track is rendered as ASCII/emoji.
+ */
+const TRACK_LEN = 20;
+const FINISH_CHAR = '🏁';
+
+function buildRaceFrame(slots, positions, winningSlot, finished) {
+  let frame = '';
+  if (!finished) {
+    frame += '```\n';
+    frame += '🏇  D C B   H O R S E   R A C E  🏇\n';
+    frame += '━'.repeat(TRACK_LEN + 8) + '\n';
+  } else {
+    frame += '```\n';
+    frame += '🏆  R A C E   F I N I S H E D !  🏆\n';
+    frame += '━'.repeat(TRACK_LEN + 8) + '\n';
+  }
+
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    const preset = HORSE_PRESETS[i] || HORSE_PRESETS[0];
+    const pos = positions[i];
+    const horse = '🏇';
+
+    // Build track line:  [emoji] ----🏇-----------|🏁
+    const before = '▬'.repeat(Math.min(pos, TRACK_LEN));
+    const after = '▬'.repeat(Math.max(0, TRACK_LEN - pos - 1));
+    const isFinished = pos >= TRACK_LEN;
+
+    let lane;
+    if (isFinished) {
+      lane = '▬'.repeat(TRACK_LEN) + '|' + FINISH_CHAR + ' ' + horse;
+    } else {
+      lane = before + horse + after + '|' + FINISH_CHAR;
+    }
+
+    const label = (slot.label || preset.name).padEnd(18).slice(0, 18);
+    frame += `${label} ${lane}\n`;
+  }
+
+  frame += '━'.repeat(TRACK_LEN + 8) + '\n';
+  frame += '```';
+  return frame;
+}
+
+/**
+ * Run the animated horse race in a Discord channel.
+ * Sends a message and edits it multiple times showing horses advancing.
+ * The predetermined winner is guaranteed to finish first.
+ * Returns nothing — purely visual.
+ */
+async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
+  const numHorses = slots.length;
+  const positions = new Array(numHorses).fill(0);
+  const winIdx = winningSlot - 1; // 0-based
+
+  const FRAMES = 10; // number of animation frames
+  const FRAME_DELAY = 1500; // ms between frames
+
+  // Pre-calculate per-frame speeds. Winner guaranteed to finish exactly on last frame.
+  // Other horses are random but always finish behind.
+  const winnerPerFrame = TRACK_LEN / FRAMES;
+
+  // Send initial frame
+  const initialFrame = buildRaceFrame(slots, positions, winningSlot, false);
+  let raceMsg;
+  try {
+    raceMsg = await channel.send({
+      content: `🏇 **Horse Race #${eventId}** — The race is starting! 🏁\n${initialFrame}`
+    });
+  } catch (err) {
+    console.error(`[HorseRace] Could not send race animation:`, err.message);
+    return;
+  }
+
+  // Animate frames
+  for (let frame = 1; frame <= FRAMES; frame++) {
+    await new Promise(resolve => setTimeout(resolve, FRAME_DELAY));
+
+    // Advance winner consistently
+    positions[winIdx] = Math.round(winnerPerFrame * frame);
+
+    // Advance other horses randomly but ensure they stay behind winner on final frame
+    for (let h = 0; h < numHorses; h++) {
+      if (h === winIdx) continue;
+      if (frame === FRAMES) {
+        // Final frame: others land 1–5 behind the finish
+        const maxPos = TRACK_LEN - 1 - Math.floor(Math.random() * 4);
+        positions[h] = Math.min(positions[h] + Math.ceil(winnerPerFrame), maxPos);
+      } else {
+        // Random advancement: 0 to 1.2x winner speed (can be temporarily ahead for drama)
+        const speed = winnerPerFrame * (0.3 + Math.random() * 0.9);
+        positions[h] = Math.min(
+          Math.round(positions[h] + speed),
+          TRACK_LEN - 1  // can't finish before last frame
+        );
+      }
+    }
+
+    // Ensure winner is at finish on last frame
+    if (frame === FRAMES) {
+      positions[winIdx] = TRACK_LEN;
+    }
+
+    const isFinished = frame === FRAMES;
+    const frameContent = buildRaceFrame(slots, positions, winningSlot, isFinished);
+    const winnerPreset = HORSE_PRESETS[winIdx] || HORSE_PRESETS[0];
+    const winnerName = slots[winIdx]?.label || winnerPreset.name;
+
+    try {
+      if (isFinished) {
+        await raceMsg.edit({
+          content: `🏇 **Horse Race #${eventId}** — 🏁 **FINISH!** 🏆 **${winnerName}** wins! 🏆\n${frameContent}`
+        });
+      } else {
+        await raceMsg.edit({
+          content: `🏇 **Horse Race #${eventId}** — Racing... (lap ${frame}/${FRAMES}) 🏁\n${frameContent}`
+        });
+      }
+    } catch (editErr) {
+      console.warn(`[HorseRace] Frame edit failed:`, editErr.message);
+    }
+  }
+}
+
 /** Fire-and-forget sync event status to backend */
 function syncStatusToBackend(eventId, status, guildId) {
   try {
@@ -130,8 +266,8 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           const { EmbedBuilder } = require('discord.js');
           const cancelEmbed = new EmbedBuilder()
             .setColor('#FF6600')
-            .setTitle(`🎰 Gambling Event #${event.id} Cancelled`)
-            .setDescription(`**${event.title}** has been cancelled — not enough players.`)
+            .setTitle(`� Horse Race #${event.id} Cancelled`)
+            .setDescription(`**${event.title}** has been cancelled — not enough riders.`)
             .addFields(
               { name: '📊 Required', value: `${event.min_players}`, inline: true },
               { name: '👥 Joined', value: `${bets.length}`, inline: true }
@@ -154,13 +290,13 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           }
 
           const mentionContent = bets.length > 0
-            ? `🎰 **Event Cancelled** — ${bets.map(b => `<@${b.user_id}>`).join(', ')}, your event has been cancelled.${hasEntryFee ? ' Refunds are being processed.' : ''}`
-            : '🎰 **Gambling Event Cancelled** — Not enough players joined.';
+            ? `🏇 **Race Cancelled** — ${bets.map(b => `<@${b.user_id}>`).join(', ')}, the race has been cancelled.${hasEntryFee ? ' Refunds are being processed.' : ''}`
+            : '🏇 **Horse Race Cancelled** — Not enough riders joined.';
 
           await channel.send({ content: mentionContent, embeds: [cancelEmbed] });
         }
       } catch (e) {
-        console.log(`[GamblingProcessor] Could not announce cancellation for #${event.id}:`, e.message);
+        console.log(`[HorseRace] Could not announce cancellation for #${event.id}:`, e.message);
       }
 
       await db.updateGamblingEventStatus(eventId, 'cancelled');
@@ -168,7 +304,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       return;
     }
 
-    // ======== SPIN THE WHEEL: pick a random winning slot ========
+    // ======== RACE: pick a random winning horse ========
     const numSlots = slots.length || event.num_slots;
     const winningSlot = Math.floor(Math.random() * numSlots) + 1; // 1-based
     await db.setGamblingEventWinningSlot(eventId, winningSlot);
@@ -182,18 +318,29 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       await db.setGamblingEventWinners(eventId, winnerUserIds);
     }
 
+    // ======== Run horse race animation in Discord ========
+    try {
+      const channel = await client.channels.fetch(event.channel_id);
+      if (channel) {
+        await runHorseRaceAnimation(channel, slots, winningSlot, event.id);
+      }
+    } catch (animErr) {
+      console.warn(`[HorseRace] Animation error:`, animErr.message);
+    }
+
+    // Small delay after animation finishes before showing results embed
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     // ======== Calculate prize with house cut ========
     let totalPot = 0;
     let houseCut = 0;
     let winnerPool = 0;
 
     if (isPotMode) {
-      // Pot mode: sum of all entry fees
       totalPot = bets.reduce((sum, b) => sum + (b.bet_amount || 0), 0);
-      houseCut = totalPot * (HOUSE_CUT_PERCENT / 100); // 10% house rake
-      winnerPool = totalPot - houseCut;                  // 90% to winners
+      houseCut = totalPot * (HOUSE_CUT_PERCENT / 100);
+      winnerPool = totalPot - houseCut;
     } else {
-      // House-funded mode: fixed prize, no house cut (owner set the prize)
       totalPot = event.prize_amount || 0;
       houseCut = 0;
       winnerPool = totalPot;
@@ -208,7 +355,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     if (prizePerWinner > 0 && winnerUserIds.length > 0) {
       if (!guildWallet) {
-        console.log(`[GamblingProcessor] No treasury wallet for guild ${event.guild_id}, skipping payments`);
+        console.log(`[HorseRace] No treasury wallet for guild ${event.guild_id}, skipping payments`);
       } else {
         for (const userId of winnerUserIds) {
           try {
@@ -231,7 +378,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
               paymentResults.push({ userId, success: false, reason: 'No wallet connected' });
             }
           } catch (err) {
-            console.error(`[GamblingProcessor] Payment error for winner ${userId}:`, err);
+            console.error(`[HorseRace] Payment error for winner ${userId}:`, err);
             await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null).catch(() => {});
             paymentResults.push({ userId, success: false, reason: err.message });
           }
@@ -249,14 +396,16 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     // Track house cut in guild budget
     if (houseCut > 0 && guildWallet) {
       try {
-        await db.addBudgetSpend(event.guild_id, -houseCut); // Negative = income to treasury
-        console.log(`[GamblingProcessor] House cut: ${houseCut.toFixed(4)} ${event.currency} retained for guild ${event.guild_id}`);
+        await db.addBudgetSpend(event.guild_id, -houseCut);
+        console.log(`[HorseRace] House cut: ${houseCut.toFixed(4)} ${event.currency} retained for guild ${event.guild_id}`);
       } catch (_) {}
     }
 
-    // ======== Build bet breakdown ========
+    // ======== Build bet breakdown (horse-themed) ========
     let betBreakdown = '';
-    for (const slot of slots) {
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const preset = HORSE_PRESETS[i] || HORSE_PRESETS[0];
       const count = bets.filter(b => b.chosen_slot === slot.slot_number).length;
       const pct = bets.length > 0 ? ((count / bets.length) * 100).toFixed(1) : '0.0';
       const isWin = slot.slot_number === winningSlot ? '🏆 ' : '';
@@ -268,23 +417,25 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       const channel = await client.channels.fetch(event.channel_id);
       if (channel) {
         const { EmbedBuilder } = require('discord.js');
+        const winnerPreset = HORSE_PRESETS[(winningSlot - 1)] || HORSE_PRESETS[0];
+
         const resultsEmbed = new EmbedBuilder()
-          .setColor('#E74C3C')
-          .setTitle(`🎰 Gambling Event #${event.id} Results!`)
-          .setDescription(`**${event.title}** — The wheel has spoken!`)
+          .setColor(winnerPreset.color)
+          .setTitle(`🏇 Horse Race #${event.id} — Results!`)
+          .setDescription(`**${event.title}** — The race is over! 🏁`)
           .addFields(
-            { name: '🎰 Winning Slot', value: `**#${winningSlot} — ${winningSlotInfo?.label || 'Unknown'}**`, inline: true },
-            { name: '👥 Total Players', value: `${bets.length}`, inline: true },
+            { name: '🏆 Winning Horse', value: `**#${winningSlot} — ${winningSlotInfo?.label || winnerPreset.name}**`, inline: true },
+            { name: '👥 Total Riders', value: `${bets.length}`, inline: true },
             { name: '🏆 Winners', value: `${winnerUserIds.length}`, inline: true },
           );
 
-        resultsEmbed.addFields({ name: '📈 Bet Breakdown', value: betBreakdown || 'No bets placed' });
+        resultsEmbed.addFields({ name: '📈 Bets by Horse', value: betBreakdown || 'No bets placed' });
 
         if (winnerUserIds.length > 0) {
           const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
           resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
         } else {
-          resultsEmbed.addFields({ name: '🎊 Winners', value: 'No winners this round — nobody bet on the winning slot!' });
+          resultsEmbed.addFields({ name: '🎊 Winners', value: 'No winners this race — nobody bet on the winning horse!' });
         }
 
         // Prize pool + house cut breakdown
@@ -320,23 +471,24 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         }
 
         resultsEmbed.setTimestamp();
+        resultsEmbed.setFooter({ text: `DisCryptoBank • Horse Race #${event.id} • Provably Fair` });
 
         const mentionContent = winnerUserIds.length > 0
-          ? `🎰 **GAMBLING EVENT RESULTS!** 🎰\n\nCongratulations ${winnerUserIds.map(id => `<@${id}>`).join(', ')}!`
-          : '🎰 **GAMBLING EVENT RESULTS!** — No winners this round.' + (isPotMode && houseCut > 0 ? `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.` : '');
+          ? `🏇 **HORSE RACE RESULTS!** 🏁\n\nCongratulations ${winnerUserIds.map(id => `<@${id}>`).join(', ')}! 🏆`
+          : '🏇 **HORSE RACE RESULTS!** — No winners this race.' + (isPotMode && houseCut > 0 ? `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.` : '');
 
         await channel.send({ content: mentionContent, embeds: [resultsEmbed] });
       }
     } catch (e) {
-      console.log(`[GamblingProcessor] Could not announce results for #${event.id}:`, e.message);
+      console.log(`[HorseRace] Could not announce results for #${event.id}:`, e.message);
     }
 
     await db.updateGamblingEventStatus(eventId, 'completed');
     syncStatusToBackend(eventId, 'completed', event.guild_id);
-    console.log(`[GamblingProcessor] Event #${eventId} completed with ${winnerUserIds.length} winner(s), house cut: ${houseCut.toFixed(4)}`);
+    console.log(`[HorseRace] Event #${eventId} completed with ${winnerUserIds.length} winner(s), house cut: ${houseCut.toFixed(4)}`);
   } catch (error) {
-    console.error('[GamblingProcessor] Error processing gambling event:', error);
+    console.error('[HorseRace] Error processing gambling event:', error);
   }
 };
 
-module.exports = { processGamblingEvent };
+module.exports = { processGamblingEvent, HORSE_PRESETS };
