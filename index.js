@@ -373,9 +373,9 @@ client.on('interactionCreate', async interaction => {
       console.log(`✅ Command executed successfully: ${interaction.commandName}`);
 
       // Track event creation commands
-      if (interaction.guildId && ['event-create', 'vote-event'].includes(interaction.commandName)) {
+      if (interaction.guildId && ['gambling-event'].includes(interaction.commandName)) {
         const sub = interaction.options?.getSubcommand?.(false);
-        if (interaction.commandName === 'event-create' || sub === 'create') {
+        if (sub === 'create') {
           pushToBackend('/api/internal/log-event-created', {
             guildId: interaction.guildId,
             discordId: interaction.user.id,
@@ -415,68 +415,6 @@ client.on('interactionCreate', async interaction => {
       return;
     }
     
-    // Handle vote event qualify button
-    if (interaction.customId.startsWith('vote_event_qualify_')) {
-      const voteEventCommand = client.commands.get('vote-event');
-      if (voteEventCommand && voteEventCommand.handleQualifyButton) {
-        try {
-          await voteEventCommand.handleQualifyButton(interaction);
-        } catch (error) {
-          console.error('❌ Error handling vote event qualify button:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
-        }
-      }
-      return;
-    }
-
-    // Handle vote event join button
-    if (interaction.customId.startsWith('vote_event_join_')) {
-      const voteEventCommand = client.commands.get('vote-event');
-      if (voteEventCommand && voteEventCommand.handleJoinButton) {
-        try {
-          await voteEventCommand.handleJoinButton(interaction);
-        } catch (error) {
-          console.error('❌ Error handling vote event join button:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
-        }
-      }
-      return;
-    }
-
-    // Handle per-image vote buttons (vote_event_imgvote_{eventId}_{imageId})
-    if (interaction.customId.startsWith('vote_event_imgvote_')) {
-      const voteEventCommand = client.commands.get('vote-event');
-      if (voteEventCommand && voteEventCommand.handleVoteSubmit) {
-        try {
-          // Parse eventId and imageId from customId
-          const parts = interaction.customId.split('_'); // vote_event_imgvote_{eventId}_{imageId}
-          const imageId = parts.slice(4).join('_'); // image IDs may contain underscores
-          // Emulate a select menu interaction shape so handleVoteSubmit can process it
-          interaction.values = [imageId];
-          // Re-compose a customId that handleVoteSubmit expects: vote_event_vote_{eventId}
-          interaction._originalCustomId = interaction.customId;
-          interaction.customId = `vote_event_vote_${parts[3]}`;
-          await voteEventCommand.handleVoteSubmit(interaction);
-        } catch (error) {
-          console.error('❌ Error handling image vote button:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
-        }
-      }
-      return;
-    }
-
     // Handle gambling event bet buttons
     if (interaction.customId.startsWith('gamble_bet_')) {
       console.log(`[GamblingBet] 🎰 Button handler entered for customId: ${interaction.customId} (build: ${BUILD_TIMESTAMP})`);
@@ -519,94 +457,6 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
-    // Handle contest enter button (web-published)
-    if (interaction.customId.startsWith('contest_enter_')) {
-      try {
-        const contestId = Number(interaction.customId.split('_')[2]);
-        if (!contestId) {
-          await interaction.reply({ content: '❌ Invalid contest.', ephemeral: true });
-          return;
-        }
-
-        const contest = await db.getContest(contestId);
-        if (!contest || contest.guild_id !== interaction.guildId) {
-          await interaction.reply({ content: '❌ Contest not found in this server.', ephemeral: true });
-          return;
-        }
-        if (contest.status !== 'active') {
-          await interaction.reply({ content: '❌ This contest is not active.', ephemeral: true });
-          return;
-        }
-        if (contest.current_entries >= contest.max_entries) {
-          await interaction.reply({ content: '❌ This contest is full (max entries reached).', ephemeral: true });
-          return;
-        }
-
-        const existing = await db.getContestEntry(contestId, interaction.user.id);
-        if (existing) {
-          await interaction.reply({ content: '❌ You have already entered this contest.', ephemeral: true });
-          return;
-        }
-
-        const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
-        const modal = new ModalBuilder()
-          .setCustomId(`contest_entry_modal_${contestId}`)
-          .setTitle('Enter Contest');
-
-        const screenshotUrlInput = new TextInputBuilder()
-          .setCustomId('screenshot_url')
-          .setLabel('Screenshot URL (optional)')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false);
-
-        modal.addComponents(new ActionRowBuilder().addComponents(screenshotUrlInput));
-        await interaction.showModal(modal);
-      } catch (error) {
-        console.error('❌ Error handling contest enter button:', error);
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-        } else {
-          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-        }
-      }
-      return;
-    }
-
-    // Handle contest info button (web-published)
-    if (interaction.customId.startsWith('contest_info_')) {
-      try {
-        const contestId = Number(interaction.customId.split('_')[2]);
-        const contest = await db.getContest(contestId);
-        if (!contest || contest.guild_id !== interaction.guildId) {
-          await interaction.reply({ content: '❌ Contest not found in this server.', ephemeral: true });
-          return;
-        }
-        const endTimestamp = contest.ends_at ? Math.floor(new Date(contest.ends_at).getTime() / 1000) : null;
-        const embed = new EmbedBuilder()
-          .setColor('#FFD700')
-          .setTitle(`🏆 ${contest.title}`)
-          .setDescription(contest.description || '')
-          .addFields(
-            { name: '🎁 Prize', value: `${contest.prize_amount} ${contest.currency}`, inline: true },
-            { name: '👑 Winners', value: `${contest.num_winners}`, inline: true },
-            { name: '🎟️ Entries', value: `${contest.current_entries}/${contest.max_entries}`, inline: true },
-            { name: '🔗 Reference', value: contest.reference_url }
-          )
-          .setFooter({ text: `Contest #${contestId}` })
-          .setTimestamp();
-        if (endTimestamp) embed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true });
-        await interaction.reply({ embeds: [embed], ephemeral: true });
-      } catch (error) {
-        console.error('❌ Error handling contest info button:', error);
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-        } else {
-          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-        }
-      }
-      return;
-    }
-
     // Handle bulk task claim button (web-published)
     if (interaction.customId.startsWith('bulk_task_claim_')) {
       try {
@@ -641,57 +491,6 @@ client.on('interactionCreate', async interaction => {
   
   // Handle select menu interactions
   if (interaction.isStringSelectMenu()) {
-    // Handle vote event voting
-    if (interaction.customId.startsWith('vote_event_vote_')) {
-      const voteEventCommand = client.commands.get('vote-event');
-      if (voteEventCommand && voteEventCommand.handleVoteSubmit) {
-        try {
-          await voteEventCommand.handleVoteSubmit(interaction);
-        } catch (error) {
-          console.error('❌ Error handling vote submission:', error);
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-          } else {
-            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-          }
-        }
-      }
-      return;
-    }
-
-    // Handle add image to vote event select menu
-    if (interaction.customId === 'add_image_to_vote_event') {
-      try {
-        // Get selected event ID
-        const eventId = interaction.values[0];
-        // Get image(s) from global (set by context menu)
-        const images = global.voteEventSelections && global.voteEventSelections[interaction.user.id] ? global.voteEventSelections[interaction.user.id] : [];
-        if (!images.length) {
-          await interaction.reply({ content: '❌ No image found to add.', ephemeral: true });
-          return;
-        }
-        // Get current images for event to determine upload order
-        const eventImages = await db.getVoteEventImages(eventId);
-        let uploadOrder = eventImages.length + 1;
-        for (const img of images) {
-          // Prevent duplicate image IDs
-          if (!eventImages.some(ei => ei.image_id === img.id)) {
-            await db.addVoteEventImage(eventId, img.id, img.url, uploadOrder++);
-          }
-        }
-        // Clean up global
-        if (global.voteEventSelections) delete global.voteEventSelections[interaction.user.id];
-        await interaction.reply({ content: `✅ Image(s) added to the selected vote event!`, ephemeral: true });
-      } catch (err) {
-        console.error('❌ Error adding image to vote event:', err);
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: '❌ An error occurred adding the image to the vote event.', ephemeral: true });
-        } else {
-          await interaction.reply({ content: '❌ An error occurred adding the image to the vote event.', ephemeral: true });
-        }
-      }
-      return;
-    }
     return;
   }
 
@@ -714,44 +513,6 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
-    // Handle contest entry modal (web-published)
-    if (interaction.customId.startsWith('contest_entry_modal_')) {
-      try {
-        const contestId = Number(interaction.customId.split('_')[3]);
-        const contest = await db.getContest(contestId);
-        if (!contest || contest.guild_id !== interaction.guildId) {
-          await interaction.reply({ content: '❌ Contest not found in this server.', ephemeral: true });
-          return;
-        }
-        if (contest.status !== 'active') {
-          await interaction.reply({ content: '❌ This contest is not active.', ephemeral: true });
-          return;
-        }
-        if (contest.current_entries >= contest.max_entries) {
-          await interaction.reply({ content: '❌ This contest is full (max entries reached).', ephemeral: true });
-          return;
-        }
-
-        const existing = await db.getContestEntry(contestId, interaction.user.id);
-        if (existing) {
-          await interaction.reply({ content: '❌ You have already entered this contest.', ephemeral: true });
-          return;
-        }
-
-        const screenshotUrl = interaction.fields.getTextInputValue('screenshot_url') || null;
-        await db.addContestEntry(contestId, interaction.guildId, interaction.user.id, screenshotUrl);
-
-        await interaction.reply({ content: `✅ You are entered into contest #${contestId}!`, ephemeral: true });
-      } catch (error) {
-        console.error('❌ Error handling contest entry modal:', error);
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
-        } else {
-          await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
-        }
-      }
-      return;
-    }
     return;
   }
 
