@@ -2,26 +2,27 @@ import React, { useEffect, useState, useRef } from 'react'
 import { api } from '../api'
 import { formatTimeAgo } from './Countdown'
 
-type HistoryEvent = {
+type TickerItem = {
   id: number
+  type: 'vote' | 'race'
   title: string
   status: string
   prize_amount: number
   currency: string
-  current_participants: number
-  total_participants: number
-  total_votes: number
-  total_winners: number
+  participants: number
+  detail: string
+  winners: number
   created_at: string
   ends_at: string
 }
 
-type HistoryStats = {
+type TickerStats = {
   total_events: number
   completed_events: number
+  active_events: number
   cancelled_events: number
   total_prize_paid: number
-  total_participants_all: number
+  total_participants: number
 }
 
 type Props = {
@@ -29,16 +30,16 @@ type Props = {
 }
 
 export default function EventTicker({ guildId }: Props) {
-  const [events, setEvents] = useState<HistoryEvent[]>([])
-  const [stats, setStats] = useState<HistoryStats | null>(null)
+  const [items, setItems] = useState<TickerItem[]>([])
+  const [stats, setStats] = useState<TickerStats | null>(null)
   const [paused, setPaused] = useState(false)
   const trackRef = useRef<HTMLDivElement>(null)
 
   const load = () => {
     if (!guildId) return
-    api.get(`/admin/guilds/${guildId}/vote-events/history`)
+    api.get(`/admin/guilds/${guildId}/ticker`)
       .then(r => {
-        setEvents(r.data?.events || [])
+        setItems(r.data?.items || [])
         setStats(r.data?.stats || null)
       })
       .catch(() => {})
@@ -53,12 +54,18 @@ export default function EventTicker({ guildId }: Props) {
     return () => clearInterval(id)
   }, [guildId])
 
-  if (!events.length) return null
+  if (!items.length) return null
+
+  const typeIcon = (item: TickerItem) => {
+    if (item.type === 'race') return '🏇'
+    return '🗳️'
+  }
 
   const statusIcon = (s: string) => {
     switch (s) {
       case 'ended': case 'completed': return '✅'
       case 'cancelled': return '❌'
+      case 'active': return '🟢'
       default: return '📋'
     }
   }
@@ -67,12 +74,13 @@ export default function EventTicker({ guildId }: Props) {
     switch (s) {
       case 'ended': case 'completed': return 'var(--success)'
       case 'cancelled': return 'var(--danger)'
+      case 'active': return 'var(--accent)'
       default: return 'var(--text-muted)'
     }
   }
 
   // Calculate animation duration based on items (more items = slower scroll)
-  const duration = Math.max(20, events.length * 8)
+  const duration = Math.max(20, items.length * 8)
 
   return (
     <div className="event-ticker-wrap" style={{ marginBottom: 20 }}>
@@ -80,8 +88,12 @@ export default function EventTicker({ guildId }: Props) {
       {stats && (
         <div className="event-ticker-stats">
           <span className="ticker-stat">
-            <span className="ticker-stat-label">Events Run</span>
+            <span className="ticker-stat-label">Total Events</span>
             <span className="ticker-stat-value">{stats.total_events}</span>
+          </span>
+          <span className="ticker-stat">
+            <span className="ticker-stat-label">Active</span>
+            <span className="ticker-stat-value" style={{ color: 'var(--accent)' }}>{stats.active_events || 0}</span>
           </span>
           <span className="ticker-stat">
             <span className="ticker-stat-label">Completed</span>
@@ -99,7 +111,7 @@ export default function EventTicker({ guildId }: Props) {
           </span>
           <span className="ticker-stat">
             <span className="ticker-stat-label">Participants</span>
-            <span className="ticker-stat-value">{stats.total_participants_all || 0}</span>
+            <span className="ticker-stat-value">{stats.total_participants || 0}</span>
           </span>
         </div>
       )}
@@ -110,7 +122,7 @@ export default function EventTicker({ guildId }: Props) {
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={() => setPaused(false)}
       >
-        <div className="event-ticker-label">📜 PAST EVENTS</div>
+        <div className="event-ticker-label">📜 EVENTS</div>
         <div className="event-ticker-track-wrapper">
           <div
             ref={trackRef}
@@ -121,33 +133,34 @@ export default function EventTicker({ guildId }: Props) {
             }}
           >
             {/* Duplicate items for seamless loop */}
-            {[...events, ...events].map((ev, i) => (
-              <div className="event-ticker-item" key={`${ev.id}-${i}`}>
+            {[...items, ...items].map((ev, i) => (
+              <div className="event-ticker-item" key={`${ev.type}-${ev.id}-${i}`}>
                 <span className="ticker-item-icon">{statusIcon(ev.status)}</span>
+                <span className="ticker-item-icon" style={{ fontSize: 11 }}>{typeIcon(ev)}</span>
                 <span className="ticker-item-title">{ev.title}</span>
                 <span className="ticker-item-sep">·</span>
                 <span className="ticker-item-detail">
-                  👥 {ev.total_participants || ev.current_participants || 0}
+                  👥 {ev.participants || 0}
                 </span>
                 <span className="ticker-item-sep">·</span>
                 <span className="ticker-item-detail">
-                  🗳️ {ev.total_votes || 0} votes
+                  {ev.detail}
                 </span>
-                {ev.total_winners > 0 && (
+                {ev.winners > 0 && (
                   <>
                     <span className="ticker-item-sep">·</span>
                     <span className="ticker-item-detail" style={{ color: 'var(--success)' }}>
-                      🏆 {ev.total_winners} winner{ev.total_winners > 1 ? 's' : ''}
+                      🏆 {ev.winners} winner{ev.winners > 1 ? 's' : ''}
                     </span>
                   </>
                 )}
                 <span className="ticker-item-sep">·</span>
                 <span className="ticker-item-detail" style={{ color: 'var(--accent)' }}>
-                  💰 {ev.prize_amount} {ev.currency || 'SOL'}
+                  💰 {ev.prize_amount?.toFixed?.(2) ?? ev.prize_amount} {ev.currency || 'SOL'}
                 </span>
                 <span className="ticker-item-sep">·</span>
                 <span className="ticker-item-time" style={{ color: statusColor(ev.status) }}>
-                  {formatTimeAgo(ev.ends_at || ev.created_at)}
+                  {ev.status === 'active' ? '🔴 LIVE' : formatTimeAgo(ev.ends_at || ev.created_at)}
                 </span>
               </div>
             ))}

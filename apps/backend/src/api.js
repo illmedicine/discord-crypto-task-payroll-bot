@@ -1236,6 +1236,93 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ---- Combined ticker: vote events + horse race events (all statuses) ----
+  app.get('/api/admin/guilds/:guildId/ticker', requireAuth, requireGuildMember, async (req, res) => {
+    try {
+      const gid = req.guild.id
+
+      // Vote events (all statuses)
+      const voteEvents = await db.all(
+        `SELECT ve.id, ve.title, ve.status, ve.prize_amount, ve.currency,
+          ve.current_participants, ve.created_at, ve.ends_at,
+          (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id) AS total_participants,
+          (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id AND voted_image_id IS NOT NULL) AS total_votes,
+          (SELECT COUNT(*) FROM vote_event_participants WHERE vote_event_id = ve.id AND is_winner = 1) AS total_winners
+        FROM vote_events ve
+        WHERE ve.guild_id = ?
+        ORDER BY ve.created_at DESC LIMIT 25`,
+        [gid]
+      )
+
+      // Horse race / gambling events (all statuses)
+      let gamblingEvents = []
+      try {
+        gamblingEvents = await db.all(
+          `SELECT ge.id, ge.title, ge.status, ge.prize_amount, ge.currency,
+            ge.current_players, ge.min_players, ge.max_players,
+            ge.winning_slot, ge.mode, ge.entry_fee,
+            ge.created_at, ge.ends_at
+          FROM gambling_events ge
+          WHERE ge.guild_id = ?
+          ORDER BY ge.created_at DESC LIMIT 25`,
+          [gid]
+        )
+      } catch (_) { /* table may not exist */ }
+
+      // Merge into unified ticker items
+      const items = []
+      for (const ve of voteEvents) {
+        items.push({
+          id: ve.id,
+          type: 'vote',
+          title: ve.title,
+          status: ve.status === 'active' && ve.ends_at && new Date(ve.ends_at) <= new Date() ? 'ended' : ve.status,
+          prize_amount: ve.prize_amount || 0,
+          currency: ve.currency || 'SOL',
+          participants: ve.total_participants || ve.current_participants || 0,
+          detail: `🗳️ ${ve.total_votes || 0} votes`,
+          winners: ve.total_winners || 0,
+          created_at: ve.created_at,
+          ends_at: ve.ends_at,
+        })
+      }
+      for (const ge of gamblingEvents) {
+        const isEnded = ge.status === 'ended' || ge.status === 'completed' || ge.winning_slot;
+        items.push({
+          id: ge.id,
+          type: 'race',
+          title: ge.title,
+          status: isEnded ? 'ended' : ge.status,
+          prize_amount: ge.mode === 'pot' ? (ge.entry_fee * ge.current_players * 0.9) : (ge.prize_amount || 0),
+          currency: ge.currency || 'SOL',
+          participants: ge.current_players || 0,
+          detail: `🏇 ${ge.current_players || 0}/${ge.max_players} riders`,
+          winners: ge.winning_slot ? 1 : 0,
+          created_at: ge.created_at,
+          ends_at: ge.ends_at,
+        })
+      }
+
+      // Sort by created_at descending
+      items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+
+      // Aggregate stats
+      const stats = {
+        total_events: items.length,
+        completed_events: items.filter(i => i.status === 'ended' || i.status === 'completed').length,
+        active_events: items.filter(i => i.status === 'active').length,
+        cancelled_events: items.filter(i => i.status === 'cancelled').length,
+        total_prize_paid: items.filter(i => i.status === 'ended' || i.status === 'completed').reduce((s, i) => s + (i.prize_amount || 0), 0),
+        total_participants: items.reduce((s, i) => s + (i.participants || 0), 0),
+      }
+
+      res.json({ items: items.slice(0, 50), stats })
+    } catch (err) {
+      console.error('[ticker] error:', err?.message || err)
+      res.status(500).json({ error: 'ticker_failed' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM vote_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
     res.json(rows)
