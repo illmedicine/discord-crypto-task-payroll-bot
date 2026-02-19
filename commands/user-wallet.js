@@ -9,37 +9,37 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('connect')
-        .setDescription('Connect your personal Solana wallet address')
+        .setDescription('Connect your personal Solana wallet address and optional private key')
         .addStringOption(option =>
           option.setName('address')
             .setDescription('Your personal Solana wallet address')
             .setRequired(true)
         )
-    )
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('view')
-        .setDescription('View your connected wallet address')
-    )
-    .addSubcommand(subcommand =>
-      subcommand
-        .setName('update')
-        .setDescription('Update your connected wallet address')
         .addStringOption(option =>
-          option.setName('address')
-            .setDescription('Your new personal Solana wallet address')
-            .setRequired(true)
+          option.setName('private-key')
+            .setDescription('Your Solana private key (base58) — required for pot-mode horse races')
+            .setRequired(false)
         )
     )
     .addSubcommand(subcommand =>
       subcommand
-        .setName('deposit')
-        .setDescription('View your DCB betting wallet address to fund it for horse races')
+        .setName('view')
+        .setDescription('View your connected wallet address and key status')
     )
     .addSubcommand(subcommand =>
       subcommand
-        .setName('balance')
-        .setDescription('Check your DCB betting wallet balance')
+        .setName('update')
+        .setDescription('Update your connected wallet address or private key')
+        .addStringOption(option =>
+          option.setName('address')
+            .setDescription('Your new personal Solana wallet address')
+            .setRequired(false)
+        )
+        .addStringOption(option =>
+          option.setName('private-key')
+            .setDescription('Your Solana private key (base58) — required for pot-mode horse races')
+            .setRequired(false)
+        )
     ),
 
   async execute(interaction) {
@@ -52,8 +52,9 @@ module.exports = {
 
       if (subcommand === 'connect') {
         const address = (interaction.options.getString('address') || '').trim().replace(/[^\x20-\x7E]/g, '');
+        const privateKey = (interaction.options.getString('private-key') || '').trim().replace(/[^\x20-\x7E]/g, '');
 
-        console.log(`[user-wallet] connect: userId=${userId}, raw="${interaction.options.getString('address')}", sanitized="${address}", len=${address.length}`);
+        console.log(`[user-wallet] connect: userId=${userId}, sanitized address="${address}", hasPrivateKey=${!!privateKey}`);
 
         // Check if user already has a wallet connected
         const existingUser = await db.getUser(userId);
@@ -64,7 +65,7 @@ module.exports = {
             .setDescription('You already have a wallet connected.')
             .addFields(
               { name: 'Current Wallet', value: `\`${existingUser.solana_address}\`` },
-              { name: 'Update?', value: 'Use `/user-wallet update` to change your wallet' }
+              { name: 'Update?', value: 'Use `/user-wallet update` to change your wallet or add your private key' }
             )
             .setTimestamp();
 
@@ -85,19 +86,60 @@ module.exports = {
           return interaction.editReply({ embeds: [embed] });
         }
 
+        // Validate private key if provided
+        if (privateKey) {
+          try {
+            const kp = crypto.getKeypairFromSecret(privateKey);
+            const derivedPub = kp.publicKey.toBase58();
+            if (derivedPub !== address) {
+              return interaction.editReply({
+                embeds: [new EmbedBuilder()
+                  .setColor('#FF0000')
+                  .setTitle('❌ Key Mismatch')
+                  .setDescription('The private key does not match the wallet address you provided.')
+                  .addFields(
+                    { name: 'Address You Entered', value: `\`${address}\`` },
+                    { name: 'Address From Key', value: `\`${derivedPub}\`` }
+                  )
+                  .setTimestamp()
+                ]
+              });
+            }
+          } catch (err) {
+            return interaction.editReply({
+              embeds: [new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Invalid Private Key')
+                .setDescription('Could not parse the private key. Make sure it is a valid base58-encoded Solana private key.')
+                .setTimestamp()
+              ]
+            });
+          }
+        }
+
         // Add user to database
         await db.addUser(userId, username, address);
+
+        // Save private key if provided
+        if (privateKey) {
+          await db.setUserWalletSecret(userId, privateKey);
+        }
+
+        const fields = [
+          { name: 'Wallet Address', value: `\`${address}\`` },
+          { name: 'Private Key', value: privateKey ? '🔑 Saved — you can enter pot-mode races' : '⚠️ Not saved — add with `/user-wallet update` to join pot-mode races' },
+          { name: 'Status', value: '🟢 Active on all servers' },
+          { name: 'Next Steps', value: privateKey
+            ? 'You\'re ready to enter pot-mode horse races! Admins can also pay you with `/pay @you`'
+            : 'To participate in pot-mode horse races, update your wallet with your private key using `/user-wallet update`'
+          }
+        ];
 
         const successEmbed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Wallet Connected Successfully')
           .setDescription('Your personal Solana wallet is now connected to your Discord account across all servers.')
-          .addFields(
-            { name: 'Wallet Address', value: `\`${address}\`` },
-            { name: 'Status', value: '🟢 Active on all servers' },
-            { name: 'Scope', value: 'Your wallet is personal and works on ANY DisCryptoBank server' },
-            { name: 'Next Steps', value: 'Server admins can now send you SOL using `/pay @yourname`' }
-          )
+          .addFields(fields)
           .setTimestamp();
 
         return interaction.editReply({ embeds: [successEmbed] });
@@ -119,12 +161,24 @@ module.exports = {
           return interaction.editReply({ embeds: [embed] });
         }
 
+        let balanceText = '(checking...)';
+        try {
+          const bal = await crypto.getBalance(userData.solana_address);
+          balanceText = `${bal.toFixed(6)} SOL`;
+        } catch (_) {
+          balanceText = '(unable to fetch)';
+        }
+
+        const hasKey = !!userData.wallet_secret;
+
         const embed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('💼 Your Connected Wallet')
-          .setDescription('This is the wallet address linked to your Discord account.')
+          .setDescription('This is the wallet linked to your Discord account.')
           .addFields(
             { name: 'Wallet Address', value: `\`${userData.solana_address}\`` },
+            { name: '💰 Balance', value: balanceText, inline: true },
+            { name: '🔑 Private Key', value: hasKey ? '✅ Saved — pot-mode ready' : '❌ Not saved — use `/user-wallet update` to add', inline: true },
             { name: 'Status', value: '🟢 Active' },
             { name: 'Connected Since', value: new Date(userData.created_at).toLocaleString() }
           )
@@ -135,6 +189,7 @@ module.exports = {
 
       if (subcommand === 'update') {
         const newAddress = (interaction.options.getString('address') || '').trim().replace(/[^\x20-\x7E]/g, '');
+        const privateKey = (interaction.options.getString('private-key') || '').trim().replace(/[^\x20-\x7E]/g, '');
 
         // Check if user has a wallet
         const userData = await db.getUser(userId);
@@ -148,112 +203,85 @@ module.exports = {
           return interaction.editReply({ embeds: [embed] });
         }
 
-        // Validate new address
-        if (!crypto.isValidSolanaAddress(newAddress)) {
-          const embed = new EmbedBuilder()
-            .setColor('#FF0000')
-            .setTitle('❌ Invalid Solana Address')
-            .setDescription('The address you provided is not a valid Solana address.')
-            .setTimestamp();
-
-          return interaction.editReply({ embeds: [embed] });
-        }
-
-        // Prevent updating to the same address
-        if (userData.solana_address === newAddress) {
+        // Must provide at least one thing to update
+        if (!newAddress && !privateKey) {
           return interaction.editReply({
-            content: '⚠️ This is already your connected wallet.'
+            content: '⚠️ Provide at least one option: `address` or `private-key` to update.'
           });
         }
 
-        // Update wallet
-        await db.addUser(userId, username, newAddress);
+        const effectiveAddress = newAddress || userData.solana_address;
+
+        // Validate new address if provided
+        if (newAddress && !crypto.isValidSolanaAddress(newAddress)) {
+          return interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setColor('#FF0000')
+              .setTitle('❌ Invalid Solana Address')
+              .setDescription('The address you provided is not a valid Solana address.')
+              .setTimestamp()
+            ]
+          });
+        }
+
+        // Validate private key if provided
+        if (privateKey) {
+          try {
+            const kp = crypto.getKeypairFromSecret(privateKey);
+            const derivedPub = kp.publicKey.toBase58();
+            if (derivedPub !== effectiveAddress) {
+              return interaction.editReply({
+                embeds: [new EmbedBuilder()
+                  .setColor('#FF0000')
+                  .setTitle('❌ Key Mismatch')
+                  .setDescription('The private key does not match the wallet address.')
+                  .addFields(
+                    { name: 'Expected Address', value: `\`${effectiveAddress}\`` },
+                    { name: 'Address From Key', value: `\`${derivedPub}\`` }
+                  )
+                  .setTimestamp()
+                ]
+              });
+            }
+          } catch (err) {
+            return interaction.editReply({
+              embeds: [new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Invalid Private Key')
+                .setDescription('Could not parse the private key. Make sure it is a valid base58-encoded Solana private key.')
+                .setTimestamp()
+              ]
+            });
+          }
+        }
+
+        // Update address if changed
+        if (newAddress && newAddress !== userData.solana_address) {
+          await db.addUser(userId, username, newAddress);
+        }
+
+        // Save private key if provided
+        if (privateKey) {
+          await db.setUserWalletSecret(userId, privateKey);
+        }
+
+        const fields = [];
+        if (newAddress && newAddress !== userData.solana_address) {
+          fields.push({ name: 'Old Address', value: `\`${userData.solana_address}\`` });
+          fields.push({ name: 'New Address', value: `\`${newAddress}\`` });
+        } else {
+          fields.push({ name: 'Wallet Address', value: `\`${effectiveAddress}\`` });
+        }
+        if (privateKey) {
+          fields.push({ name: '🔑 Private Key', value: '✅ Saved — you can now enter pot-mode races' });
+        }
+        fields.push({ name: 'Status', value: '🟢 Updated on all servers' });
 
         const embed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Wallet Updated Successfully')
-          .setDescription('Your personal wallet has been updated across all DisCryptoBank servers.')
-          .addFields(
-            { name: 'Old Wallet', value: `\`${userData.solana_address}\`` },
-            { name: 'New Wallet', value: `\`${newAddress}\`` },
-            { name: 'Status', value: '🟢 Updated on all servers' }
-          )
-          .setTimestamp();
-
-        return interaction.editReply({ embeds: [embed] });
-      }
-
-      if (subcommand === 'deposit') {
-        let userData = await db.getUser(userId);
-
-        // Auto-generate custodial wallet if user doesn't have one yet
-        if (!userData) {
-          // User must connect their payout wallet first
-          return interaction.editReply({
-            content: '❌ Connect your payout wallet first with `/user-wallet connect address:YOUR_SOLANA_ADDRESS`'
-          });
-        }
-
-        if (!userData.custodial_address || !userData.custodial_secret) {
-          const { publicKey, secretKey } = crypto.generateKeypair();
-          await db.setUserCustodialWallet(userId, publicKey, secretKey);
-          userData = await db.getUser(userId);
-          console.log(`[user-wallet] Generated custodial wallet for ${userId}: ${publicKey}`);
-        }
-
-        let balanceText = 'Checking...';
-        try {
-          const bal = await crypto.getBalance(userData.custodial_address);
-          balanceText = `${bal.toFixed(6)} SOL`;
-        } catch (_) {
-          balanceText = '(unable to fetch)';
-        }
-
-        const embed = new EmbedBuilder()
-          .setColor('#F1C40F')
-          .setTitle('🏦 Your DCB Betting Wallet')
-          .setDescription(
-            'This is your **custodial betting wallet** managed by DisCryptoBank.\n' +
-            'Fund it from your personal wallet to enter pot-mode horse races.\n\n' +
-            '**How it works:**\n' +
-            '1️⃣ Send SOL to the address below from Phantom/Solflare\n' +
-            '2️⃣ When you enter a race, the entry fee is paid from this wallet\n' +
-            '3️⃣ Winnings are paid to your connected payout wallet'
-          )
-          .addFields(
-            { name: '📥 Deposit Address', value: `\`${userData.custodial_address}\`` },
-            { name: '💰 Balance', value: balanceText, inline: true },
-            { name: '💳 Payout Wallet', value: `\`${userData.solana_address || '(not set)'}\``, inline: true }
-          )
-          .setFooter({ text: 'DisCryptoBank • Betting Wallet' })
-          .setTimestamp();
-
-        return interaction.editReply({ embeds: [embed] });
-      }
-
-      if (subcommand === 'balance') {
-        const userData = await db.getUser(userId);
-
-        if (!userData || !userData.custodial_address) {
-          return interaction.editReply({
-            content: '❌ No betting wallet found. Use `/user-wallet deposit` to set one up.'
-          });
-        }
-
-        let balance = 0;
-        try {
-          balance = await crypto.getBalance(userData.custodial_address);
-        } catch (_) {}
-
-        const embed = new EmbedBuilder()
-          .setColor(balance > 0 ? '#27AE60' : '#E74C3C')
-          .setTitle('💰 Betting Wallet Balance')
-          .addFields(
-            { name: '🏦 Betting Wallet', value: `\`${userData.custodial_address}\`` },
-            { name: '💰 Balance', value: `**${balance.toFixed(6)} SOL**`, inline: true },
-            { name: '💳 Payout Wallet', value: `\`${userData.solana_address || '(not set)'}\``, inline: true }
-          )
-          .setFooter({ text: balance > 0 ? 'Ready to race! 🏇' : 'Fund your betting wallet to enter races' })
+          .setDescription('Your wallet info has been updated across all DisCryptoBank servers.')
+          .addFields(fields)
           .setTimestamp();
 
         return interaction.editReply({ embeds: [embed] });

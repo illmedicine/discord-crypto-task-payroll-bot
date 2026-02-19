@@ -279,32 +279,29 @@ module.exports = {
       const chosenSlot = slots.find(s => s.slot_number === slotNumber);
       const horseName = chosenSlot?.label || `Horse #${slotNumber}`;
 
-      // Check user has a custodial betting wallet + sufficient balance
+      // Check user has a wallet with private key connected
       const userData = await db.getUser(interaction.user.id);
       if (!userData || !userData.solana_address) {
         return interaction.editReply({
-          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\` first.`
+          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect address:YOUR_ADDRESS private-key:YOUR_KEY\` to connect your wallet and private key.`
         });
       }
 
-      // Auto-generate custodial wallet if needed
-      if (!userData.custodial_address || !userData.custodial_secret) {
-        const { publicKey, secretKey } = crypto.generateKeypair();
-        await db.setUserCustodialWallet(interaction.user.id, publicKey, secretKey);
+      // Require private key for pot mode
+      if (!userData.wallet_secret) {
         return interaction.editReply({
-          content: `🏦 **Betting Wallet Created!**\n\nYour DCB betting wallet has been generated:\n\`\`\`\n${publicKey}\n\`\`\`\n\n` +
-            `💰 **Fund it with at least ${entryFee} ${event.currency}** from your personal wallet (Phantom, Solflare, etc.)\n\n` +
-            `Once funded, click the horse button again to enter the race!\n\n` +
-            `💡 Use \`/user-wallet deposit\` anytime to see your betting wallet address.`
+          content: `❌ **Private Key Required!**\n\nPot-mode horse races require your Solana private key to pay the entry fee.\n\n` +
+            `🔑 Use \`/user-wallet update private-key:YOUR_PRIVATE_KEY\` to save your key.\n\n` +
+            `Your wallet address: \`${userData.solana_address}\``
         });
       }
 
-      // Check custodial wallet balance
-      let custodialBalance = 0;
+      // Check wallet balance
+      let walletBalance = 0;
       let solEntryFee = entryFee;
       let solPrice = null;
       try {
-        custodialBalance = await crypto.getBalance(userData.custodial_address);
+        walletBalance = await crypto.getBalance(userData.solana_address);
         if (event.currency === 'USD') {
           solPrice = await crypto.getSolanaPrice();
           if (solPrice) {
@@ -312,17 +309,16 @@ module.exports = {
           }
         }
       } catch (balErr) {
-        console.warn('[GamblingEvent] Custodial balance check error:', balErr.message);
+        console.warn('[GamblingEvent] Balance check error:', balErr.message);
       }
 
-      if (custodialBalance < solEntryFee) {
+      if (walletBalance < solEntryFee) {
         return interaction.editReply({
-          content: `❌ **Insufficient Betting Wallet Funds!**\n\n` +
+          content: `❌ **Insufficient Wallet Funds!**\n\n` +
             `💰 Entry fee: **${entryFee} ${event.currency}**${solPrice ? ` (≈ ${solEntryFee.toFixed(6)} SOL)` : ''}\n` +
-            `🏦 Betting wallet balance: **${custodialBalance.toFixed(6)} SOL**\n` +
-            `📉 Short by: **${(solEntryFee - custodialBalance).toFixed(6)} SOL**\n\n` +
-            `📥 Fund your betting wallet:\n\`\`\`\n${userData.custodial_address}\n\`\`\`\n` +
-            `💡 Use \`/user-wallet deposit\` to see your wallet address.`
+            `🏦 Wallet balance: **${walletBalance.toFixed(6)} SOL**\n` +
+            `📉 Short by: **${(solEntryFee - walletBalance).toFixed(6)} SOL**\n\n` +
+            `📥 Fund your wallet: \`${userData.solana_address}\``
         });
       }
 
@@ -357,8 +353,8 @@ module.exports = {
           `🐴 **Horse:** ${horseName}\n` +
           `💰 **Entry Fee:** ${feeDisplay}${solEquivNote}\n` +
           `🏦 **Paid to Treasury:** \`${treasuryAddr.slice(0,6)}...${treasuryAddr.slice(-4)}\`\n` +
-          `💳 **From Betting Wallet:** \`${userData.custodial_address.slice(0,6)}...${userData.custodial_address.slice(-4)}\` (${custodialBalance.toFixed(4)} SOL)\n\n` +
-          `By clicking **Confirm Bet & Pay**, the entry fee will be transferred from your betting wallet to the server treasury as escrow.\n\n` +
+          `💳 **From Your Wallet:** \`${userData.solana_address.slice(0,6)}...${userData.solana_address.slice(-4)}\` (${walletBalance.toFixed(4)} SOL)\n\n` +
+          `By clicking **Confirm Bet & Pay**, the entry fee will be transferred from your wallet to the server treasury as escrow.\n\n` +
           `⚠️ Entry fees are non-refundable unless the race is cancelled.`
         )
         .setFooter({ text: 'DisCryptoBank • Horse Race Entry' })
@@ -409,11 +405,11 @@ module.exports = {
 
     const entryFee = event.entry_fee || 0;
 
-    // 1. Get user + custodial wallet
+    // 1. Get user + wallet with private key
     const userData = await db.getUser(interaction.user.id);
-    if (!userData || !userData.custodial_address || !userData.custodial_secret) {
+    if (!userData || !userData.wallet_secret) {
       return interaction.editReply({
-        content: '❌ No betting wallet found. Click a horse button again to set one up.',
+        content: '❌ **Private Key Required!** Use `/user-wallet update private-key:YOUR_KEY` to save your key, then try again.',
         embeds: [], components: []
       });
     }
@@ -441,30 +437,30 @@ module.exports = {
       solAmount = entryFee / solPrice;
     }
 
-    // 4. Check custodial wallet balance
-    let custodialBalance = 0;
+    // 4. Check wallet balance
+    let walletBalance = 0;
     try {
-      custodialBalance = await crypto.getBalance(userData.custodial_address);
+      walletBalance = await crypto.getBalance(userData.solana_address);
     } catch (_) {}
 
     // Need enough for entry fee + ~0.000005 SOL tx fee
     const txFeeBuffer = 0.00001;
-    if (custodialBalance < solAmount + txFeeBuffer) {
+    if (walletBalance < solAmount + txFeeBuffer) {
       return interaction.editReply({
-        content: `❌ **Insufficient Betting Wallet Funds!**\n\n` +
+        content: `❌ **Insufficient Wallet Funds!**\n\n` +
           `💰 Entry fee: **${solAmount.toFixed(6)} SOL**${solPrice ? ` (${entryFee} USD)` : ''}\n` +
-          `🏦 Betting wallet: **${custodialBalance.toFixed(6)} SOL**\n` +
-          `📉 Short by: **${(solAmount + txFeeBuffer - custodialBalance).toFixed(6)} SOL**\n\n` +
-          `📥 Fund your betting wallet:\n\`${userData.custodial_address}\``,
+          `🏦 Wallet balance: **${walletBalance.toFixed(6)} SOL**\n` +
+          `📉 Short by: **${(solAmount + txFeeBuffer - walletBalance).toFixed(6)} SOL**\n\n` +
+          `📥 Fund your wallet: \`${userData.solana_address}\``,
         embeds: [], components: []
       });
     }
 
-    // 5. Execute the actual SOL transfer: custodial wallet → treasury
-    console.log(`[GamblingConfirm] Transferring ${solAmount.toFixed(6)} SOL from ${userData.custodial_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
+    // 5. Execute the actual SOL transfer: user's wallet → treasury
+    console.log(`[GamblingConfirm] Transferring ${solAmount.toFixed(6)} SOL from ${userData.solana_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
 
     const transferResult = await crypto.sendSolFrom(
-      userData.custodial_secret,
+      userData.wallet_secret,
       guildWallet.wallet_address,
       solAmount
     );
@@ -472,7 +468,7 @@ module.exports = {
     if (!transferResult.success) {
       console.error(`[GamblingConfirm] ❌ Transfer failed for user ${interaction.user.id} on event #${eventId}:`, transferResult.error);
       return interaction.editReply({
-        content: `❌ **Payment Failed!**\n\n${transferResult.error}\n\nYour funds are safe in your betting wallet. Please try again.`,
+        content: `❌ **Payment Failed!**\n\n${transferResult.error}\n\nYour funds are safe in your wallet. Please try again.`,
         embeds: [], components: []
       });
     }
@@ -481,7 +477,7 @@ module.exports = {
 
     // 6. Save bet as committed with tx signature
     const betAmount = entryFee;
-    const userWalletAddress = userData.custodial_address;
+    const userWalletAddress = userData.solana_address;
 
     await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, 'committed', userWalletAddress);
     // Store the entry tx signature
@@ -492,7 +488,7 @@ module.exports = {
 
     // Record the transaction in history
     try {
-      await db.recordTransaction(interaction.guildId, userData.custodial_address, guildWallet.wallet_address, solAmount, transferResult.signature);
+      await db.recordTransaction(interaction.guildId, userData.solana_address, guildWallet.wallet_address, solAmount, transferResult.signature);
     } catch (_) {}
 
     const slots = await db.getGamblingEventSlots(eventId);

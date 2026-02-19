@@ -93,15 +93,17 @@ const initDb = () => {
         discord_id TEXT PRIMARY KEY,
         username TEXT NOT NULL,
         solana_address TEXT UNIQUE,
+        wallet_secret TEXT,
         custodial_address TEXT,
         custodial_secret TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
-    // Migration: add custodial wallet columns if users table already exists
+    // Migration: add columns if users table already exists
     db.run(`ALTER TABLE users ADD COLUMN custodial_address TEXT`, () => {});
     db.run(`ALTER TABLE users ADD COLUMN custodial_secret TEXT`, () => {});
+    db.run(`ALTER TABLE users ADD COLUMN wallet_secret TEXT`, () => {});
 
     // Bulk Tasks - reusable task templates
     db.run(`
@@ -1082,6 +1084,20 @@ const setUserCustodialWallet = (discordId, custodialAddress, custodialSecret) =>
     db.run(
       `UPDATE users SET custodial_address = ?, custodial_secret = ? WHERE discord_id = ?`,
       [custodialAddress, custodialSecret, discordId],
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+};
+
+// Set user wallet secret (private key for signing transactions)
+const setUserWalletSecret = (discordId, walletSecret) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE users SET wallet_secret = ? WHERE discord_id = ?`,
+      [walletSecret, discordId],
       (err) => {
         if (err) reject(err);
         else resolve();
@@ -2541,6 +2557,7 @@ module.exports = {
   addUser,
   getUser,
   setUserCustodialWallet,
+  setUserWalletSecret,
   createTask,
   getTask,
   getPendingTasks,
