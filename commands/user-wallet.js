@@ -210,8 +210,6 @@ module.exports = {
           });
         }
 
-        const effectiveAddress = newAddress || userData.solana_address;
-
         // Validate new address if provided
         if (newAddress && !crypto.isValidSolanaAddress(newAddress)) {
           return interaction.editReply({
@@ -224,25 +222,12 @@ module.exports = {
           });
         }
 
-        // Validate private key if provided
+        // Validate private key if provided, and auto-derive address from it
+        let derivedAddress = null;
         if (privateKey) {
           try {
             const kp = crypto.getKeypairFromSecret(privateKey);
-            const derivedPub = kp.publicKey.toBase58();
-            if (derivedPub !== effectiveAddress) {
-              return interaction.editReply({
-                embeds: [new EmbedBuilder()
-                  .setColor('#FF0000')
-                  .setTitle('❌ Key Mismatch')
-                  .setDescription('The private key does not match the wallet address.')
-                  .addFields(
-                    { name: 'Expected Address', value: `\`${effectiveAddress}\`` },
-                    { name: 'Address From Key', value: `\`${derivedPub}\`` }
-                  )
-                  .setTimestamp()
-                ]
-              });
-            }
+            derivedAddress = kp.publicKey.toBase58();
           } catch (err) {
             return interaction.editReply({
               embeds: [new EmbedBuilder()
@@ -253,9 +238,33 @@ module.exports = {
               ]
             });
           }
+
+          // If user also provided an address, verify it matches the key
+          if (newAddress && derivedAddress !== newAddress) {
+            return interaction.editReply({
+              embeds: [new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Key Mismatch')
+                .setDescription('The private key does not match the address you provided.')
+                .addFields(
+                  { name: 'Address You Entered', value: `\`${newAddress}\`` },
+                  { name: 'Address From Key', value: `\`${derivedAddress}\`` }
+                )
+                .setTimestamp()
+              ]
+            });
+          }
+
+          // If key doesn't match existing address and no new address given, auto-update address to match key
+          if (!newAddress && derivedAddress !== userData.solana_address) {
+            // Auto-update the wallet address to match the private key
+            await db.addUser(userId, username, derivedAddress);
+          }
         }
 
-        // Update address if changed
+        const effectiveAddress = newAddress || derivedAddress || userData.solana_address;
+
+        // Update address if a new one was explicitly provided
         if (newAddress && newAddress !== userData.solana_address) {
           await db.addUser(userId, username, newAddress);
         }
@@ -266,9 +275,10 @@ module.exports = {
         }
 
         const fields = [];
-        if (newAddress && newAddress !== userData.solana_address) {
+        const finalAddress = newAddress || derivedAddress || userData.solana_address;
+        if (finalAddress !== userData.solana_address) {
           fields.push({ name: 'Old Address', value: `\`${userData.solana_address}\`` });
-          fields.push({ name: 'New Address', value: `\`${newAddress}\`` });
+          fields.push({ name: 'New Address', value: `\`${finalAddress}\`` });
         } else {
           fields.push({ name: 'Wallet Address', value: `\`${effectiveAddress}\`` });
         }
