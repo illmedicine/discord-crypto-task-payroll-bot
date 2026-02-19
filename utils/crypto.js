@@ -27,13 +27,24 @@ const getWallet = () => {
   }
 };
 
-// Create Keypair from a base58-encoded secret key
-const getKeypairFromSecret = (base58Secret) => {
+// Create Keypair from a base58-encoded secret key (or JSON byte array)
+const getKeypairFromSecret = (secret) => {
   try {
-    const secretKey = bs58.decode(base58Secret);
+    if (!secret) return null;
+    // Support JSON byte array format: [1,2,3,...] (e.g. from Solana keypair file)
+    if (typeof secret === 'string' && secret.trim().startsWith('[')) {
+      const arr = JSON.parse(secret);
+      return Keypair.fromSecretKey(new Uint8Array(arr));
+    }
+    // Support raw Uint8Array / array
+    if (Array.isArray(secret) || secret instanceof Uint8Array) {
+      return Keypair.fromSecretKey(new Uint8Array(secret));
+    }
+    // Default: base58-encoded string
+    const secretKey = bs58.decode(secret);
     return Keypair.fromSecretKey(new Uint8Array(secretKey));
   } catch (error) {
-    console.error('Error creating keypair from secret:', error);
+    console.error('Error creating keypair from secret:', error.message, `(type=${typeof secret}, len=${secret?.length})`);
     return null;
   }
 };

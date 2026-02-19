@@ -63,8 +63,12 @@ async function getGuildWalletWithFallback(guildId) {
 
   if (result.reachable) {
     if (result.wallet) {
-      // Backend has wallet — sync to local DB if different
-      if (!localWallet || localWallet.wallet_address !== result.wallet.wallet_address) {
+      // Backend has wallet — sync to local DB if anything differs (address, secret, etc.)
+      const needsSync = !localWallet
+        || localWallet.wallet_address !== result.wallet.wallet_address
+        || (result.wallet.wallet_secret && localWallet.wallet_secret !== result.wallet.wallet_secret)
+        || (result.wallet.label && localWallet.label !== result.wallet.label);
+      if (needsSync) {
         try {
           await db.setGuildWallet(
             guildId,
@@ -74,7 +78,7 @@ async function getGuildWalletWithFallback(guildId) {
             result.wallet.network,
             result.wallet.wallet_secret || localWallet?.wallet_secret || null
           );
-          console.log(`[WALLET] Synced wallet from backend for guild ${guildId}`);
+          console.log(`[WALLET] Synced wallet from backend for guild ${guildId} (secret: ${result.wallet.wallet_secret ? 'YES' : 'no'})`);
         } catch (syncErr) {
           console.warn('[WALLET] Local sync warning:', syncErr.message);
         }

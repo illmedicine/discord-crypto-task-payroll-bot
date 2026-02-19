@@ -122,6 +122,7 @@ module.exports = {
 
       const treasuryKeypair = crypto.getKeypairFromSecret(treasurySecret);
       if (!treasuryKeypair) {
+        console.error(`[PAY] Invalid treasury keypair for guild ${guildId}, secret length=${treasurySecret?.length}, first4=${treasurySecret?.slice(0,4)}...`);
         return interaction.editReply({
           content: '❌ Treasury wallet private key is invalid. Please reconnect the wallet with a valid key.'
         });
