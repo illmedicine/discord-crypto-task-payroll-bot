@@ -29,15 +29,15 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('update')
-        .setDescription('Update your connected wallet address or private key')
-        .addStringOption(option =>
-          option.setName('address')
-            .setDescription('Your new personal Solana wallet address')
-            .setRequired(false)
-        )
+        .setDescription('Update your private key or wallet address')
         .addStringOption(option =>
           option.setName('private-key')
             .setDescription('Your Solana private key (base58) — required for pot-mode horse races')
+            .setRequired(false)
+        )
+        .addStringOption(option =>
+          option.setName('address')
+            .setDescription('Your new personal Solana wallet address (auto-derived from key if omitted)')
             .setRequired(false)
         )
     ),
