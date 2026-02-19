@@ -47,15 +47,33 @@ function pushToBackend(endpoint, body) {
   });
 }
 
-// Version and build info
+// Version and build info — auto-populated from git on every deploy
 const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
-const BUILD_DATE = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-const LATEST_FEATURES = [
-  'NEW: Trust & Risk Scoring!',
-  'Auto wallet lookup on /pay',
-  '/user-wallet command',
-  'Solana transactions'
-];
+const BUILD_DATE = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+
+// Pull latest git info at startup (commit hash, message, date)
+let GIT_COMMIT = 'unknown';
+let GIT_COMMIT_SHORT = 'unknown';
+let GIT_COMMIT_DATE = BUILD_DATE;
+let GIT_LATEST_MSG = '';
+let GIT_RECENT_CHANGES = [];
+try {
+  const { execSync } = require('child_process');
+  GIT_COMMIT = execSync('git rev-parse HEAD', { cwd: __dirname, encoding: 'utf8' }).trim();
+  GIT_COMMIT_SHORT = GIT_COMMIT.slice(0, 7);
+  GIT_COMMIT_DATE = execSync('git log -1 --format=%ci', { cwd: __dirname, encoding: 'utf8' }).trim();
+  GIT_LATEST_MSG = execSync('git log -1 --format=%s', { cwd: __dirname, encoding: 'utf8' }).trim();
+  // Get last 5 commit messages for the changelog
+  GIT_RECENT_CHANGES = execSync('git log -5 --format=%s', { cwd: __dirname, encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+  console.log(`[BUILD] v${VERSION} • ${GIT_COMMIT_SHORT} • ${GIT_LATEST_MSG}`);
+} catch (gitErr) {
+  console.warn('[BUILD] Could not read git info:', gitErr.message);
+}
+
+// Cycle through latest changes in presence
+const LATEST_FEATURES = GIT_RECENT_CHANGES.length > 0
+  ? GIT_RECENT_CHANGES.map(msg => msg.replace(/^(feat|fix|chore|refactor|docs):\s*/i, '').slice(0, 80))
+  : ['DisCryptoBank is live!'];
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences] });
 
