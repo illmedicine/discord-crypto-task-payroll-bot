@@ -127,9 +127,13 @@ const getBalance = async (publicKey) => {
 // Verify Solana address format
 const isValidSolanaAddress = (address) => {
   try {
-    new PublicKey(address);
+    if (!address || typeof address !== 'string') return false;
+    const cleaned = address.trim();
+    if (cleaned.length < 32 || cleaned.length > 44) return false;
+    new PublicKey(cleaned);
     return true;
   } catch (error) {
+    console.log(`[crypto] isValidSolanaAddress FAILED for "${address}" (len=${address?.length}): ${error.message}`);
     return false;
   }
 };

@@ -41,7 +41,9 @@ module.exports = {
       const username = interaction.user.username;
 
       if (subcommand === 'connect') {
-        const address = interaction.options.getString('address');
+        const address = (interaction.options.getString('address') || '').trim().replace(/[^\x20-\x7E]/g, '');
+
+        console.log(`[user-wallet] connect: userId=${userId}, raw="${interaction.options.getString('address')}", sanitized="${address}", len=${address.length}`);
 
         // Check if user already has a wallet connected
         const existingUser = await db.getUser(userId);
@@ -122,7 +124,7 @@ module.exports = {
       }
 
       if (subcommand === 'update') {
-        const newAddress = interaction.options.getString('address');
+        const newAddress = (interaction.options.getString('address') || '').trim().replace(/[^\x20-\x7E]/g, '');
 
         // Check if user has a wallet
         const userData = await db.getUser(userId);
