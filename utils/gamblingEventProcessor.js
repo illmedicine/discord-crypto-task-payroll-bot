@@ -541,135 +541,167 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     }
 
     // ======== Announce results ========
+    // Build mentionContent FIRST (plain text fallback — always works even if embed fails)
+    const winnerPreset = HORSE_PRESETS[(winningSlot - 1)] || HORSE_PRESETS[0];
+    let mentionContent = '';
+
+    if (winnerUserIds.length > 0) {
+      const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
+      if (isSoloRace) {
+        mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+          `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
+          `🏠 **Solo Race vs the House** — You beat the house!\n`;
+      } else {
+        mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+          `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
+          `👥 **Riders:** ${bets.length} | **Winners:** ${winnerUserIds.length}\n`;
+      }
+      if (prizePerWinner > 0) {
+        mentionContent += `💰 **Prize per winner:** ${prizePerWinner.toFixed(4)} ${event.currency}\n`;
+      }
+      mentionContent += `\nCongratulations ${winnerMentions}! 🏆`;
+      const paidCount = paymentResults.filter(r => r.success).length;
+      const failedCount = paymentResults.filter(r => !r.success).length;
+      if (paidCount > 0) mentionContent += `\n✅ ${paidCount} payout(s) sent successfully!`;
+      if (failedCount > 0) mentionContent += `\n❌ ${failedCount} payout(s) failed — check embed for details.`;
+      if (paymentResults.length === 0 && prizePerWinner > 0) {
+        if (!guildWallet) mentionContent += `\n⚠️ No treasury wallet — admin must pay manually.`;
+        else mentionContent += `\n⚠️ Payout processing issue — check bot logs.`;
+      }
+    } else {
+      // ── NO WINNERS — HOUSE WINS TAUNT ──
+      if (isSoloRace) {
+        const soloUser = bets[0]?.user_id;
+        mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+          `🏠💰 **THE HOUSE WINS!** 💰🏠\n` +
+          `${soloUser ? `<@${soloUser}>, your` : 'Your'} horse came up short! The house stays rich today! 🤑\n` +
+          `Better luck next time, cowboy! 🤠`;
+      } else {
+        const houseMsg = getHouseWinsMessage();
+        mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+          `${houseMsg}\n` +
+          `Nobody picked **${winningSlotInfo?.label || 'the winning horse'}**! 🐴`;
+      }
+      if (isPotMode && houseCut > 0) mentionContent += `\n\n🏦 House retains **${houseCut.toFixed(4)} ${event.currency}** — the treasury grows! 💰`;
+      if (isPotMode && totalPot > 0 && houseCut <= 0) mentionContent += `\n\n🏦 All entry fees stay in the house pot!`;
+      if (!isPotMode && totalPot > 0) mentionContent += `\n\n🏠💰 The house funded **${totalPot.toFixed(4)} ${event.currency}** — and keeps every last coin! The house ALWAYS eats! 🍽️`;
+      if (!isPotMode && totalPot <= 0) mentionContent += `\n\n🏠 The house wins — no payout needed!`;
+    }
+
+    console.log(`[HorseRace] Event #${eventId} mentionContent built. Winners: ${winnerUserIds.length}, isSoloRace: ${isSoloRace}, isPotMode: ${isPotMode}, totalPot: ${totalPot}`);
+
+    // Try to send rich embed + text. If embed fails, send plain text as fallback.
+    let resultsSent = false;
     try {
       const channel = await client.channels.fetch(event.channel_id);
       if (channel) {
-        const { EmbedBuilder } = require('discord.js');
-        const winnerPreset = HORSE_PRESETS[(winningSlot - 1)] || HORSE_PRESETS[0];
+        // Build results embed
+        let resultsEmbed;
+        try {
+          const { EmbedBuilder } = require('discord.js');
+          resultsEmbed = new EmbedBuilder()
+            .setColor(winnerPreset.color)
+            .setTitle(`🏇 Horse Race #${event.id} — Results!`)
+            .setDescription(`**${event.title}** — The race is over! 🏁${isSoloRace ? '\n🏠 *Solo Race vs the House*' : ''}`)
+            .addFields(
+              { name: '🏆 Winning Horse', value: `**#${winningSlot} — ${winningSlotInfo?.label || winnerPreset.name}**`, inline: true },
+              { name: '👥 Total Riders', value: isSoloRace ? '1 (vs House)' : `${bets.length}`, inline: true },
+              { name: '🏆 Winners', value: `${winnerUserIds.length}`, inline: true },
+            );
 
-        const resultsEmbed = new EmbedBuilder()
-          .setColor(winnerPreset.color)
-          .setTitle(`🏇 Horse Race #${event.id} — Results!`)
-          .setDescription(`**${event.title}** — The race is over! 🏁${isSoloRace ? '\n🏠 *Solo Race vs the House*' : ''}`)
-          .addFields(
-            { name: '🏆 Winning Horse', value: `**#${winningSlot} — ${winningSlotInfo?.label || winnerPreset.name}**`, inline: true },
-            { name: '👥 Total Riders', value: isSoloRace ? '1 (vs House)' : `${bets.length}`, inline: true },
-            { name: '🏆 Winners', value: `${winnerUserIds.length}`, inline: true },
-          );
+          resultsEmbed.addFields({ name: '📈 Bets by Horse', value: betBreakdown || 'No bets placed' });
 
-        resultsEmbed.addFields({ name: '📈 Bets by Horse', value: betBreakdown || 'No bets placed' });
-
-        if (winnerUserIds.length > 0) {
-          const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
-          resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
-        } else {
-          const noWinnerMsg = isSoloRace
-            ? '🏠💰 **The House Wins!** Your horse didn\'t cross the finish line first. Better luck next race! 🏇'
-            : getHouseWinsMessage();
-          resultsEmbed.addFields({ name: '🏠 No Winners', value: noWinnerMsg });
-          // Add a special "House Wins" image for dramatic effect
-          resultsEmbed.setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExN2RmejN1Z2RkM2RxZm5lbGFiemQzZGNhdG5nNGZncXZ1MXh3dnNiNyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/GCvktC0KFy9l6/giphy.gif');
-        }
-
-        // Prize pool + house cut breakdown — always show
-        if (isPotMode && houseCut > 0) {
-          resultsEmbed.addFields(
-            { name: '🏦 Total Pot', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
-            { name: '🏠 House Cut (10%)', value: `${houseCut.toFixed(4)} ${event.currency}`, inline: true },
-            { name: '🎁 Winner Pool (90%)', value: `${winnerPool.toFixed(4)} ${event.currency}`, inline: true },
-          );
-        } else if (!isPotMode && totalPot > 0) {
-          // House-funded mode
           if (winnerUserIds.length > 0) {
+            const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
+            resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
+          } else {
+            const noWinnerMsg = isSoloRace
+              ? '🏠💰 **The House Wins!** Your horse didn\'t cross the finish line first. Better luck next race! 🏇'
+              : getHouseWinsMessage();
+            resultsEmbed.addFields({ name: '🏠 No Winners', value: noWinnerMsg });
+          }
+
+          // Prize breakdown
+          if (isPotMode && houseCut > 0) {
             resultsEmbed.addFields(
-              { name: '🎁 House-Funded Prize', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+              { name: '🏦 Total Pot', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+              { name: '🏠 House Cut (10%)', value: `${houseCut.toFixed(4)} ${event.currency}`, inline: true },
+              { name: '🎁 Winner Pool (90%)', value: `${winnerPool.toFixed(4)} ${event.currency}`, inline: true },
+            );
+          } else if (!isPotMode && totalPot > 0) {
+            if (winnerUserIds.length > 0) {
+              resultsEmbed.addFields(
+                { name: '🎁 House-Funded Prize', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+              );
+            } else {
+              resultsEmbed.addFields(
+                { name: '🏠 House-Funded Prize', value: `${totalPot.toFixed(4)} ${event.currency} — **KEPT BY THE HOUSE!** 💰`, inline: true },
+              );
+            }
+          } else if (totalPot > 0) {
+            resultsEmbed.addFields(
+              { name: '🎁 Prize Pool', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
             );
           } else {
             resultsEmbed.addFields(
-              { name: '🏠 House-Funded Prize', value: `${totalPot.toFixed(4)} ${event.currency} — **KEPT BY THE HOUSE!** 💰`, inline: true },
+              { name: '🎁 Prize', value: isPotMode ? 'No entry fees collected' : 'No prize amount set', inline: true },
             );
           }
-        } else if (totalPot > 0) {
-          resultsEmbed.addFields(
-            { name: '🎁 Prize Pool', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
-          );
-        } else {
-          resultsEmbed.addFields(
-            { name: '🎁 Prize', value: isPotMode ? 'No entry fees collected' : 'No prize amount set', inline: true },
-          );
-        }
 
-        if (winnerUserIds.length > 0 && prizePerWinner > 0) {
-          resultsEmbed.addFields(
-            { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${event.currency}`, inline: true }
-          );
-        }
-
-        if (paymentResults.length > 0) {
-          let paymentSummary = '';
-          for (const r of paymentResults) {
-            if (r.success) paymentSummary += `✅ <@${r.userId}>: ${r.amount.toFixed(4)} ${event.currency} — [View TX](https://solscan.io/tx/${r.signature})\n`;
-            else paymentSummary += `❌ <@${r.userId}>: Payment failed — ${r.reason}\n`;
+          if (winnerUserIds.length > 0 && prizePerWinner > 0) {
+            resultsEmbed.addFields(
+              { name: '💰 Per Winner', value: `${prizePerWinner.toFixed(4)} ${event.currency}`, inline: true }
+            );
           }
-          resultsEmbed.addFields({ name: '💸 Payouts', value: paymentSummary });
-        } else if (prizePerWinner > 0 && !guildWallet) {
-          resultsEmbed.addFields({ name: '⚠️ Payment Issue', value: 'No treasury wallet configured. Server admin must manually pay winners.' });
-        } else if (prizePerWinner > 0 && winnerUserIds.length > 0) {
-          resultsEmbed.addFields({ name: '⚠️ Payment Issue', value: 'Payments were attempted but produced no results. Check bot logs.' });
+
+          if (paymentResults.length > 0) {
+            let paymentSummary = '';
+            for (const r of paymentResults) {
+              if (r.success) paymentSummary += `✅ <@${r.userId}>: ${r.amount.toFixed(4)} ${event.currency} — [View TX](https://solscan.io/tx/${r.signature})\n`;
+              else paymentSummary += `❌ <@${r.userId}>: Payment failed — ${r.reason}\n`;
+            }
+            resultsEmbed.addFields({ name: '💸 Payouts', value: paymentSummary });
+          } else if (prizePerWinner > 0 && !guildWallet) {
+            resultsEmbed.addFields({ name: '⚠️ Payment Issue', value: 'No treasury wallet configured. Server admin must manually pay winners.' });
+          }
+
+          resultsEmbed.setTimestamp();
+          resultsEmbed.setFooter({ text: `DisCryptoBank • Horse Race #${event.id} • Provably Fair` });
+        } catch (embedBuildErr) {
+          console.error(`[HorseRace] Embed build error for #${event.id}:`, embedBuildErr.message);
+          resultsEmbed = null;
         }
 
-        resultsEmbed.setTimestamp();
-        resultsEmbed.setFooter({ text: `DisCryptoBank • Horse Race #${event.id} • Provably Fair` });
-
-        // Build content text with key info inline (always visible even if embed fails)
-        let mentionContent = '';
-        if (winnerUserIds.length > 0) {
-          const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
-          if (isSoloRace) {
-            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
-              `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
-              `🏠 **Solo Race vs the House** — You beat the house!\n`;
+        // Attempt to send embed + text
+        console.log(`[HorseRace] Sending results for #${event.id}... embed=${resultsEmbed ? 'OK' : 'FAILED'}`);
+        try {
+          if (resultsEmbed) {
+            await channel.send({ content: mentionContent, embeds: [resultsEmbed] });
           } else {
-            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
-              `🏆 **Winning Horse:** ${winningSlotInfo?.label || winnerPreset.name}\n` +
-              `👥 **Riders:** ${bets.length} | **Winners:** ${winnerUserIds.length}\n`;
+            await channel.send({ content: mentionContent });
           }
-          if (prizePerWinner > 0) {
-            mentionContent += `💰 **Prize per winner:** ${prizePerWinner.toFixed(4)} ${event.currency}\n`;
+          resultsSent = true;
+          console.log(`[HorseRace] Results sent for #${event.id} (with embed: ${!!resultsEmbed})`);
+        } catch (sendErr) {
+          console.error(`[HorseRace] Embed send failed for #${event.id}:`, sendErr.message);
+          // Fallback: send plain text only (no embed — maximally safe)
+          try {
+            await channel.send({ content: mentionContent });
+            resultsSent = true;
+            console.log(`[HorseRace] Fallback plain text sent for #${event.id}`);
+          } catch (fallbackErr) {
+            console.error(`[HorseRace] Even fallback text failed for #${event.id}:`, fallbackErr.message);
           }
-          mentionContent += `\nCongratulations ${winnerMentions}! 🏆`;
-          // Add payment status summary
-          const paidCount = paymentResults.filter(r => r.success).length;
-          const failedCount = paymentResults.filter(r => !r.success).length;
-          if (paidCount > 0) mentionContent += `\n✅ ${paidCount} payout(s) sent successfully!`;
-          if (failedCount > 0) mentionContent += `\n❌ ${failedCount} payout(s) failed — check embed for details.`;
-          if (paymentResults.length === 0 && prizePerWinner > 0) {
-            if (!guildWallet) mentionContent += `\n⚠️ No treasury wallet — admin must pay manually.`;
-            else mentionContent += `\n⚠️ Payout processing issue — check bot logs.`;
-          }
-        } else {
-          if (isSoloRace) {
-            const soloUser = bets[0].user_id;
-            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
-              `🏠💰 **THE HOUSE WINS!** 💰🏠\n` +
-              `<@${soloUser}>, your horse came up short! The house stays rich today! 🤑\n` +
-              `Better luck next time, cowboy! 🤠`;
-          } else {
-            const houseMsg = getHouseWinsMessage();
-            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
-              `${houseMsg}\n` +
-              `Nobody picked **${winningSlotInfo?.label || 'the winning horse'}**! 🐴`;
-          }
-          if (isPotMode && houseCut > 0) mentionContent += `\n\n🏦 House retains **${houseCut.toFixed(4)} ${event.currency}** — the treasury grows! 💰`;
-          if (isPotMode && totalPot > 0 && houseCut <= 0) mentionContent += `\n\n🏦 All entry fees stay in the house pot!`;
-          if (!isPotMode && totalPot > 0) mentionContent += `\n\n🏠💰 The house funded **${totalPot.toFixed(4)} ${event.currency}** — and keeps every last coin! The house ALWAYS eats! 🍽️`;
         }
-
-        console.log(`[HorseRace] Sending results: paymentResults=${JSON.stringify(paymentResults)}`);
-        await channel.send({ content: mentionContent, embeds: [resultsEmbed] });
+      } else {
+        console.error(`[HorseRace] Could not fetch channel ${event.channel_id} for results`);
       }
     } catch (e) {
       console.error(`[HorseRace] Could not announce results for #${event.id}:`, e.message, e.stack);
+    }
+
+    if (!resultsSent) {
+      console.error(`[HorseRace] ⚠️ RESULTS NEVER SENT for event #${event.id}! Check logs above.`);
     }
 
     await db.updateGamblingEventStatus(eventId, 'completed');
