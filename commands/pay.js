@@ -77,7 +77,14 @@ module.exports = {
       const guildWallet = await getGuildWalletWithFallback(guildId);
       if (!guildWallet) {
         return interaction.editReply({
-          content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` or **DCB Event Manager** to set up the treasury wallet.'
+          content: '❌ **No Treasury Wallet Connected!**\n\n' +
+            'This server does not have a treasury wallet configured. The `/pay` command sends SOL from the server\'s treasury wallet, so one must be connected first.\n\n' +
+            '**Server Owner — set it up with:**\n' +
+            '```\n/wallet connect address:YOUR_WALLET_ADDRESS secret:YOUR_PRIVATE_KEY\n```\n' +
+            '• The **address** is your Solana wallet public address\n' +
+            '• The **secret** is your wallet\'s private key (base58) — needed so the bot can sign payment transactions\n' +
+            '   → In Phantom: Settings → Security & Privacy → Show Secret Key\n\n' +
+            '💡 You can also set this up via **DCB Event Manager** (web dashboard) → Treasury.'
         });
       }
 
@@ -111,12 +118,13 @@ module.exports = {
       const treasurySecret = guildWallet.wallet_secret;
       if (!treasurySecret) {
         return interaction.editReply({
-          content: `❌ **Auto-payouts not enabled for this server's treasury wallet.**\n\n` +
-            `The treasury wallet (\`${guildWallet.wallet_address.slice(0,6)}...${guildWallet.wallet_address.slice(-4)}\`) is connected but has no private key stored.\n\n` +
-            `**How to fix:**\n` +
-            `• Use \`/wallet connect\` with the \`secret\` option to provide the wallet's private key\n` +
-            `• Or go to **DCB Event Manager** → Treasury → enter your wallet's secret key\n\n` +
-            `The private key is stored securely and never shown. It's needed so the bot can sign payment transactions from the treasury.`
+          content: `❌ **Treasury Private Key Required!**\n\n` +
+            `The treasury wallet (\`${guildWallet.wallet_address.slice(0,6)}...${guildWallet.wallet_address.slice(-4)}\`) is connected but has **no private key** stored. The \`/pay\` command needs the private key to sign transactions from this server's treasury.\n\n` +
+            `**Server Owner — add the private key:**\n` +
+            `\`\`\`\n/wallet connect address:${guildWallet.wallet_address} secret:YOUR_PRIVATE_KEY\n\`\`\`\n` +
+            `• In Phantom: Settings → Security & Privacy → Show Secret Key\n` +
+            `• The key is ~88 characters (base58) — it is stored securely and never displayed\n\n` +
+            `💡 Or go to **DCB Event Manager** → Treasury → 🔑 Save Key`
         });
       }
 
