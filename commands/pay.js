@@ -147,6 +147,20 @@ module.exports = {
 
       const treasuryAddress = treasuryKeypair.publicKey.toString();
 
+      // CRITICAL: Verify the secret key belongs to THIS guild's treasury, not another guild's
+      if (treasuryAddress !== guildWallet.wallet_address) {
+        console.error(`[PAY] ❌ CRITICAL: Key/address mismatch for guild ${guildId}! wallet_address=${guildWallet.wallet_address}, key derives=${treasuryAddress}`);
+        return interaction.editReply({
+          content: `❌ **Treasury Key Mismatch!**\n\n` +
+            `The stored private key derives a different address than this server's treasury wallet.\n\n` +
+            `🏦 **Server treasury:** \`${guildWallet.wallet_address.slice(0,6)}...${guildWallet.wallet_address.slice(-4)}\`\n` +
+            `🔑 **Key derives:** \`${treasuryAddress.slice(0,6)}...${treasuryAddress.slice(-4)}\`\n\n` +
+            `**How to fix:**\n` +
+            `1. Use \`/wallet connect\` with the **correct** address + private key\n` +
+            `2. Or go to **DCB Event Manager** → Treasury → re-enter the correct private key`
+        });
+      }
+
       // Check treasury wallet balance
       const treasuryBalance = await crypto.getBalance(treasuryAddress);
       if (treasuryBalance < solAmount) {

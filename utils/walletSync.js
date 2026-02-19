@@ -64,9 +64,14 @@ async function getGuildWalletWithFallback(guildId) {
   if (result.reachable) {
     if (result.wallet) {
       // Backend has wallet — sync to local DB if anything differs (address, secret, etc.)
+      // Merge: prefer backend secret, fall back to local secret for same address
+      const mergedSecret = result.wallet.wallet_secret
+        || (localWallet && localWallet.wallet_address === result.wallet.wallet_address ? localWallet.wallet_secret : null)
+        || null;
+
       const needsSync = !localWallet
         || localWallet.wallet_address !== result.wallet.wallet_address
-        || (result.wallet.wallet_secret && localWallet.wallet_secret !== result.wallet.wallet_secret)
+        || (mergedSecret && localWallet.wallet_secret !== mergedSecret)
         || (result.wallet.label && localWallet.label !== result.wallet.label);
       if (needsSync) {
         try {
@@ -76,14 +81,15 @@ async function getGuildWalletWithFallback(guildId) {
             result.wallet.configured_by,
             result.wallet.label,
             result.wallet.network,
-            result.wallet.wallet_secret || localWallet?.wallet_secret || null
+            mergedSecret
           );
-          console.log(`[WALLET] Synced wallet from backend for guild ${guildId} (secret: ${result.wallet.wallet_secret ? 'YES' : 'no'})`);
+          console.log(`[WALLET] Synced wallet from backend for guild ${guildId} (secret: ${mergedSecret ? 'YES' : 'no'})`);
         } catch (syncErr) {
           console.warn('[WALLET] Local sync warning:', syncErr.message);
         }
       }
-      return result.wallet;
+      // Return merged wallet with the correct secret for this guild
+      return { ...result.wallet, wallet_secret: mergedSecret };
     } else {
       // Backend is reachable and says NO wallet — respect the disconnect
       if (localWallet) {
