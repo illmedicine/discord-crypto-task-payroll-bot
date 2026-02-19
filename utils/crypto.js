@@ -269,10 +269,21 @@ const verifyIncomingTransfer = async (senderAddress, recipientAddress, minAmount
   }
 };
 
+// Generate a new Solana Keypair and return { publicKey, secretKey (base58) }
+const generateKeypair = () => {
+  const kp = Keypair.generate();
+  return {
+    publicKey: kp.publicKey.toBase58(),
+    secretKey: bs58.encode(kp.secretKey),
+    keypair: kp
+  };
+};
+
 module.exports = {
   connection,
   getWallet,
   getKeypairFromSecret,
+  generateKeypair,
   sendSol,
   sendSolFrom,
   getBalance,

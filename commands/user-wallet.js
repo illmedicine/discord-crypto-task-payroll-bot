@@ -30,6 +30,16 @@ module.exports = {
             .setDescription('Your new personal Solana wallet address')
             .setRequired(true)
         )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('deposit')
+        .setDescription('View your DCB betting wallet address to fund it for horse races')
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('balance')
+        .setDescription('Check your DCB betting wallet balance')
     ),
 
   async execute(interaction) {
@@ -168,6 +178,82 @@ module.exports = {
             { name: 'New Wallet', value: `\`${newAddress}\`` },
             { name: 'Status', value: '🟢 Updated on all servers' }
           )
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+      }
+
+      if (subcommand === 'deposit') {
+        let userData = await db.getUser(userId);
+
+        // Auto-generate custodial wallet if user doesn't have one yet
+        if (!userData) {
+          // User must connect their payout wallet first
+          return interaction.editReply({
+            content: '❌ Connect your payout wallet first with `/user-wallet connect address:YOUR_SOLANA_ADDRESS`'
+          });
+        }
+
+        if (!userData.custodial_address || !userData.custodial_secret) {
+          const { publicKey, secretKey } = crypto.generateKeypair();
+          await db.setUserCustodialWallet(userId, publicKey, secretKey);
+          userData = await db.getUser(userId);
+          console.log(`[user-wallet] Generated custodial wallet for ${userId}: ${publicKey}`);
+        }
+
+        let balanceText = 'Checking...';
+        try {
+          const bal = await crypto.getBalance(userData.custodial_address);
+          balanceText = `${bal.toFixed(6)} SOL`;
+        } catch (_) {
+          balanceText = '(unable to fetch)';
+        }
+
+        const embed = new EmbedBuilder()
+          .setColor('#F1C40F')
+          .setTitle('🏦 Your DCB Betting Wallet')
+          .setDescription(
+            'This is your **custodial betting wallet** managed by DisCryptoBank.\n' +
+            'Fund it from your personal wallet to enter pot-mode horse races.\n\n' +
+            '**How it works:**\n' +
+            '1️⃣ Send SOL to the address below from Phantom/Solflare\n' +
+            '2️⃣ When you enter a race, the entry fee is paid from this wallet\n' +
+            '3️⃣ Winnings are paid to your connected payout wallet'
+          )
+          .addFields(
+            { name: '📥 Deposit Address', value: `\`${userData.custodial_address}\`` },
+            { name: '💰 Balance', value: balanceText, inline: true },
+            { name: '💳 Payout Wallet', value: `\`${userData.solana_address || '(not set)'}\``, inline: true }
+          )
+          .setFooter({ text: 'DisCryptoBank • Betting Wallet' })
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+      }
+
+      if (subcommand === 'balance') {
+        const userData = await db.getUser(userId);
+
+        if (!userData || !userData.custodial_address) {
+          return interaction.editReply({
+            content: '❌ No betting wallet found. Use `/user-wallet deposit` to set one up.'
+          });
+        }
+
+        let balance = 0;
+        try {
+          balance = await crypto.getBalance(userData.custodial_address);
+        } catch (_) {}
+
+        const embed = new EmbedBuilder()
+          .setColor(balance > 0 ? '#27AE60' : '#E74C3C')
+          .setTitle('💰 Betting Wallet Balance')
+          .addFields(
+            { name: '🏦 Betting Wallet', value: `\`${userData.custodial_address}\`` },
+            { name: '💰 Balance', value: `**${balance.toFixed(6)} SOL**`, inline: true },
+            { name: '💳 Payout Wallet', value: `\`${userData.solana_address || '(not set)'}\``, inline: true }
+          )
+          .setFooter({ text: balance > 0 ? 'Ready to race! 🏇' : 'Fund your betting wallet to enter races' })
           .setTimestamp();
 
         return interaction.editReply({ embeds: [embed] });

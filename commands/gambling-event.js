@@ -279,16 +279,59 @@ module.exports = {
       const chosenSlot = slots.find(s => s.slot_number === slotNumber);
       const horseName = chosenSlot?.label || `Horse #${slotNumber}`;
 
+      // Check user has a custodial betting wallet + sufficient balance
+      const userData = await db.getUser(interaction.user.id);
+      if (!userData || !userData.solana_address) {
+        return interaction.editReply({
+          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\` first.`
+        });
+      }
+
+      // Auto-generate custodial wallet if needed
+      if (!userData.custodial_address || !userData.custodial_secret) {
+        const { publicKey, secretKey } = crypto.generateKeypair();
+        await db.setUserCustodialWallet(interaction.user.id, publicKey, secretKey);
+        return interaction.editReply({
+          content: `🏦 **Betting Wallet Created!**\n\nYour DCB betting wallet has been generated:\n\`\`\`\n${publicKey}\n\`\`\`\n\n` +
+            `💰 **Fund it with at least ${entryFee} ${event.currency}** from your personal wallet (Phantom, Solflare, etc.)\n\n` +
+            `Once funded, click the horse button again to enter the race!\n\n` +
+            `💡 Use \`/user-wallet deposit\` anytime to see your betting wallet address.`
+        });
+      }
+
+      // Check custodial wallet balance
+      let custodialBalance = 0;
+      let solEntryFee = entryFee;
+      let solPrice = null;
+      try {
+        custodialBalance = await crypto.getBalance(userData.custodial_address);
+        if (event.currency === 'USD') {
+          solPrice = await crypto.getSolanaPrice();
+          if (solPrice) {
+            solEntryFee = entryFee / solPrice;
+          }
+        }
+      } catch (balErr) {
+        console.warn('[GamblingEvent] Custodial balance check error:', balErr.message);
+      }
+
+      if (custodialBalance < solEntryFee) {
+        return interaction.editReply({
+          content: `❌ **Insufficient Betting Wallet Funds!**\n\n` +
+            `💰 Entry fee: **${entryFee} ${event.currency}**${solPrice ? ` (≈ ${solEntryFee.toFixed(6)} SOL)` : ''}\n` +
+            `🏦 Betting wallet balance: **${custodialBalance.toFixed(6)} SOL**\n` +
+            `📉 Short by: **${(solEntryFee - custodialBalance).toFixed(6)} SOL**\n\n` +
+            `📥 Fund your betting wallet:\n\`\`\`\n${userData.custodial_address}\n\`\`\`\n` +
+            `💡 Use \`/user-wallet deposit\` to see your wallet address.`
+        });
+      }
+
       // Build fee display
       let feeDisplay = `${entryFee} ${event.currency}`;
       let solEquivNote = '';
-      if (event.currency === 'USD') {
-        const solPrice = await crypto.getSolanaPrice();
-        if (solPrice) {
-          const solEquiv = entryFee / solPrice;
-          feeDisplay = `${entryFee} USD`;
-          solEquivNote = `\n💱 ≈ **${solEquiv.toFixed(6)} SOL** @ $${solPrice.toFixed(2)}/SOL`;
-        }
+      if (event.currency === 'USD' && solPrice) {
+        feeDisplay = `${entryFee} USD`;
+        solEquivNote = `\n💱 ≈ **${solEntryFee.toFixed(6)} SOL** @ $${solPrice.toFixed(2)}/SOL`;
       }
 
       // Get treasury address for display
@@ -313,8 +356,9 @@ module.exports = {
           `You're about to enter **Horse Race #${eventId}**\n\n` +
           `🐴 **Horse:** ${horseName}\n` +
           `💰 **Entry Fee:** ${feeDisplay}${solEquivNote}\n` +
-          `🏦 **Treasury:** \`${treasuryAddr.slice(0,6)}...${treasuryAddr.slice(-4)}\`\n\n` +
-          `By clicking **Confirm Bet & Pay**, your entry fee will be committed from your connected wallet to the server treasury.\n\n` +
+          `🏦 **Paid to Treasury:** \`${treasuryAddr.slice(0,6)}...${treasuryAddr.slice(-4)}\`\n` +
+          `💳 **From Betting Wallet:** \`${userData.custodial_address.slice(0,6)}...${userData.custodial_address.slice(-4)}\` (${custodialBalance.toFixed(4)} SOL)\n\n` +
+          `By clicking **Confirm Bet & Pay**, the entry fee will be transferred from your betting wallet to the server treasury as escrow.\n\n` +
           `⚠️ Entry fees are non-refundable unless the race is cancelled.`
         )
         .setFooter({ text: 'DisCryptoBank • Horse Race Entry' })
@@ -365,25 +409,16 @@ module.exports = {
 
     const entryFee = event.entry_fee || 0;
 
-    // 1. Require connected wallet
+    // 1. Get user + custodial wallet
     const userData = await db.getUser(interaction.user.id);
-    if (!userData || !userData.solana_address) {
+    if (!userData || !userData.custodial_address || !userData.custodial_secret) {
       return interaction.editReply({
-        content: `❌ **Wallet Required!**\n\nUse \`/user-wallet connect address:YOUR_SOLANA_ADDRESS\` first.`,
-        embeds: [], components: []
-      });
-    }
-    const userWalletAddress = userData.solana_address;
-
-    // 2. Validate wallet address
-    if (!crypto.isValidSolanaAddress(userWalletAddress)) {
-      return interaction.editReply({
-        content: '❌ Your connected wallet address is invalid. Update with `/user-wallet update`.',
+        content: '❌ No betting wallet found. Click a horse button again to set one up.',
         embeds: [], components: []
       });
     }
 
-    // 3. Verify guild treasury wallet exists
+    // 2. Verify guild treasury wallet exists
     const guildWallet = await getGuildWalletWithFallback(interaction.guildId);
     if (!guildWallet || !guildWallet.wallet_address) {
       return interaction.editReply({
@@ -392,61 +427,82 @@ module.exports = {
       });
     }
 
-    // 4. Check on-chain balance
-    let balanceDisplay = '';
-    if (event.currency === 'SOL') {
-      try {
-        const balance = await crypto.getBalance(userWalletAddress);
-        if (balance < entryFee) {
-          return interaction.editReply({
-            content: `❌ **Insufficient Funds!**\n\n💰 Entry fee: **${entryFee} SOL**\n💳 Your balance: **${balance.toFixed(4)} SOL**\n📉 Short by: **${(entryFee - balance).toFixed(4)} SOL**\n\nFund your wallet and try again.`,
-            embeds: [], components: []
-          });
-        }
-        balanceDisplay = `\n💳 Wallet balance: **${balance.toFixed(4)} SOL**`;
-      } catch (balanceErr) {
-        console.warn('[GamblingConfirm] Balance check error:', balanceErr.message);
+    // 3. Calculate SOL amount to transfer
+    let solAmount = entryFee;
+    let solPrice = null;
+    if (event.currency === 'USD') {
+      solPrice = await crypto.getSolanaPrice();
+      if (!solPrice) {
+        return interaction.editReply({
+          content: '❌ Unable to fetch SOL price for USD conversion. Try again in a moment.',
+          embeds: [], components: []
+        });
       }
-    } else if (event.currency === 'USD') {
-      // For USD, check SOL equivalent
-      try {
-        const solPrice = await crypto.getSolanaPrice();
-        if (solPrice) {
-          const solNeeded = entryFee / solPrice;
-          const balance = await crypto.getBalance(userWalletAddress);
-          if (balance < solNeeded) {
-            return interaction.editReply({
-              content: `❌ **Insufficient Funds!**\n\n💰 Entry fee: **${entryFee} USD** (≈ ${solNeeded.toFixed(6)} SOL)\n💳 Your balance: **${balance.toFixed(4)} SOL**\n\nFund your wallet and try again.`,
-              embeds: [], components: []
-            });
-          }
-          balanceDisplay = `\n💳 Wallet balance: **${balance.toFixed(4)} SOL** ✓`;
-        }
-      } catch (balanceErr) {
-        console.warn('[GamblingConfirm] USD balance check error:', balanceErr.message);
-      }
+      solAmount = entryFee / solPrice;
     }
 
-    // 5. Commit the bet — entry fee tracked in virtual pot, treasury pays winners
+    // 4. Check custodial wallet balance
+    let custodialBalance = 0;
+    try {
+      custodialBalance = await crypto.getBalance(userData.custodial_address);
+    } catch (_) {}
+
+    // Need enough for entry fee + ~0.000005 SOL tx fee
+    const txFeeBuffer = 0.00001;
+    if (custodialBalance < solAmount + txFeeBuffer) {
+      return interaction.editReply({
+        content: `❌ **Insufficient Betting Wallet Funds!**\n\n` +
+          `💰 Entry fee: **${solAmount.toFixed(6)} SOL**${solPrice ? ` (${entryFee} USD)` : ''}\n` +
+          `🏦 Betting wallet: **${custodialBalance.toFixed(6)} SOL**\n` +
+          `📉 Short by: **${(solAmount + txFeeBuffer - custodialBalance).toFixed(6)} SOL**\n\n` +
+          `📥 Fund your betting wallet:\n\`${userData.custodial_address}\``,
+        embeds: [], components: []
+      });
+    }
+
+    // 5. Execute the actual SOL transfer: custodial wallet → treasury
+    console.log(`[GamblingConfirm] Transferring ${solAmount.toFixed(6)} SOL from ${userData.custodial_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
+
+    const transferResult = await crypto.sendSolFrom(
+      userData.custodial_secret,
+      guildWallet.wallet_address,
+      solAmount
+    );
+
+    if (!transferResult.success) {
+      console.error(`[GamblingConfirm] ❌ Transfer failed for user ${interaction.user.id} on event #${eventId}:`, transferResult.error);
+      return interaction.editReply({
+        content: `❌ **Payment Failed!**\n\n${transferResult.error}\n\nYour funds are safe in your betting wallet. Please try again.`,
+        embeds: [], components: []
+      });
+    }
+
+    console.log(`[GamblingConfirm] ✅ Transfer successful: ${transferResult.signature}`);
+
+    // 6. Save bet as committed with tx signature
     const betAmount = entryFee;
-    const paymentStatus = 'committed';
+    const userWalletAddress = userData.custodial_address;
 
-    await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, paymentStatus, userWalletAddress);
-    console.log(`[GamblingConfirm] ✅ Bet committed: event #${eventId}, slot ${slotNumber}, user ${interaction.user.id}, amount ${betAmount} ${event.currency}`);
+    await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, 'committed', userWalletAddress);
+    // Store the entry tx signature
+    await db.updateGamblingBetPayment(eventId, interaction.user.id, 'committed', 'entry', transferResult.signature);
+    console.log(`[GamblingConfirm] ✅ Bet committed: event #${eventId}, slot ${slotNumber}, user ${interaction.user.id}, amount ${betAmount} ${event.currency}, tx=${transferResult.signature}`);
 
-    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount, paymentStatus, walletAddress: userWalletAddress });
+    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount, paymentStatus: 'committed', walletAddress: userWalletAddress, entryTxSignature: transferResult.signature });
+
+    // Record the transaction in history
+    try {
+      await db.recordTransaction(interaction.guildId, userData.custodial_address, guildWallet.wallet_address, solAmount, transferResult.signature);
+    } catch (_) {}
 
     const slots = await db.getGamblingEventSlots(eventId);
     const chosenSlot = slots.find(s => s.slot_number === slotNumber);
     const newCount = event.current_players + 1;
 
     // Build fee display
-    let feeDisplay = `${entryFee} ${event.currency}`;
-    if (event.currency === 'USD') {
-      const solPrice = await crypto.getSolanaPrice();
-      if (solPrice) {
-        feeDisplay = `${entryFee} USD (≈ ${(entryFee / solPrice).toFixed(6)} SOL)`;
-      }
+    let feeDisplay = `${solAmount.toFixed(6)} SOL`;
+    if (event.currency === 'USD' && solPrice) {
+      feeDisplay = `${entryFee} USD (${solAmount.toFixed(6)} SOL)`;
     }
 
     const successEmbed = new EmbedBuilder()
@@ -455,7 +511,8 @@ module.exports = {
       .setDescription(
         `🏇 **Horse:** ${chosenSlot?.label || `Horse #${slotNumber}`}\n` +
         `💰 **Entry Fee:** ${feeDisplay}\n` +
-        `🏦 **Paid to:** \`${guildWallet.wallet_address.slice(0,6)}...${guildWallet.wallet_address.slice(-4)}\`${balanceDisplay}\n` +
+        `🏦 **Paid to Treasury:** \`${guildWallet.wallet_address.slice(0,6)}...${guildWallet.wallet_address.slice(-4)}\`\n` +
+        `🔗 [View Transaction](https://solscan.io/tx/${transferResult.signature})\n` +
         `👥 **Riders:** ${newCount}/${event.max_players}\n\n` +
         `🍀 Good luck! Winners receive payouts directly to their connected wallet.`
       )
@@ -552,19 +609,19 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
   if (requiresPayment) {
     desc += `\n**💰 Entry Requirements:**\n`;
     desc += `• Entry fee: **${entryFee} ${currency}** per rider\n`;
-    desc += `• You MUST connect your wallet first: \`/user-wallet connect\`\n`;
-    desc += `• Your wallet must have at least **${entryFee} ${currency}** available\n`;
-    desc += `• Click a horse → confirm & pay → you're in! 🏇\n`;
+    desc += `• Connect your wallet: \`/user-wallet connect\`\n`;
+    desc += `• Fund your betting wallet: \`/user-wallet deposit\`\n`;
+    desc += `• Click a horse → confirm & pay → entry fee sent to treasury as escrow 🏇\n`;
 
     desc += `\n**🏆 Prize Distribution:**\n`;
-    desc += `• Total pot = all entry fees combined\n`;
-    desc += `• **90%** of pot split evenly among winner(s)\n`;
+    desc += `• Total pot = all entry fees held in treasury escrow\n`;
+    desc += `• **90%** of pot paid to winner(s) from treasury\n`;
     desc += `• **10%** retained by the house (server treasury)\n`;
 
     desc += `\n**🔄 Refund Policy:**\n`;
-    desc += `• If the race is cancelled, all entries are refunded\n`;
+    desc += `• If the race is cancelled, all entries are refunded from treasury\n`;
     desc += `• Solo rider? You race against the house! 🏠\n`;
-    desc += `• Refunds are sent to your connected wallet address\n`;
+    desc += `• Refunds sent to your connected payout wallet\n`;
   } else {
     desc += `\n**🏆 Prize Distribution:**\n`;
     if (isPotMode) {
