@@ -519,30 +519,47 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
-    // Handle gambling event entry fee verification
-    if (interaction.customId.startsWith('gamble_verify_')) {
-      console.log(`[GambleVerify] 🔍 Verify button pressed: ${interaction.customId}`);
+    // Handle gambling event entry fee confirmation (step 2 of pot mode)
+    if (interaction.customId.startsWith('gamble_confirm_')) {
+      console.log(`[GambleConfirm] 💰 Confirm bet button pressed: ${interaction.customId}`);
       try {
         await interaction.deferReply({ ephemeral: true });
       } catch (deferErr) {
-        console.error(`[GambleVerify] ❌ deferReply FAILED:`, deferErr.message);
+        console.error(`[GambleConfirm] ❌ deferReply FAILED:`, deferErr.message);
         return;
       }
 
       const gamblingEventCommand = client.commands.get('gambling-event');
-      if (gamblingEventCommand && gamblingEventCommand.handleVerifyPayment) {
+      if (gamblingEventCommand && gamblingEventCommand.handleConfirmBet) {
         try {
-          await gamblingEventCommand.handleVerifyPayment(interaction);
+          await gamblingEventCommand.handleConfirmBet(interaction);
         } catch (error) {
-          console.error('❌ Error handling verify payment:', error);
+          console.error('❌ Error handling confirm bet:', error);
           try {
-            await interaction.editReply({ content: `❌ Error verifying payment: ${error?.message || 'Unknown error'}` });
+            await interaction.editReply({ content: `❌ Error confirming bet: ${error?.message || 'Unknown error'}` });
           } catch (_) {}
         }
       } else {
         try {
-          await interaction.editReply({ content: '❌ Verification system temporarily unavailable.' });
+          await interaction.editReply({ content: '❌ Bet confirmation system temporarily unavailable.' });
         } catch (_) {}
+      }
+      return;
+    }
+
+    // Handle gambling cancel button (from confirmation box)
+    if (interaction.customId.startsWith('gamble_cancel_')) {
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleCancelBet) {
+        try {
+          await interaction.deferReply({ ephemeral: true });
+          await gamblingEventCommand.handleCancelBet(interaction);
+        } catch (error) {
+          console.error('❌ Error handling cancel bet:', error);
+          try {
+            await interaction.reply({ content: '❌ Bet cancelled.', ephemeral: true });
+          } catch (_) {}
+        }
       }
       return;
     }

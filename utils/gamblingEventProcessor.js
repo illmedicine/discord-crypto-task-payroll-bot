@@ -363,26 +363,17 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     // ======== Calculate prize with house cut ========
-    // In pot mode, only count bets with payment_status='committed' (verified on-chain payment)
+    // In pot mode, all bets are committed instantly (virtual pot — balance-verified at entry)
     let totalPot = 0;
     let houseCut = 0;
     let winnerPool = 0;
 
     if (isPotMode) {
       const committedBets = bets.filter(b => b.payment_status === 'committed');
-      const pendingBets = bets.filter(b => b.payment_status === 'pending');
       totalPot = committedBets.reduce((sum, b) => sum + (b.bet_amount || 0), 0);
       houseCut = totalPot * (HOUSE_CUT_PERCENT / 100);
       winnerPool = totalPot - houseCut;
-
-      if (pendingBets.length > 0) {
-        console.log(`[HorseRace] Event #${eventId}: ${pendingBets.length} bet(s) still pending (entry fee not verified) — not counted in pot`);
-        // Mark pending bets as expired
-        for (const pb of pendingBets) {
-          await db.updateGamblingBetPayment(eventId, pb.user_id, 'expired', 'entry', null).catch(() => {});
-        }
-      }
-      console.log(`[HorseRace] Event #${eventId}: ${committedBets.length} committed bets, ${pendingBets.length} pending (expired)`);
+      console.log(`[HorseRace] Event #${eventId}: ${committedBets.length} committed bets, totalPot=${totalPot}`);
     } else {
       totalPot = event.prize_amount || 0;
       houseCut = 0;
