@@ -456,10 +456,11 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
           resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
         } else {
-          const noWinnerMsg = isSoloRace
-            ? '🏠 The house wins! Your horse didn\'t cross the finish line first.'
-            : 'No winners this race — nobody bet on the winning horse!';
-          resultsEmbed.addFields({ name: '🎊 Winners', value: noWinnerMsg });
+          const loserMentions = bets.map(b => `<@${b.user_id}>`).join(', ');
+          const taunt = isSoloRace
+            ? `🏠 **The house wins!** Your horse didn't cross the finish line first. Better luck next time, ${loserMentions}!`
+            : `🏠 **The house wins!** Nobody picked the winning horse. Better luck next time, ${loserMentions}!`;
+          resultsEmbed.addFields({ name: '🎊 Winners', value: taunt });
         }
 
         // Prize pool + house cut breakdown — always show
@@ -528,13 +529,11 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
             else mentionContent += `\n⚠️ Payout processing issue — check bot logs.`;
           }
         } else {
-          if (isSoloRace) {
-            const soloUser = bets[0].user_id;
-            mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n🏠 **Solo Race vs the House** — <@${soloUser}>, the house wins this time!`;
-          } else {
-            mentionContent = '🏇 **HORSE RACE RESULTS!** — No winners this race.';
-          }
-          if (isPotMode && houseCut > 0) mentionContent += `\n🏠 House retains ${houseCut.toFixed(4)} ${event.currency}.`;
+          const loserMentions = bets.map(b => `<@${b.user_id}>`).join(', ');
+          mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
+            `🏠 **The house wins!** Nobody picked the winning horse.\n` +
+            `Better luck next time ${loserMentions}! 💸`;
+          if (isPotMode && totalPot > 0) mentionContent += `\n🏠 House takes the pot: **${totalPot.toFixed(4)} ${event.currency}**`;
         }
 
         console.log(`[HorseRace] Sending results: paymentResults=${JSON.stringify(paymentResults)}`);
