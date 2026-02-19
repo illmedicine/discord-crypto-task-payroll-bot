@@ -254,9 +254,9 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     const isPotMode = event.mode === 'pot';
     const hasEntryFee = isPotMode && (event.entry_fee || 0) > 0;
 
-    // ======== CANCELLATION: not enough players ========
-    if (bets.length < event.min_players) {
-      console.log(`[GamblingProcessor] Event #${eventId} cancelled — ${bets.length}/${event.min_players} players`);
+    // ======== CANCELLATION: only if zero players joined ========
+    if (bets.length === 0) {
+      console.log(`[GamblingProcessor] Event #${eventId} cancelled — no players joined`);
 
       // Refund participants if entry fees were committed
       let refundResults = [];
@@ -308,6 +308,8 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       syncStatusToBackend(eventId, 'cancelled', event.guild_id);
       return;
     }
+
+    const isSoloRace = bets.length === 1;
 
     // ======== RACE: pick a random winning horse ========
     const numSlots = slots.length || event.num_slots;
