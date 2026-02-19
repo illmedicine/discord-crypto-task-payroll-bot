@@ -535,6 +535,17 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
             { name: '🏠 House Cut (10%)', value: `${houseCut.toFixed(4)} ${event.currency}`, inline: true },
             { name: '🎁 Winner Pool (90%)', value: `${winnerPool.toFixed(4)} ${event.currency}`, inline: true },
           );
+        } else if (!isPotMode && totalPot > 0) {
+          // House-funded mode
+          if (winnerUserIds.length > 0) {
+            resultsEmbed.addFields(
+              { name: '🎁 House-Funded Prize', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
+            );
+          } else {
+            resultsEmbed.addFields(
+              { name: '🏠 House-Funded Prize', value: `${totalPot.toFixed(4)} ${event.currency} — **KEPT BY THE HOUSE!** 💰`, inline: true },
+            );
+          }
         } else if (totalPot > 0) {
           resultsEmbed.addFields(
             { name: '🎁 Prize Pool', value: `${totalPot.toFixed(4)} ${event.currency}`, inline: true },
@@ -608,6 +619,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           }
           if (isPotMode && houseCut > 0) mentionContent += `\n\n🏦 House retains **${houseCut.toFixed(4)} ${event.currency}** — the treasury grows! 💰`;
           if (isPotMode && totalPot > 0 && houseCut <= 0) mentionContent += `\n\n🏦 All entry fees stay in the house pot!`;
+          if (!isPotMode && totalPot > 0) mentionContent += `\n\n🏠💰 The house funded **${totalPot.toFixed(4)} ${event.currency}** — and keeps every last coin! The house ALWAYS eats! 🍽️`;
         }
 
         console.log(`[HorseRace] Sending results: paymentResults=${JSON.stringify(paymentResults)}`);
