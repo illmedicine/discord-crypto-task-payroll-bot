@@ -179,23 +179,66 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
     const winnerPreset = HORSE_PRESETS[winIdx] || HORSE_PRESETS[0];
     const winnerName = slots[winIdx]?.label || winnerPreset.name;
 
-    // Race commentary for extra immersion
+    // ── LIVE RACE ANNOUNCER ──
+    // Sort horses by position (leader first) for commentary
+    const ranked = slots.map((s, i) => ({
+      name: s.label || (HORSE_PRESETS[i] || HORSE_PRESETS[0]).name,
+      pos: positions[i],
+      idx: i,
+    })).sort((a, b) => b.pos - a.pos);
+
+    const leader = ranked[0];
+    const second = ranked[1];
+    const last = ranked[ranked.length - 1];
+    const leaderGap = second ? leader.pos - second.pos : 0;
+
+    // Build announcer call with horse names — changes tone as race progresses
     let commentary = '';
-    if (frame <= 3) commentary = '🏇 The horses are finding their stride...';
-    else if (frame <= 6) commentary = '🔥 They\'re heading into the first turn!';
-    else if (frame <= 9) commentary = '⚡ Down the backstretch they go!';
-    else if (frame <= 12) commentary = '🌪️ Into the final turn — it\'s getting tight!';
-    else if (frame <= 14) commentary = '💨 THE HOME STRETCH! Who wants it more?!';
-    else if (frame < FRAMES) commentary = '🏁 HERE THEY COME! It\'s a photo finish!';
+    if (frame <= 2) {
+      commentary = `🎙️ *"AND THEY'RE OFF! **${leader.name}** jumps out to the early lead! ` +
+        `**${second?.name}** right there in second! The field is bunching up!"*`;
+    } else if (frame <= 5) {
+      if (leaderGap >= 3) {
+        commentary = `🎙️ *"**${leader.name}** is pulling away from the pack! ` +
+          `**${second?.name}** trying to keep pace! **${last.name}** falling behind!"*`;
+      } else {
+        commentary = `🎙️ *"It's **${leader.name}** by a nose over **${second?.name}**! ` +
+          `They're neck and neck heading into the first turn!"*`;
+      }
+    } else if (frame <= 8) {
+      commentary = `🎙️ *"Around the first turn — **${leader.name}** holds the lead! ` +
+        `**${second?.name}** is making a move on the outside! ` +
+        `**${ranked[2]?.name || last.name}** looking for an opening!"*`;
+    } else if (frame <= 11) {
+      if (leaderGap <= 1) {
+        commentary = `🎙️🔥 *"DOWN THE BACKSTRETCH! **${leader.name}** and **${second?.name}** ` +
+          `are DEAD EVEN! This is INCREDIBLE! Who's gonna blink first?!"*`;
+      } else {
+        commentary = `🎙️🔥 *"Down the backstretch — **${leader.name}** leads by ${leaderGap}! ` +
+          `**${second?.name}** is digging deep! **${last.name}** making a late charge!"*`;
+      }
+    } else if (frame <= 13) {
+      commentary = `🎙️⚡ *"INTO THE FINAL TURN! **${leader.name}** still leads! ` +
+        `**${second?.name}** is CHARGING hard! THIS IS GONNA BE CLOSE! ` +
+        `The crowd is ON THEIR FEET!"*`;
+    } else if (frame < FRAMES) {
+      commentary = `🎙️💥 *"THE HOME STRETCH!! **${leader.name}** — **${second?.name}** — ` +
+        `HERE THEY COME!! IT'S A PHOTO FINISH!! ` +
+        `WHO WANTS IT MORE?! THE CROWD IS GOING WILD!!"*`;
+    }
 
     try {
       if (isFinished) {
+        const finishCall = `🎙️🏆 *"AND THE WINNER IS... **${winnerName}**!! ` +
+          `WHAT. A. RACE!! **${winnerName}** crosses the finish line! ` +
+          `${second ? `**${second.name}** finishes second! ` : ''}` +
+          `WHAT A SHOW, LADIES AND GENTLEMEN!!"*`;
         await raceMsg.edit({
-          content: `🏇 **Horse Race #${eventId}** — 🏁 **FINISH!** 🏆 **${winnerName}** WINS THE RACE! 🏆\n${frameContent}`
+          content: `🏇 **Horse Race #${eventId}** — 🏁 **FINISH!** 🏆 **${winnerName}** WINS THE RACE! 🏆\n\n${finishCall}\n${frameContent}`
         });
       } else {
         await raceMsg.edit({
-          content: `🏇 **Horse Race #${eventId}** — ${commentary} (${frame}/${FRAMES}) 🏁\n${frameContent}`
+          content: `🏇 **Horse Race #${eventId}** (${frame}/${FRAMES}) 🏁\n\n${commentary}\n${frameContent}`
         });
       }
     } catch (editErr) {
