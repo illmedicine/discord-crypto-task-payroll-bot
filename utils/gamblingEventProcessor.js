@@ -177,7 +177,7 @@ async function sendPayment(crypto, recipientAddress, solAmount, guildWallet) {
     // Validate keypair before sending
     const keypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
     if (!keypair) {
-      return { success: false, error: 'Treasury private key is invalid — check DCB Event Manager → Treasury' };
+      return { success: false, error: 'Treasury private key is invalid — check [DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/) → Treasury' };
     }
 
     // Pre-check treasury balance

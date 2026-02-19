@@ -84,7 +84,7 @@ module.exports = {
             '• The **address** is your Solana wallet public address\n' +
             '• The **secret** is your wallet\'s private key (base58) — needed so the bot can sign payment transactions\n' +
             '   → In Phantom: Settings → Security & Privacy → Show Secret Key\n\n' +
-            '💡 You can also set this up via **DCB Event Manager** (web dashboard) → Treasury.'
+            '💡 You can also set this up via **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** → Treasury.'
         });
       }
 
@@ -124,7 +124,7 @@ module.exports = {
             `\`\`\`\n/wallet connect address:${guildWallet.wallet_address} secret:YOUR_PRIVATE_KEY\n\`\`\`\n` +
             `• In Phantom: Settings → Security & Privacy → Show Secret Key\n` +
             `• The key is ~88 characters (base58) — it is stored securely and never displayed\n\n` +
-            `💡 Or go to **DCB Event Manager** → Treasury → 🔑 Save Key`
+            `💡 Or go to **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** → Treasury → 🔑 Save Key`
         });
       }
 
@@ -145,7 +145,7 @@ module.exports = {
         return interaction.editReply({
           content: `❌ Treasury wallet private key is invalid.${hint}` +
             `**How to fix:**\n` +
-            `1. Go to **DCB Event Manager** → Treasury\n` +
+            `1. Go to **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** → Treasury\n` +
             `2. Enter your wallet's **private key** (not the address!)\n` +
             `   • In Phantom: Settings → Security & Privacy → Show Secret Key\n` +
             `   • The secret key is ~88 characters long (base58)\n` +
@@ -165,7 +165,7 @@ module.exports = {
             `🔑 **Key derives:** \`${treasuryAddress.slice(0,6)}...${treasuryAddress.slice(-4)}\`\n\n` +
             `**How to fix:**\n` +
             `1. Use \`/wallet connect\` with the **correct** address + private key\n` +
-            `2. Or go to **DCB Event Manager** → Treasury → re-enter the correct private key`
+            `2. Or go to **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** → Treasury → re-enter the correct private key`
         });
       }
 

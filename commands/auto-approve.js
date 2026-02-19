@@ -81,7 +81,7 @@ module.exports = {
     const guildWallet = await getGuildWalletWithFallback(guildId);
     if (!guildWallet) {
       return interaction.editReply({
-        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` or **DCB Event Manager** to set up the treasury wallet.'
+        content: '❌ This server does not have a treasury wallet configured yet.\n\n**Server Owner:** Use `/wallet connect` or **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** to set up the treasury wallet.'
       });
     }
 
