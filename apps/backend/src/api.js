@@ -2013,6 +2013,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
         return res.status(400).json({ error: 'invalid_wallet_address' })
       }
+      // Reject if wallet_secret looks like a public address (not a real secret key)
+      if (wallet_secret && wallet_secret.trim() === wallet_address.trim()) {
+        return res.status(400).json({ error: 'secret_is_address', message: 'The private key you entered is your public wallet address. Please enter your actual secret/private key (~88 chars).' })
+      }
+      if (wallet_secret && !wallet_secret.trim().startsWith('[') && wallet_secret.trim().length >= 32 && wallet_secret.trim().length <= 50) {
+        return res.status(400).json({ error: 'secret_too_short', message: 'That looks like a public wallet address (32-44 chars), not a private key. A Solana secret key is ~88 characters in base58. Export from Phantom → Settings → Security → Show Secret Key.' })
+      }
       await db.run(
         `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, wallet_secret, configured_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -2046,7 +2053,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (updates.budget_spent !== undefined) { fields.push('budget_spent = ?'); params.push(Number(updates.budget_spent)) }
       if (updates.budget_currency !== undefined) { fields.push('budget_currency = ?'); params.push(updates.budget_currency) }
       if (updates.network !== undefined) { fields.push('network = ?'); params.push(updates.network) }
-      if (updates.wallet_secret !== undefined) { fields.push('wallet_secret = ?'); params.push(updates.wallet_secret) }
+      if (updates.wallet_secret !== undefined) {
+        // Validate wallet_secret is not a public address
+        const existingWallet = await db.get('SELECT wallet_address FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+        if (existingWallet && updates.wallet_secret === existingWallet.wallet_address) {
+          return res.status(400).json({ error: 'secret_is_address', message: 'The private key you entered is your public wallet address. Please enter your actual secret/private key (~88 chars).' })
+        }
+        if (updates.wallet_secret && !updates.wallet_secret.trim().startsWith('[') && updates.wallet_secret.trim().length >= 32 && updates.wallet_secret.trim().length <= 50) {
+          return res.status(400).json({ error: 'secret_too_short', message: 'That looks like a public wallet address (32-44 chars), not a private key. A Solana secret key is ~88 characters in base58. Export from Phantom → Settings → Security → Show Secret Key.' })
+        }
+        fields.push('wallet_secret = ?'); params.push(updates.wallet_secret)
+      }
       if (fields.length) {
         fields.push('updated_at = CURRENT_TIMESTAMP')
         params.push(req.guild.id)

@@ -27,17 +27,46 @@ const getWallet = () => {
   }
 };
 
+/**
+ * Detect if a value looks like a Solana public address (not a secret key).
+ * Public keys are 32 bytes, secret keys are 64 bytes.
+ */
+const looksLikePublicKey = (value) => {
+  if (!value || typeof value !== 'string') return false;
+  try {
+    const decoded = bs58.decode(value.trim());
+    return decoded.length === 32; // 32 bytes = public key, not secret
+  } catch {
+    return false;
+  }
+};
+
 // Create Keypair from a base58-encoded secret key (or JSON byte array)
 const getKeypairFromSecret = (secret) => {
   try {
     if (!secret) return null;
+
+    // Guard: reject public addresses mistakenly stored as secrets
+    if (typeof secret === 'string' && looksLikePublicKey(secret)) {
+      console.error('[CRYPTO] wallet_secret looks like a PUBLIC ADDRESS (32 bytes), not a private key (64 bytes). Please enter the actual secret key.');
+      return null;
+    }
+
     // Support JSON byte array format: [1,2,3,...] (e.g. from Solana keypair file)
     if (typeof secret === 'string' && secret.trim().startsWith('[')) {
       const arr = JSON.parse(secret);
+      if (arr.length === 32) {
+        console.error('[CRYPTO] JSON array is 32 bytes (public key), not 64 bytes (secret key). Please provide the full secret key.');
+        return null;
+      }
       return Keypair.fromSecretKey(new Uint8Array(arr));
     }
     // Support raw Uint8Array / array
     if (Array.isArray(secret) || secret instanceof Uint8Array) {
+      if (secret.length === 32) {
+        console.error('[CRYPTO] Array is 32 bytes (public key), not 64 bytes (secret key).');
+        return null;
+      }
       return Keypair.fromSecretKey(new Uint8Array(secret));
     }
     // Default: base58-encoded string

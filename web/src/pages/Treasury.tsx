@@ -153,6 +153,16 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
   const connectWallet = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!guildId || !inputAddr) return
+    // Client-side guard: reject if secret field contains the wallet address
+    const trimmedSecret = inputSecret.trim()
+    if (trimmedSecret && trimmedSecret === inputAddr.trim()) {
+      alert('⚠️ The Private Key field contains your PUBLIC wallet address!\n\nYour private key is ~88 characters.\nExport from Phantom → Settings → Security → Show Secret Key.')
+      return
+    }
+    if (trimmedSecret && trimmedSecret.length >= 32 && trimmedSecret.length <= 44 && !trimmedSecret.startsWith('[')) {
+      alert('⚠️ The value in the Private Key field looks like a public address (32-44 chars), not a private key.\n\nA Solana private key is ~88 characters in base58 or a JSON array of 64 numbers.\n\nExport from Phantom → Settings → Security → Show Secret Key.')
+      return
+    }
     setSaving(true)
     try {
       await api.post(`/admin/guilds/${guildId}/wallet`, {
@@ -362,14 +372,25 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
                   className="btn btn-primary btn-sm"
                   disabled={savingSecret || !secretInput.trim()}
                   onClick={async () => {
+                    const trimmed = secretInput.trim()
+                    // Client-side guard: reject if it matches the wallet address
+                    if (wallet && trimmed === wallet.wallet_address) {
+                      alert('⚠️ That is your PUBLIC wallet address, not your private key!\n\nYour private key is ~88 characters.\nExport from Phantom → Settings → Security → Show Secret Key.')
+                      return
+                    }
+                    // Warn if it looks like a public key length (32-44 chars)
+                    if (trimmed.length >= 32 && trimmed.length <= 44 && !trimmed.startsWith('[')) {
+                      alert('⚠️ That looks like a public address (32-44 chars), not a private key.\n\nA Solana private key is ~88 characters in base58 or a JSON array of 64 numbers.\n\nExport from Phantom → Settings → Security → Show Secret Key.')
+                      return
+                    }
                     setSavingSecret(true)
                     try {
-                      await api.patch(`/admin/guilds/${guildId}/wallet`, { wallet_secret: secretInput.trim() })
+                      await api.patch(`/admin/guilds/${guildId}/wallet`, { wallet_secret: trimmed })
                       setSecretInput('')
                       await load()
                       alert('✅ Private key saved! Auto-payouts are now enabled.')
                     } catch (err: any) {
-                      alert(err?.response?.data?.error || 'Failed to save private key.')
+                      alert(err?.response?.data?.message || err?.response?.data?.error || 'Failed to save private key.')
                     } finally {
                       setSavingSecret(false)
                     }

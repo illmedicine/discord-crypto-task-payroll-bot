@@ -123,8 +123,25 @@ module.exports = {
       const treasuryKeypair = crypto.getKeypairFromSecret(treasurySecret);
       if (!treasuryKeypair) {
         console.error(`[PAY] Invalid treasury keypair for guild ${guildId}, secret length=${treasurySecret?.length}, first4=${treasurySecret?.slice(0,4)}...`);
+        // Detect if the stored "secret" is actually the public address
+        const isActuallyAddress = treasurySecret === guildWallet.wallet_address;
+        const looksLikeAddress = treasurySecret?.length >= 32 && treasurySecret?.length <= 44;
+        let hint = '';
+        if (isActuallyAddress) {
+          hint = `\n\n⚠️ **The stored private key is actually your PUBLIC wallet address!**\n` +
+            `You entered your wallet address (\'${treasurySecret.slice(0,6)}...\') in the private key field.\n\n`;
+        } else if (looksLikeAddress) {
+          hint = `\n\n⚠️ **The stored key is ${treasurySecret.length} characters — that looks like a public address, not a private key.**\n` +
+            `A Solana private key is ~88 characters (base58) or a JSON array of 64 numbers.\n\n`;
+        }
         return interaction.editReply({
-          content: '❌ Treasury wallet private key is invalid. Please reconnect the wallet with a valid key.'
+          content: `❌ Treasury wallet private key is invalid.${hint}` +
+            `**How to fix:**\n` +
+            `1. Go to **DCB Event Manager** → Treasury\n` +
+            `2. Enter your wallet's **private key** (not the address!)\n` +
+            `   • In Phantom: Settings → Security & Privacy → Show Secret Key\n` +
+            `   • The secret key is ~88 characters long (base58)\n` +
+            `3. Click **🔑 Save Key**`
         });
       }
 
