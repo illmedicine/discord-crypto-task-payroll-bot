@@ -317,7 +317,7 @@ module.exports = {
     }
 
     const betAmount = requiresPayment ? entryFee : 0;
-    const paymentStatus = requiresPayment ? 'committed' : 'none';
+    const paymentStatus = requiresPayment ? 'pending' : 'none';
 
     console.log(`[GamblingEvent] About to joinGamblingEvent: eventId=${eventId}, slot=${slotNumber}, betAmount=${betAmount}, paymentStatus=${paymentStatus}, wallet=${userWalletAddress}`);
     await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, paymentStatus, userWalletAddress);
@@ -330,11 +330,47 @@ module.exports = {
     const chosenSlot = slots.find(s => s.slot_number === slotNumber);
     const newCount = event.current_players + 1;
 
-    const confirmMsg = requiresPayment
-      ? `🏇 **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n💰 Entry fee: **${entryFee} ${event.currency}** committed from your wallet.\n👥 Riders: ${newCount}/${event.max_players}\n\n⚠️ Your entry fee is committed. Payouts go to winners. Refunds issued if race is cancelled.`
-      : `🏇 **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n👥 Riders: ${newCount}/${event.max_players}`;
+    if (requiresPayment) {
+      // Pot mode: participant must send entry fee to treasury manually, then verify
+      const guildWallet = await getGuildWalletWithFallback(interaction.guildId);
+      const treasuryAddr = guildWallet?.wallet_address || '(not configured)';
 
-    await interaction.editReply({ content: confirmMsg });
+      // Convert entry fee to SOL if needed
+      let solAmountText = `${entryFee} SOL`;
+      if (event.currency === 'USD') {
+        const solPrice = await crypto.getSolanaPrice();
+        if (solPrice) {
+          const solEquiv = entryFee / solPrice;
+          solAmountText = `${solEquiv.toFixed(6)} SOL (≈ ${entryFee} USD @ $${solPrice})`;
+        } else {
+          solAmountText = `${entryFee} ${event.currency} worth of SOL (price fetch failed — send equivalent SOL)`;
+        }
+      }
+
+      const verifyButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`gamble_verify_${eventId}_${interaction.user.id}`)
+          .setLabel('✅ Verify Payment')
+          .setStyle(ButtonStyle.Success)
+      );
+
+      const payMsg = `🏇 **Horse picked: ${chosenSlot?.label || `Horse #${slotNumber}`}**\n\n` +
+        `💰 **Entry Fee Required: ${solAmountText}**\n\n` +
+        `📤 **Send the entry fee to the treasury wallet:**\n` +
+        `\`\`\`\n${treasuryAddr}\n\`\`\`\n` +
+        `**Steps:**\n` +
+        `1️⃣ Open your wallet app (Phantom, Solflare, etc.)\n` +
+        `2️⃣ Send **${solAmountText}** to the address above\n` +
+        `3️⃣ Wait for the transaction to confirm (~30 seconds)\n` +
+        `4️⃣ Click **✅ Verify Payment** below\n\n` +
+        `👥 Riders: ${newCount}/${event.max_players}\n` +
+        `⏳ Your entry is **pending** until payment is verified.`;
+
+      await interaction.editReply({ content: payMsg, components: [verifyButton] });
+    } else {
+      const confirmMsg = `🏇 **Bet placed!** You picked **${chosenSlot?.label || `Horse #${slotNumber}`}**.\n👥 Riders: ${newCount}/${event.max_players}`;
+      await interaction.editReply({ content: confirmMsg });
+    }
 
     // ---- Update the original event embed with new rider count ----
     try {
@@ -386,6 +422,124 @@ module.exports = {
       await processGamblingEvent(eventId, interaction.client, 'full');
     }
   },
+
+  // ---- Button handler: verify entry fee payment ----
+  async handleVerifyPayment(interaction) {
+    // customId format: gamble_verify_{eventId}_{userId}
+    const parts = interaction.customId.split('_');
+    const eventId = Number(parts[2]);
+    const betUserId = parts[3];
+
+    console.log(`[GamblingVerify] Verify payment: eventId=${eventId}, betUser=${betUserId}, clicker=${interaction.user.id}`);
+
+    // Only the bettor can verify their own payment
+    if (interaction.user.id !== betUserId) {
+      return interaction.editReply({ content: '❌ Only the person who placed this bet can verify their payment.' });
+    }
+
+    const event = await getGamblingEventWithFallback(eventId);
+    if (!event) return interaction.editReply({ content: '❌ Horse race event not found.' });
+    if (event.status !== 'active') return interaction.editReply({ content: '❌ This horse race is no longer active.' });
+
+    const bet = await db.getGamblingEventBet(eventId, interaction.user.id);
+    if (!bet) return interaction.editReply({ content: '❌ No bet found for you in this event.' });
+
+    if (bet.payment_status === 'committed') {
+      return interaction.editReply({ content: '✅ Your entry fee has already been verified and committed!' });
+    }
+
+    if (bet.payment_status !== 'pending') {
+      return interaction.editReply({ content: `❌ Unexpected payment status: ${bet.payment_status}` });
+    }
+
+    const guildWallet = await getGuildWalletWithFallback(event.guild_id);
+    if (!guildWallet || !guildWallet.wallet_address) {
+      return interaction.editReply({ content: '❌ Treasury wallet not configured. Contact server admin.' });
+    }
+
+    const userData = await db.getUser(interaction.user.id);
+    const senderAddr = userData?.solana_address || bet.wallet_address;
+    if (!senderAddr) {
+      return interaction.editReply({ content: '❌ No wallet address found for your account.' });
+    }
+
+    // Figure out the required SOL amount
+    let requiredSol = bet.bet_amount || event.entry_fee || 0;
+    if (event.currency === 'USD') {
+      const solPrice = await crypto.getSolanaPrice();
+      if (solPrice) {
+        requiredSol = (bet.bet_amount || event.entry_fee) / solPrice;
+      } else {
+        return interaction.editReply({ content: '❌ Unable to fetch SOL price to verify USD entry. Please try again in a moment.' });
+      }
+    }
+
+    // Allow 2% tolerance for rounding/fees
+    const minRequired = requiredSol * 0.98;
+
+    // Get existing verified signatures for this event to exclude
+    const allBets = await db.getGamblingEventBets(eventId);
+    const excludeSigs = allBets
+      .filter(b => b.entry_tx_signature)
+      .map(b => b.entry_tx_signature);
+
+    console.log(`[GamblingVerify] Checking on-chain: from=${senderAddr.slice(0,8)}... to=${guildWallet.wallet_address.slice(0,8)}... minSol=${minRequired.toFixed(6)}`);
+
+    const result = await crypto.verifyIncomingTransfer(
+      senderAddr,
+      guildWallet.wallet_address,
+      minRequired,
+      { maxAge: 60 * 60 * 1000, limit: 30, excludeSignatures: excludeSigs } // 1 hour lookback
+    );
+
+    if (result.verified) {
+      // Update bet to committed
+      await db.updateGamblingBetPayment(eventId, interaction.user.id, 'committed', 'entry', result.signature);
+      console.log(`[GamblingVerify] ✅ Payment verified for user ${interaction.user.id} on event #${eventId}: ${result.signature}`);
+
+      // Sync to backend
+      syncBetToBackend({
+        eventId,
+        action: 'verify',
+        userId: interaction.user.id,
+        guildId: event.guild_id,
+        paymentStatus: 'committed',
+        entryTxSignature: result.signature,
+      });
+
+      const slots = await db.getGamblingEventSlots(eventId);
+      const chosenSlot = slots.find(s => s.slot_number === bet.chosen_slot);
+
+      await interaction.editReply({
+        content: `✅ **Payment Verified!** 🎉\n\n` +
+          `🏇 Horse: **${chosenSlot?.label || `Horse #${bet.chosen_slot}`}**\n` +
+          `💰 Entry fee: **${result.amount.toFixed(6)} SOL** received\n` +
+          `🔗 [View Transaction](https://solscan.io/tx/${result.signature})\n\n` +
+          `Your bet is now **committed**. Good luck! 🍀`,
+        components: [] // Remove verify button
+      });
+    } else {
+      // Build retry button
+      const verifyButton = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`gamble_verify_${eventId}_${interaction.user.id}`)
+          .setLabel('🔄 Retry Verification')
+          .setStyle(ButtonStyle.Success)
+      );
+
+      await interaction.editReply({
+        content: `⏳ **Payment not found yet.**\n\n` +
+          `🔍 ${result.reason}\n\n` +
+          `**Make sure you:**\n` +
+          `• Sent at least **${requiredSol.toFixed(6)} SOL** to:\n` +
+          `\`\`\`\n${guildWallet.wallet_address}\n\`\`\`\n` +
+          `• Sent from your connected wallet: \`${senderAddr.slice(0,6)}...${senderAddr.slice(-4)}\`\n` +
+          `• Waited for the transaction to confirm (~30 sec)\n\n` +
+          `Click **🔄 Retry Verification** after sending.`,
+        components: [verifyButton]
+      });
+    }
+  },
 };
 
 // ---- Helper: build embed with rules & T&Cs ----
@@ -413,17 +567,18 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
     desc += `• Entry fee: **${entryFee} ${currency}** per rider\n`;
     desc += `• You MUST connect your wallet first: \`/user-wallet connect\`\n`;
     desc += `• Your wallet must have at least **${entryFee} ${currency}** available\n`;
-    desc += `• Entry fee is committed when you pick your horse\n`;
+    desc += `• Click a horse → send entry fee to treasury → verify payment\n`;
 
     desc += `\n**🏆 Prize Distribution:**\n`;
-    desc += `• Total pot = all entry fees combined\n`;
+    desc += `• Total pot = all verified entry fees combined\n`;
     desc += `• **90%** of pot split evenly among winner(s)\n`;
     desc += `• **10%** retained by the house (server treasury)\n`;
 
     desc += `\n**🔄 Refund Policy:**\n`;
-    desc += `• If the race is cancelled (no riders join), all entries are refunded\n`;
+    desc += `• If the race is cancelled, all verified entries are refunded\n`;
     desc += `• Solo rider? You race against the house! 🏠\n`;
     desc += `• Refunds are sent to your connected wallet address\n`;
+    desc += `• Unverified (pending) entries are not refunded\n`;
   } else {
     desc += `\n**🏆 Prize Distribution:**\n`;
     if (isPotMode) {

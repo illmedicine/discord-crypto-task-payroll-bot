@@ -201,6 +201,74 @@ const getSolanaPrice = async () => {
   }
 };
 
+/**
+ * Verify that a transfer of at least `minAmountSol` was sent
+ * from `senderAddress` to `recipientAddress` on-chain.
+ * Checks the last N confirmed signatures on the recipient's account.
+ *
+ * Returns: { verified: true, signature, amount } or { verified: false, reason }
+ */
+const verifyIncomingTransfer = async (senderAddress, recipientAddress, minAmountSol, opts = {}) => {
+  try {
+    const { maxAge = 30 * 60 * 1000, limit = 20, excludeSignatures = [] } = opts;
+    const recipientPubkey = new PublicKey(recipientAddress);
+    const senderPubkey = new PublicKey(senderAddress);
+    const minLamports = Math.floor(minAmountSol * LAMPORTS_PER_SOL);
+    const cutoff = Date.now() - maxAge;
+
+    console.log(`[verifyTransfer] Looking for >= ${minAmountSol} SOL from ${senderAddress.slice(0,6)}... to ${recipientAddress.slice(0,6)}...`);
+
+    // Fetch recent confirmed signatures for the recipient
+    const signatures = await connection.getSignaturesForAddress(recipientPubkey, { limit });
+    if (!signatures || signatures.length === 0) {
+      return { verified: false, reason: 'No recent transactions found on treasury wallet' };
+    }
+
+    for (const sigInfo of signatures) {
+      // Skip if too old
+      if (sigInfo.blockTime && sigInfo.blockTime * 1000 < cutoff) continue;
+      // Skip if errored
+      if (sigInfo.err) continue;
+      // Skip already-used signatures
+      if (excludeSignatures.includes(sigInfo.signature)) continue;
+
+      try {
+        const tx = await connection.getParsedTransaction(sigInfo.signature, { maxSupportedTransactionVersion: 0 });
+        if (!tx || !tx.meta || tx.meta.err) continue;
+
+        // Look through instructions for a system transfer from sender to recipient
+        const instructions = tx.transaction?.message?.instructions || [];
+        for (const ix of instructions) {
+          if (ix.program === 'system' && ix.parsed?.type === 'transfer') {
+            const info = ix.parsed.info;
+            if (
+              info.source === senderPubkey.toString() &&
+              info.destination === recipientPubkey.toString() &&
+              info.lamports >= minLamports
+            ) {
+              const foundAmount = info.lamports / LAMPORTS_PER_SOL;
+              console.log(`[verifyTransfer] ✅ MATCH: sig=${sigInfo.signature.slice(0,12)}... amount=${foundAmount} SOL`);
+              return {
+                verified: true,
+                signature: sigInfo.signature,
+                amount: foundAmount,
+                lamports: info.lamports
+              };
+            }
+          }
+        }
+      } catch (txErr) {
+        console.warn(`[verifyTransfer] Failed to parse tx ${sigInfo.signature.slice(0,12)}:`, txErr.message);
+      }
+    }
+
+    return { verified: false, reason: `No matching transfer of >= ${minAmountSol} SOL found in last ${limit} transactions` };
+  } catch (error) {
+    console.error('[verifyTransfer] Error:', error.message);
+    return { verified: false, reason: error.message };
+  }
+};
+
 module.exports = {
   connection,
   getWallet,
@@ -210,5 +278,6 @@ module.exports = {
   getBalance,
   isValidSolanaAddress,
   getSolanaPrice,
+  verifyIncomingTransfer,
   LAMPORTS_PER_SOL
 };

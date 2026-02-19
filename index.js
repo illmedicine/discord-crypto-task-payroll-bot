@@ -519,6 +519,34 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
+    // Handle gambling event entry fee verification
+    if (interaction.customId.startsWith('gamble_verify_')) {
+      console.log(`[GambleVerify] 🔍 Verify button pressed: ${interaction.customId}`);
+      try {
+        await interaction.deferReply({ ephemeral: true });
+      } catch (deferErr) {
+        console.error(`[GambleVerify] ❌ deferReply FAILED:`, deferErr.message);
+        return;
+      }
+
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleVerifyPayment) {
+        try {
+          await gamblingEventCommand.handleVerifyPayment(interaction);
+        } catch (error) {
+          console.error('❌ Error handling verify payment:', error);
+          try {
+            await interaction.editReply({ content: `❌ Error verifying payment: ${error?.message || 'Unknown error'}` });
+          } catch (_) {}
+        }
+      } else {
+        try {
+          await interaction.editReply({ content: '❌ Verification system temporarily unavailable.' });
+        } catch (_) {}
+      }
+      return;
+    }
+
     // Handle contest enter button (web-published)
     if (interaction.customId.startsWith('contest_enter_')) {
       try {
