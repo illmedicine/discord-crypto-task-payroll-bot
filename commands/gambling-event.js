@@ -283,7 +283,7 @@ module.exports = {
       const userData = await db.getUser(interaction.user.id);
       if (!userData || !userData.solana_address) {
         return interaction.editReply({
-          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect address:YOUR_ADDRESS private-key:YOUR_KEY\` to connect your wallet and private key.`
+          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\` to connect your wallet.\n\nYour address will be auto-derived from the key.`
         });
       }
 
@@ -291,7 +291,7 @@ module.exports = {
       if (!userData.wallet_secret) {
         return interaction.editReply({
           content: `❌ **Private Key Required!**\n\nPot-mode horse races require your Solana private key to pay the entry fee.\n\n` +
-            `🔑 Use \`/user-wallet update private-key:YOUR_PRIVATE_KEY\` to save your key.\n\n` +
+            `🔑 Use \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\` to save your key.\n\n` +
             `Your wallet address: \`${userData.solana_address}\``
         });
       }
@@ -409,7 +409,7 @@ module.exports = {
     const userData = await db.getUser(interaction.user.id);
     if (!userData || !userData.wallet_secret) {
       return interaction.editReply({
-        content: '❌ **Private Key Required!** Use `/user-wallet update private-key:YOUR_KEY` to save your key, then try again.',
+        content: '❌ **Private Key Required!** Use `/user-wallet connect private-key:YOUR_KEY` to save your key, then try again.',
         embeds: [], components: []
       });
     }

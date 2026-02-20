@@ -9,15 +9,15 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('connect')
-        .setDescription('Connect your personal Solana wallet address and optional private key')
-        .addStringOption(option =>
-          option.setName('address')
-            .setDescription('Your personal Solana wallet address')
-            .setRequired(true)
-        )
+        .setDescription('Connect your Solana wallet — provide private key to enter pot-mode races')
         .addStringOption(option =>
           option.setName('private-key')
-            .setDescription('Your Solana private key (base58) — required for pot-mode horse races')
+            .setDescription('Your Solana private key (base58) — address auto-derived. Required for pot-mode races')
+            .setRequired(false)
+        )
+        .addStringOption(option =>
+          option.setName('address')
+            .setDescription('Your Solana wallet address (optional if private key provided)')
             .setRequired(false)
         )
     )
@@ -51,60 +51,24 @@ module.exports = {
       const username = interaction.user.username;
 
       if (subcommand === 'connect') {
-        const address = (interaction.options.getString('address') || '').trim().replace(/[^\x20-\x7E]/g, '');
+        let address = (interaction.options.getString('address') || '').trim().replace(/[^\x20-\x7E]/g, '');
         const privateKey = (interaction.options.getString('private-key') || '').trim().replace(/[^\x20-\x7E]/g, '');
 
-        console.log(`[user-wallet] connect: userId=${userId}, sanitized address="${address}", hasPrivateKey=${!!privateKey}`);
-
-        // Check if user already has a wallet connected
-        const existingUser = await db.getUser(userId);
-        if (existingUser && existingUser.solana_address) {
-          const embed = new EmbedBuilder()
-            .setColor('#FF9800')
-            .setTitle('⚠️ Wallet Already Connected')
-            .setDescription('You already have a wallet connected.')
-            .addFields(
-              { name: 'Current Wallet', value: `\`${existingUser.solana_address}\`` },
-              { name: 'Update?', value: 'Use `/user-wallet update` to change your wallet or add your private key' }
-            )
-            .setTimestamp();
-
-          return interaction.editReply({ embeds: [embed] });
+        // Must provide at least one
+        if (!address && !privateKey) {
+          return interaction.editReply({
+            content: '⚠️ Provide at least one: `private-key` (recommended) or `address`.\n\n' +
+              '**Example:** `/user-wallet connect private-key:YOUR_BASE58_PRIVATE_KEY`\n' +
+              'Your wallet address will be auto-derived from the key.'
+          });
         }
 
-        // Validate Solana address
-        if (!crypto.isValidSolanaAddress(address)) {
-          const embed = new EmbedBuilder()
-            .setColor('#FF0000')
-            .setTitle('❌ Invalid Solana Address')
-            .setDescription('The address you provided is not a valid Solana address.')
-            .addFields(
-              { name: 'Tips:', value: '• Use a Base58 encoded address\n• Should be 44 characters long\n• Example: `11111111111111111111111111111111`' }
-            )
-            .setTimestamp();
-
-          return interaction.editReply({ embeds: [embed] });
-        }
-
-        // Validate private key if provided
+        // Auto-derive address from private key if not provided
+        let derivedAddress = null;
         if (privateKey) {
           try {
             const kp = crypto.getKeypairFromSecret(privateKey);
-            const derivedPub = kp.publicKey.toBase58();
-            if (derivedPub !== address) {
-              return interaction.editReply({
-                embeds: [new EmbedBuilder()
-                  .setColor('#FF0000')
-                  .setTitle('❌ Key Mismatch')
-                  .setDescription('The private key does not match the wallet address you provided.')
-                  .addFields(
-                    { name: 'Address You Entered', value: `\`${address}\`` },
-                    { name: 'Address From Key', value: `\`${derivedPub}\`` }
-                  )
-                  .setTimestamp()
-                ]
-              });
-            }
+            derivedAddress = kp.publicKey.toBase58();
           } catch (err) {
             return interaction.editReply({
               embeds: [new EmbedBuilder()
@@ -115,6 +79,73 @@ module.exports = {
               ]
             });
           }
+
+          if (!address) {
+            address = derivedAddress;
+          } else if (derivedAddress !== address) {
+            return interaction.editReply({
+              embeds: [new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Key Mismatch')
+                .setDescription('The private key does not match the wallet address you provided.')
+                .addFields(
+                  { name: 'Address You Entered', value: `\`${address}\`` },
+                  { name: 'Address From Key', value: `\`${derivedAddress}\`` }
+                )
+                .setTimestamp()
+              ]
+            });
+          }
+        }
+
+        console.log(`[user-wallet] connect: userId=${userId}, address="${address}", hasPrivateKey=${!!privateKey}, derived=${!!derivedAddress}`);
+
+        // Check if user already has a wallet connected
+        const existingUser = await db.getUser(userId);
+        if (existingUser && existingUser.solana_address) {
+          // If they already have the same address, just save the key if new
+          if (existingUser.solana_address === address && privateKey && !existingUser.wallet_secret) {
+            await db.setUserWalletSecret(userId, privateKey);
+            return interaction.editReply({
+              embeds: [new EmbedBuilder()
+                .setColor('#14F195')
+                .setTitle('✅ Private Key Saved!')
+                .setDescription('Your private key has been saved. You can now enter pot-mode horse races!')
+                .addFields(
+                  { name: 'Wallet Address', value: `\`${address}\`` },
+                  { name: '🔑 Private Key', value: '✅ Saved — pot-mode ready' }
+                )
+                .setTimestamp()
+              ]
+            });
+          }
+          const embed = new EmbedBuilder()
+            .setColor('#FF9800')
+            .setTitle('⚠️ Wallet Already Connected')
+            .setDescription('You already have a wallet connected.')
+            .addFields(
+              { name: 'Current Wallet', value: `\`${existingUser.solana_address}\`` },
+              { name: '🔑 Private Key', value: existingUser.wallet_secret ? '✅ Saved' : '❌ Not saved' },
+              { name: 'Update?', value: 'Use `/user-wallet update private-key:YOUR_KEY` to change your wallet or add your private key' }
+            )
+            .setTimestamp();
+
+          return interaction.editReply({ embeds: [embed] });
+        }
+
+        // Validate Solana address (only if no private key — key-derived address is always valid)
+        if (!derivedAddress && !crypto.isValidSolanaAddress(address)) {
+          return interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setColor('#FF0000')
+              .setTitle('❌ Invalid Solana Address')
+              .setDescription('The address you provided is not a valid Solana address.')
+              .addFields(
+                { name: 'Tips:', value: '• Use a Base58 encoded address\n• Should be 44 characters long\n• Or just provide your private key and the address will be auto-derived' }
+              )
+              .setTimestamp()
+            ]
+          });
         }
 
         // Add user to database
@@ -127,11 +158,11 @@ module.exports = {
 
         const fields = [
           { name: 'Wallet Address', value: `\`${address}\`` },
-          { name: 'Private Key', value: privateKey ? '🔑 Saved — you can enter pot-mode races' : '⚠️ Not saved — add with `/user-wallet update` to join pot-mode races' },
+          { name: 'Private Key', value: privateKey ? '🔑 Saved — you can enter pot-mode races' : '⚠️ Not saved — add with `/user-wallet update private-key:YOUR_KEY` to join pot-mode races' },
           { name: 'Status', value: '🟢 Active on all servers' },
           { name: 'Next Steps', value: privateKey
-            ? 'You\'re ready to enter pot-mode horse races! Admins can also pay you with `/pay @you`'
-            : 'To participate in pot-mode horse races, update your wallet with your private key using `/user-wallet update`'
+            ? 'You\'re ready to enter pot-mode horse races!'
+            : 'To participate in pot-mode horse races, add your private key using `/user-wallet update private-key:YOUR_KEY`'
           }
         ];
 
