@@ -38,7 +38,7 @@ module.exports = {
         commands.push(command.data.toJSON());
       }
 
-      // Register commands
+      // Register commands globally
       const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
       const result = await rest.put(
@@ -46,10 +46,24 @@ module.exports = {
         { body: commands }
       );
 
+      // Also register per-guild for instant update (no cache delay)
+      let guildCount = 0;
+      if (client.guilds?.cache?.size > 0) {
+        for (const guild of client.guilds.cache.values()) {
+          try {
+            await rest.put(
+              Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, guild.id),
+              { body: commands }
+            );
+            guildCount++;
+          } catch (e) { /* skip guilds without permissions */ }
+        }
+      }
+
       const successEmbed = new EmbedBuilder()
         .setColor('#14F195')
         .setTitle('✅ Commands Refreshed Successfully')
-        .setDescription(`All ${result.length} commands have been synced with Discord.`)
+        .setDescription(`All ${result.length} commands synced globally + ${guildCount} guild(s) updated instantly.`)
         .addFields(
           { name: 'Commands Registered', value: result.length.toString() },
           { name: 'Timestamp', value: new Date().toLocaleString() },

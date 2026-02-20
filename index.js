@@ -166,14 +166,35 @@ const registerCommands = async () => {
       console.log(`   - Name: ${userWalletCmd.name}`);
       console.log(`   - Description: ${userWalletCmd.description}`);
       console.log(`   - Subcommands: ${userWalletCmd.options?.filter(o => o.type === 1).length || 0}`);
+      // Log connect subcommand options to verify private-key is first
+      const connectSub = userWalletCmd.options?.find(o => o.name === 'connect');
+      if (connectSub?.options) {
+        console.log(`   - Connect options: ${connectSub.options.map(o => o.name + '(req=' + o.required + ')').join(', ')}`);
+      }
     } else {
       console.log(`\n⚠️  ⚠️  /user-wallet command NOT found in registration!`);
     }
 
+    // Step 2: Also register per-guild (instant update, no Discord cache delay)
+    if (client.guilds?.cache?.size > 0) {
+      console.log(`\n2️⃣ Registering commands per-guild for instant update...`);
+      for (const guild of client.guilds.cache.values()) {
+        try {
+          await rest.put(
+            Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, guild.id),
+            { body: commands }
+          );
+          console.log(`   ✅ Guild ${guild.id} (${guild.name}): ${commands.length} commands`);
+        } catch (guildErr) {
+          console.log(`   ⚠️ Guild ${guild.id}: ${guildErr.message}`);
+        }
+      }
+    } else {
+      console.log(`\n⏳ No guilds cached yet — guild commands will register on ready event`);
+    }
+
     console.log(`\n${'='.repeat(60)}`);
-    console.log(`✅ Command registration completed!`);
-    console.log(`⏱️  Commands may take 5-15 minutes to appear in Discord.`);
-    console.log(`💡 If not visible: Try /refresh-commands or restart Discord`);
+    console.log(`✅ Command registration completed (global + per-guild)!`);
     console.log(`${'='.repeat(60)}\n`);
     
   } catch (error) {
