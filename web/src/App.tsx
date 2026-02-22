@@ -315,7 +315,7 @@ export default function App() {
             {page === 'gambling' && <GamblingEvents guildId={guildId} isOwner={isOwner} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
-            {page === 'workers' && <Workers guildId={guildId} />}
+            {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
           </ProfilerLogger>
         </main>
 

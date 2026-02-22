@@ -313,6 +313,24 @@ db.serialize(() => {
   // Migration: add events_created if missing
   db.run(`ALTER TABLE worker_daily_stats ADD COLUMN events_created INTEGER DEFAULT 0`, () => {})
 
+  // Worker payouts – tracks every SOL payment made to a worker via the web dashboard
+  db.run(
+    `CREATE TABLE IF NOT EXISTS worker_payouts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      recipient_discord_id TEXT NOT NULL,
+      recipient_address TEXT NOT NULL,
+      amount_sol REAL NOT NULL,
+      amount_usd REAL,
+      sol_price_at_time REAL,
+      tx_signature TEXT,
+      status TEXT DEFAULT 'pending',
+      memo TEXT,
+      paid_by TEXT NOT NULL,
+      paid_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
   // Migration: add qualification_url to vote_events
   db.run(`ALTER TABLE vote_events ADD COLUMN qualification_url TEXT`, () => {})
 

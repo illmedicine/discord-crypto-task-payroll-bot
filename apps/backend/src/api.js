@@ -2504,6 +2504,250 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ---- Worker Payroll: Pay Staff from Treasury ----
+
+  // Check if a worker has a connected DCB user-wallet
+  app.get('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildMember, async (req, res) => {
+    try {
+      // Bot's users table uses solana_address; backend's uses wallet_address — handle both
+      const user = await db.get(
+        `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ?`,
+        [req.params.discordId]
+      )
+      res.json({ wallet_address: user?.wallet_address || null, connected: !!user?.wallet_address })
+    } catch (err) {
+      console.error('[worker-wallet] error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_get_wallet' })
+    }
+  })
+
+  // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
+  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      // Strict owner check — only the server owner can pay staff
+      if (req.userRole !== 'owner') {
+        return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can pay staff.' })
+      }
+
+      const { amount, memo } = req.body || {}
+      const amountSol = Number(amount)
+      if (!amountSol || amountSol <= 0 || amountSol > 1000) {
+        return res.status(400).json({ error: 'invalid_amount', message: 'Amount must be between 0.0001 and 1000 SOL.' })
+      }
+
+      // 1. Verify worker exists and is active
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [req.guild.id, req.params.discordId]
+      )
+      if (!worker) return res.status(404).json({ error: 'worker_not_found' })
+
+      // 2. Get worker's connected wallet address
+      const userRow = await db.get(
+        `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ?`,
+        [req.params.discordId]
+      )
+      const recipientAddress = userRow?.wallet_address
+      if (!recipientAddress) {
+        return res.status(400).json({ error: 'no_wallet', message: 'This worker has not connected a DisCryptoBank user-wallet. They must run /user-wallet connect first.' })
+      }
+
+      // 3. Get guild treasury wallet + secret
+      const guildWallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
+      if (!guildWallet?.wallet_address) {
+        return res.status(400).json({ error: 'no_treasury', message: 'No treasury wallet configured. Set one up in the Treasury tab.' })
+      }
+      if (!guildWallet.wallet_secret) {
+        return res.status(400).json({ error: 'no_secret', message: 'Treasury wallet private key not configured. Add it in the Treasury tab to enable payouts.' })
+      }
+
+      // 4. Fetch SOL price for USD tracking
+      let solPrice = 0
+      try {
+        const priceRes = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 })
+        solPrice = priceRes.data?.solana?.usd || 0
+      } catch (_) {}
+
+      // 5. Create pending payout record
+      const payerDiscordId = await resolveCanonicalUserId(req.user)
+      const { lastID: payoutId } = await db.run(
+        `INSERT INTO worker_payouts (guild_id, recipient_discord_id, recipient_address, amount_sol, amount_usd, sol_price_at_time, status, memo, paid_by)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [req.guild.id, req.params.discordId, recipientAddress, amountSol, solPrice > 0 ? amountSol * solPrice : null, solPrice || null, memo || null, payerDiscordId]
+      )
+
+      // 6. Execute Solana transfer
+      try {
+        const { Connection, PublicKey, Transaction: SolTransaction, SystemProgram, sendAndConfirmTransaction, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js')
+        const bs58 = require('bs58')
+
+        const rpcUrl = guildWallet.network === 'devnet'
+          ? 'https://api.devnet.solana.com'
+          : (process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com')
+        const conn = new Connection(rpcUrl, 'confirmed')
+
+        // Parse treasury secret key
+        let senderKeypair
+        const secret = guildWallet.wallet_secret.trim()
+        if (secret.startsWith('[')) {
+          senderKeypair = Keypair.fromSecretKey(new Uint8Array(JSON.parse(secret)))
+        } else {
+          senderKeypair = Keypair.fromSecretKey(new Uint8Array(bs58.decode(secret)))
+        }
+
+        const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL)
+        const tx = new SolTransaction().add(
+          SystemProgram.transfer({
+            fromPubkey: senderKeypair.publicKey,
+            toPubkey: new PublicKey(recipientAddress),
+            lamports
+          })
+        )
+        const signature = await sendAndConfirmTransaction(conn, tx, [senderKeypair])
+
+        // 7. Update payout record as confirmed
+        await db.run(
+          `UPDATE worker_payouts SET status = 'confirmed', tx_signature = ? WHERE id = ?`,
+          [signature, payoutId]
+        )
+
+        // 8. Update budget spent
+        await db.run(
+          'UPDATE guild_wallets SET budget_spent = budget_spent + ?, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?',
+          [amountSol, req.guild.id]
+        )
+
+        // 9. Log in worker_activity + worker_daily_stats
+        const today = new Date().toISOString().slice(0, 10)
+        await db.run(
+          'INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, amount, currency) VALUES (?, ?, ?, ?, ?, ?)',
+          [req.guild.id, req.params.discordId, 'payout_received', memo || `Payroll payment of ◎${amountSol}`, amountSol, 'SOL']
+        )
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, payout_total)
+           VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, discord_id, stat_date) DO UPDATE SET payout_total = payout_total + ?`,
+          [req.guild.id, req.params.discordId, today, amountSol, amountSol]
+        )
+
+        // 10. Log in activity_feed
+        await db.run(
+          'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [req.guild.id, 'payroll', 'Staff Paid', `Paid ${worker.username || req.params.discordId} ◎${amountSol}${memo ? ': ' + memo : ''}`, `@${req.user.username}`, amountSol, 'SOL']
+        )
+
+        // 11. Record transaction
+        await db.run(
+          'INSERT INTO transactions (guild_id, from_address, to_address, amount, signature, status) VALUES (?, ?, ?, ?, ?, ?)',
+          [req.guild.id, guildWallet.wallet_address, recipientAddress, amountSol, signature, 'confirmed']
+        )
+
+        res.json({ ok: true, signature, amount_sol: amountSol, amount_usd: solPrice > 0 ? amountSol * solPrice : null, payout_id: payoutId })
+      } catch (txErr) {
+        // Mark payout as failed
+        await db.run(`UPDATE worker_payouts SET status = 'failed' WHERE id = ?`, [payoutId])
+        console.error('[payroll] TX failed:', txErr?.message || txErr)
+        res.status(500).json({ error: 'transaction_failed', message: txErr?.message || 'Solana transaction failed.' })
+      }
+    } catch (err) {
+      console.error('[payroll] pay error:', err?.message || err)
+      res.status(500).json({ error: 'pay_failed' })
+    }
+  })
+
+  // Payroll summary — daily, weekly, monthly aggregations
+  app.get('/api/admin/guilds/:guildId/payroll', requireAuth, requireGuildMember, async (req, res) => {
+    try {
+      const period = req.query.period || 'all' // 'day', 'week', 'month', 'all'
+
+      // Today / this week / this month filters
+      const now = new Date()
+      const todayStr = now.toISOString().slice(0, 10)
+      const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7)
+      const monthAgo = new Date(now); monthAgo.setDate(monthAgo.getDate() - 30)
+
+      const [todaySummary, weekSummary, monthSummary, allTime] = await Promise.all([
+        db.get(
+          `SELECT COUNT(*) as count, COALESCE(SUM(amount_sol), 0) as total_sol, COALESCE(SUM(amount_usd), 0) as total_usd
+           FROM worker_payouts WHERE guild_id = ? AND status = 'confirmed' AND DATE(paid_at) = ?`,
+          [req.guild.id, todayStr]
+        ),
+        db.get(
+          `SELECT COUNT(*) as count, COALESCE(SUM(amount_sol), 0) as total_sol, COALESCE(SUM(amount_usd), 0) as total_usd
+           FROM worker_payouts WHERE guild_id = ? AND status = 'confirmed' AND paid_at >= ?`,
+          [req.guild.id, weekAgo.toISOString()]
+        ),
+        db.get(
+          `SELECT COUNT(*) as count, COALESCE(SUM(amount_sol), 0) as total_sol, COALESCE(SUM(amount_usd), 0) as total_usd
+           FROM worker_payouts WHERE guild_id = ? AND status = 'confirmed' AND paid_at >= ?`,
+          [req.guild.id, monthAgo.toISOString()]
+        ),
+        db.get(
+          `SELECT COUNT(*) as count, COALESCE(SUM(amount_sol), 0) as total_sol, COALESCE(SUM(amount_usd), 0) as total_usd
+           FROM worker_payouts WHERE guild_id = ? AND status = 'confirmed'`,
+          [req.guild.id]
+        )
+      ])
+
+      // Per-worker breakdown for the selected period
+      let dateFilter = ''
+      let params = [req.guild.id]
+      if (period === 'day') { dateFilter = `AND DATE(wp.paid_at) = ?`; params.push(todayStr) }
+      else if (period === 'week') { dateFilter = `AND wp.paid_at >= ?`; params.push(weekAgo.toISOString()) }
+      else if (period === 'month') { dateFilter = `AND wp.paid_at >= ?`; params.push(monthAgo.toISOString()) }
+
+      const perWorker = await db.all(
+        `SELECT wp.recipient_discord_id, dw.username,
+           COUNT(*) as pay_count, SUM(wp.amount_sol) as total_sol, SUM(wp.amount_usd) as total_usd,
+           MAX(wp.paid_at) as last_paid
+         FROM worker_payouts wp
+         LEFT JOIN dcb_workers dw ON wp.guild_id = dw.guild_id AND wp.recipient_discord_id = dw.discord_id
+         WHERE wp.guild_id = ? AND wp.status = 'confirmed' ${dateFilter}
+         GROUP BY wp.recipient_discord_id
+         ORDER BY total_sol DESC`,
+        params
+      )
+
+      // Daily breakdown (last 30 days)
+      const dailyBreakdown = await db.all(
+        `SELECT DATE(paid_at) as date, COUNT(*) as count, SUM(amount_sol) as total_sol, SUM(amount_usd) as total_usd
+         FROM worker_payouts WHERE guild_id = ? AND status = 'confirmed' AND paid_at >= ?
+         GROUP BY DATE(paid_at) ORDER BY date DESC`,
+        [req.guild.id, monthAgo.toISOString()]
+      )
+
+      res.json({
+        today: todaySummary || { count: 0, total_sol: 0, total_usd: 0 },
+        week: weekSummary || { count: 0, total_sol: 0, total_usd: 0 },
+        month: monthSummary || { count: 0, total_sol: 0, total_usd: 0 },
+        allTime: allTime || { count: 0, total_sol: 0, total_usd: 0 },
+        perWorker: perWorker || [],
+        dailyBreakdown: dailyBreakdown || []
+      })
+    } catch (err) {
+      console.error('[payroll] summary error:', err?.message || err)
+      res.status(500).json({ error: 'payroll_summary_failed' })
+    }
+  })
+
+  // Payroll history — detailed list of all payouts
+  app.get('/api/admin/guilds/:guildId/payroll/history', requireAuth, requireGuildMember, async (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 100, 500)
+      const rows = await db.all(
+        `SELECT wp.*, dw.username as recipient_username
+         FROM worker_payouts wp
+         LEFT JOIN dcb_workers dw ON wp.guild_id = dw.guild_id AND wp.recipient_discord_id = dw.discord_id
+         WHERE wp.guild_id = ?
+         ORDER BY wp.paid_at DESC LIMIT ?`,
+        [req.guild.id, limit]
+      )
+      res.json(rows || [])
+    } catch (err) {
+      console.error('[payroll] history error:', err?.message || err)
+      res.status(500).json({ error: 'payroll_history_failed' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/members', requireAuth, requireGuildMember, async (req, res) => {
     try {
       let list = []
