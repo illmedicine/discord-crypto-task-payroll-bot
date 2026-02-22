@@ -2509,12 +2509,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Check if a worker has a connected DCB user-wallet
   app.get('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildMember, async (req, res) => {
     try {
-      // Bot's users table uses solana_address; backend's uses wallet_address — handle both
-      const user = await db.get(
-        `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ?`,
+      // Try multiple sources: user_wallets table first, then users table (guild-scoped or global)
+      const walletRow = await db.get(
+        `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
         [req.params.discordId]
       )
-      res.json({ wallet_address: user?.wallet_address || null, connected: !!user?.wallet_address })
+      if (walletRow?.solana_address) {
+        return res.json({ wallet_address: walletRow.solana_address, connected: true })
+      }
+      // Fallback: check users table (guild-scoped entries synced from bot)
+      const userRow = await db.get(
+        `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
+        [req.params.discordId]
+      )
+      res.json({ wallet_address: userRow?.wallet_address || null, connected: !!userRow?.wallet_address })
     } catch (err) {
       console.error('[worker-wallet] error:', err?.message || err)
       res.status(500).json({ error: 'failed_to_get_wallet' })
@@ -2522,6 +2530,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
+  // Accepts amount in USD, converts to SOL at current market price.
   app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       // Strict owner check — only the server owner can pay staff
@@ -2529,10 +2538,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can pay staff.' })
       }
 
-      const { amount, memo } = req.body || {}
-      const amountSol = Number(amount)
-      if (!amountSol || amountSol <= 0 || amountSol > 1000) {
-        return res.status(400).json({ error: 'invalid_amount', message: 'Amount must be between 0.0001 and 1000 SOL.' })
+      const { amount_usd, memo } = req.body || {}
+      const amountUsd = Number(amount_usd)
+      if (!amountUsd || amountUsd <= 0 || amountUsd > 100000) {
+        return res.status(400).json({ error: 'invalid_amount', message: 'Amount must be between $0.01 and $100,000 USD.' })
       }
 
       // 1. Verify worker exists and is active
@@ -2542,12 +2551,21 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       )
       if (!worker) return res.status(404).json({ error: 'worker_not_found' })
 
-      // 2. Get worker's connected wallet address
-      const userRow = await db.get(
-        `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ?`,
+      // 2. Get worker's connected wallet address (check user_wallets first, then users)
+      let recipientAddress = null
+      const walletRow = await db.get(
+        `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
         [req.params.discordId]
       )
-      const recipientAddress = userRow?.wallet_address
+      if (walletRow?.solana_address) {
+        recipientAddress = walletRow.solana_address
+      } else {
+        const userRow = await db.get(
+          `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
+          [req.params.discordId]
+        )
+        recipientAddress = userRow?.wallet_address || null
+      }
       if (!recipientAddress) {
         return res.status(400).json({ error: 'no_wallet', message: 'This worker has not connected a DisCryptoBank user-wallet. They must run /user-wallet connect first.' })
       }
@@ -2561,19 +2579,26 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         return res.status(400).json({ error: 'no_secret', message: 'Treasury wallet private key not configured. Add it in the Treasury tab to enable payouts.' })
       }
 
-      // 4. Fetch SOL price for USD tracking
+      // 4. Fetch SOL price to convert USD → SOL
       let solPrice = 0
       try {
         const priceRes = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 })
         solPrice = priceRes.data?.solana?.usd || 0
       } catch (_) {}
 
+      if (!solPrice || solPrice <= 0) {
+        return res.status(503).json({ error: 'price_unavailable', message: 'Unable to fetch SOL price. Please try again in a moment.' })
+      }
+
+      // Convert USD to SOL
+      const amountSol = amountUsd / solPrice
+
       // 5. Create pending payout record
       const payerDiscordId = await resolveCanonicalUserId(req.user)
       const { lastID: payoutId } = await db.run(
         `INSERT INTO worker_payouts (guild_id, recipient_discord_id, recipient_address, amount_sol, amount_usd, sol_price_at_time, status, memo, paid_by)
          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-        [req.guild.id, req.params.discordId, recipientAddress, amountSol, solPrice > 0 ? amountSol * solPrice : null, solPrice || null, memo || null, payerDiscordId]
+        [req.guild.id, req.params.discordId, recipientAddress, amountSol, amountUsd, solPrice, memo || null, payerDiscordId]
       )
 
       // 6. Execute Solana transfer
@@ -2621,7 +2646,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         const today = new Date().toISOString().slice(0, 10)
         await db.run(
           'INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, amount, currency) VALUES (?, ?, ?, ?, ?, ?)',
-          [req.guild.id, req.params.discordId, 'payout_received', memo || `Payroll payment of ◎${amountSol}`, amountSol, 'SOL']
+          [req.guild.id, req.params.discordId, 'payout_received', memo || `Payroll payment of $${amountUsd.toFixed(2)} (◎${amountSol.toFixed(4)})`, amountUsd, 'USD']
         )
         await db.run(
           `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, payout_total)
@@ -2632,7 +2657,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         // 10. Log in activity_feed
         await db.run(
           'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [req.guild.id, 'payroll', 'Staff Paid', `Paid ${worker.username || req.params.discordId} ◎${amountSol}${memo ? ': ' + memo : ''}`, `@${req.user.username}`, amountSol, 'SOL']
+          [req.guild.id, 'payroll', 'Staff Paid', `Paid ${worker.username || req.params.discordId} $${amountUsd.toFixed(2)} (◎${amountSol.toFixed(4)})${memo ? ': ' + memo : ''}`, `@${req.user.username}`, amountUsd, 'USD']
         )
 
         // 11. Record transaction
@@ -2641,7 +2666,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           [req.guild.id, guildWallet.wallet_address, recipientAddress, amountSol, signature, 'confirmed']
         )
 
-        res.json({ ok: true, signature, amount_sol: amountSol, amount_usd: solPrice > 0 ? amountSol * solPrice : null, payout_id: payoutId })
+        res.json({ ok: true, signature, amount_sol: amountSol, amount_usd: amountUsd, sol_price: solPrice, payout_id: payoutId })
       } catch (txErr) {
         // Mark payout as failed
         await db.run(`UPDATE worker_payouts SET status = 'failed' WHERE id = ?`, [payoutId])
@@ -3054,6 +3079,29 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ── Internal Wallet Sync (bot pulls / pushes wallet data) ──────
+
+  // Bot pushes user wallet connect/update to backend DB
+  app.post('/api/internal/user-wallet-sync', requireInternal, async (req, res) => {
+    try {
+      const { discordId, solanaAddress, username } = req.body || {}
+      if (!discordId || !solanaAddress) return res.status(400).json({ error: 'missing_fields' })
+
+      await db.run(
+        `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(discord_id) DO UPDATE SET
+           solana_address = excluded.solana_address,
+           username = excluded.username,
+           updated_at = CURRENT_TIMESTAMP`,
+        [discordId, solanaAddress, username || null]
+      )
+      console.log(`[internal] user-wallet synced for ${discordId}: ${solanaAddress.slice(0,8)}...`)
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] user-wallet-sync error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
 
   // Bot pulls wallet from backend DB (authoritative when set via web UI)
   app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {

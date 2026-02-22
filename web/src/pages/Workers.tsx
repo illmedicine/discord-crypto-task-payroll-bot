@@ -116,7 +116,7 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
   const [payMemo, setPayMemo] = useState('')
   const [payLoading, setPayLoading] = useState(false)
   const [payError, setPayError] = useState('')
-  const [paySuccess, setPaySuccess] = useState<{ signature: string; amount_sol: number; amount_usd: number | null } | null>(null)
+  const [paySuccess, setPaySuccess] = useState<{ signature: string; amount_sol: number; amount_usd: number | null; sol_price: number | null } | null>(null)
   const [payTargetWallet, setPayTargetWallet] = useState<string | null>(null)
   const [payrollSummary, setPayrollSummary] = useState<PayrollSummary | null>(null)
   const [payrollHistory, setPayrollHistory] = useState<PayoutRecord[]>([])
@@ -177,10 +177,10 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
     setPaySuccess(null)
     try {
       const r = await api.post(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/pay`, {
-        amount: Number(payAmount),
+        amount_usd: Number(payAmount),
         memo: payMemo || undefined
       })
-      setPaySuccess({ signature: r.data.signature, amount_sol: r.data.amount_sol, amount_usd: r.data.amount_usd })
+      setPaySuccess({ signature: r.data.signature, amount_sol: r.data.amount_sol, amount_usd: r.data.amount_usd, sol_price: r.data.sol_price })
       fetchWorkers()
       fetchPayroll()
     } catch (e: any) {
@@ -421,8 +421,8 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
               <div className="payroll-success">
                 <span style={{ fontSize: 48 }}>✅</span>
                 <h3>Payment Sent!</h3>
-                <p>◎ {paySuccess.amount_sol.toFixed(4)} SOL sent to {payTarget.display_name || payTarget.username}</p>
-                {paySuccess.amount_usd != null && <p className="text-muted">≈ ${paySuccess.amount_usd.toFixed(2)} USD</p>}
+                <p>${paySuccess.amount_usd != null ? paySuccess.amount_usd.toFixed(2) : '0.00'} USD sent to {payTarget.display_name || payTarget.username}</p>
+                <p className="text-muted">≈ ◎{paySuccess.amount_sol.toFixed(4)} SOL{paySuccess.sol_price ? ` @ $${paySuccess.sol_price.toFixed(2)}/SOL` : ''}</p>
                 <a
                   href={`https://solscan.io/tx/${paySuccess.signature}`}
                   target="_blank"
@@ -437,7 +437,7 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
             ) : (
               <>
                 <h3>💸 Pay Worker</h3>
-                <p className="text-muted">Send SOL from guild treasury to {payTarget.display_name || payTarget.username}</p>
+                <p className="text-muted">Send USD payment from guild treasury to {payTarget.display_name || payTarget.username}</p>
                 {payError && <div className="form-error">{payError}</div>}
 
                 <div className="payroll-pay-recipient">
@@ -472,14 +472,14 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
                   <div>
-                    <label className="payroll-label">Amount (SOL)</label>
+                    <label className="payroll-label">Amount (USD)</label>
                     <input
                       type="number"
                       className="form-input"
                       placeholder="0.00"
-                      step="0.0001"
-                      min="0.0001"
-                      max="1000"
+                      step="0.01"
+                      min="0.01"
+                      max="100000"
                       value={payAmount}
                       onChange={e => setPayAmount(e.target.value)}
                       disabled={payLoading}
@@ -504,7 +504,7 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
                       onClick={handlePay}
                       disabled={payLoading || !payAmount || Number(payAmount) <= 0 || !payTargetWallet}
                     >
-                      {payLoading ? '⏳ Sending...' : `💸 Send ◎${payAmount || '0'} SOL`}
+                      {payLoading ? '⏳ Sending...' : `💸 Send $${payAmount || '0'} USD`}
                     </button>
                   </div>
                 </div>
@@ -674,26 +674,26 @@ function PayrollPanel({ summary, history, loading, period }: {
         <div className={`payroll-summary-card ${period === 'day' ? 'payroll-summary-card-active' : ''}`}>
           <span className="payroll-summary-card-icon">📅</span>
           <span className="payroll-summary-card-label">Today</span>
-          <span className="payroll-summary-card-value">◎ {(summary.today.total_sol || 0).toFixed(4)}</span>
-          <span className="payroll-summary-card-sub">{summary.today.count} payment{summary.today.count !== 1 ? 's' : ''}{summary.today.total_usd ? ` · $${summary.today.total_usd.toFixed(2)}` : ''}</span>
+          <span className="payroll-summary-card-value">${(summary.today.total_usd || 0).toFixed(2)}</span>
+          <span className="payroll-summary-card-sub">{summary.today.count} payment{summary.today.count !== 1 ? 's' : ''}{summary.today.total_sol ? ` · ◎${summary.today.total_sol.toFixed(4)}` : ''}</span>
         </div>
         <div className={`payroll-summary-card ${period === 'week' ? 'payroll-summary-card-active' : ''}`}>
           <span className="payroll-summary-card-icon">📆</span>
           <span className="payroll-summary-card-label">This Week</span>
-          <span className="payroll-summary-card-value">◎ {(summary.week.total_sol || 0).toFixed(4)}</span>
-          <span className="payroll-summary-card-sub">{summary.week.count} payment{summary.week.count !== 1 ? 's' : ''}{summary.week.total_usd ? ` · $${summary.week.total_usd.toFixed(2)}` : ''}</span>
+          <span className="payroll-summary-card-value">${(summary.week.total_usd || 0).toFixed(2)}</span>
+          <span className="payroll-summary-card-sub">{summary.week.count} payment{summary.week.count !== 1 ? 's' : ''}{summary.week.total_sol ? ` · ◎${summary.week.total_sol.toFixed(4)}` : ''}</span>
         </div>
         <div className={`payroll-summary-card ${period === 'month' ? 'payroll-summary-card-active' : ''}`}>
           <span className="payroll-summary-card-icon">🗓️</span>
           <span className="payroll-summary-card-label">This Month</span>
-          <span className="payroll-summary-card-value">◎ {(summary.month.total_sol || 0).toFixed(4)}</span>
-          <span className="payroll-summary-card-sub">{summary.month.count} payment{summary.month.count !== 1 ? 's' : ''}{summary.month.total_usd ? ` · $${summary.month.total_usd.toFixed(2)}` : ''}</span>
+          <span className="payroll-summary-card-value">${(summary.month.total_usd || 0).toFixed(2)}</span>
+          <span className="payroll-summary-card-sub">{summary.month.count} payment{summary.month.count !== 1 ? 's' : ''}{summary.month.total_sol ? ` · ◎${summary.month.total_sol.toFixed(4)}` : ''}</span>
         </div>
         <div className={`payroll-summary-card ${period === 'all' ? 'payroll-summary-card-active' : ''}`}>
           <span className="payroll-summary-card-icon">🏦</span>
           <span className="payroll-summary-card-label">All Time</span>
-          <span className="payroll-summary-card-value">◎ {(summary.allTime.total_sol || 0).toFixed(4)}</span>
-          <span className="payroll-summary-card-sub">{summary.allTime.count} payment{summary.allTime.count !== 1 ? 's' : ''}{summary.allTime.total_usd ? ` · $${summary.allTime.total_usd.toFixed(2)}` : ''}</span>
+          <span className="payroll-summary-card-value">${(summary.allTime.total_usd || 0).toFixed(2)}</span>
+          <span className="payroll-summary-card-sub">{summary.allTime.count} payment{summary.allTime.count !== 1 ? 's' : ''}{summary.allTime.total_sol ? ` · ◎${summary.allTime.total_sol.toFixed(4)}` : ''}</span>
         </div>
       </div>
 
@@ -705,16 +705,16 @@ function PayrollPanel({ summary, history, loading, period }: {
             <div className="payroll-table-header">
               <span>Worker</span>
               <span>Payments</span>
-              <span>Total SOL</span>
               <span>Total USD</span>
+              <span>Total SOL</span>
               <span>Last Paid</span>
             </div>
             {summary.perWorker.map(pw => (
               <div key={pw.recipient_discord_id} className="payroll-table-row">
                 <span className="payroll-table-name">{pw.username || pw.recipient_discord_id}</span>
                 <span>{pw.pay_count}</span>
+                <span className="payroll-usd">${pw.total_usd ? `${pw.total_usd.toFixed(2)}` : '—'}</span>
                 <span className="payroll-sol">◎ {(pw.total_sol || 0).toFixed(4)}</span>
-                <span>{pw.total_usd ? `$${pw.total_usd.toFixed(2)}` : '—'}</span>
                 <span className="text-muted">{pw.last_paid ? timeAgo(pw.last_paid) : '—'}</span>
               </div>
             ))}
@@ -728,15 +728,15 @@ function PayrollPanel({ summary, history, loading, period }: {
           <h4>📊 Daily Spending (Last 30 Days)</h4>
           <div className="payroll-daily-chart">
             {summary.dailyBreakdown.slice(0, 14).map(d => {
-              const maxSol = Math.max(...summary.dailyBreakdown.map(dd => dd.total_sol), 0.0001)
-              const pct = Math.min(100, (d.total_sol / maxSol) * 100)
+              const maxUsd = Math.max(...summary.dailyBreakdown.map(dd => dd.total_usd || 0), 0.01)
+              const pct = Math.min(100, ((d.total_usd || 0) / maxUsd) * 100)
               return (
                 <div key={d.date} className="payroll-daily-row">
                   <span className="payroll-daily-date">{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                   <div className="payroll-daily-bar-wrap">
                     <div className="payroll-daily-bar" style={{ width: `${pct}%` }} />
                   </div>
-                  <span className="payroll-daily-amount">◎ {d.total_sol.toFixed(4)}</span>
+                  <span className="payroll-daily-amount">${(d.total_usd || 0).toFixed(2)}</span>
                   <span className="payroll-daily-count">{d.count}x</span>
                 </div>
               )
@@ -762,8 +762,8 @@ function PayrollPanel({ summary, history, loading, period }: {
                   </div>
                 </div>
                 <div className="payroll-history-right">
-                  <span className="payroll-history-amount">◎ {h.amount_sol.toFixed(4)}</span>
-                  {h.amount_usd != null && <span className="payroll-history-usd">${h.amount_usd.toFixed(2)}</span>}
+                  <span className="payroll-history-amount">{h.amount_usd != null ? `$${h.amount_usd.toFixed(2)}` : `◎${h.amount_sol.toFixed(4)}`}</span>
+                  <span className="payroll-history-usd">◎{h.amount_sol.toFixed(4)}</span>
                   <span className="payroll-history-time">{timeAgo(h.paid_at)}</span>
                   {h.tx_signature && (
                     <a href={`https://solscan.io/tx/${h.tx_signature}`} target="_blank" rel="noopener noreferrer" className="payroll-history-tx" title="View on Solscan">↗</a>

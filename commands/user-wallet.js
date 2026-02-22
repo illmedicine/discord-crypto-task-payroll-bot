@@ -156,6 +156,19 @@ module.exports = {
           await db.setUserWalletSecret(userId, privateKey);
         }
 
+        // Sync wallet to backend for payroll feature
+        try {
+          const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+          const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+          if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+            fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+              body: JSON.stringify({ discordId: userId, solanaAddress: address, username })
+            }).catch(() => {});
+          }
+        } catch (_) {}
+
         const fields = [
           { name: 'Wallet Address', value: `\`${address}\`` },
           { name: 'Private Key', value: privateKey ? '🔑 Saved — you can enter pot-mode races' : '⚠️ Not saved — add with `/user-wallet update private-key:YOUR_KEY` to join pot-mode races' },
@@ -304,6 +317,20 @@ module.exports = {
         if (privateKey) {
           await db.setUserWalletSecret(userId, privateKey);
         }
+
+        // Sync updated wallet to backend for payroll feature
+        try {
+          const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+          const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+          const finalAddr = newAddress || derivedAddress || userData.solana_address;
+          if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET && finalAddr) {
+            fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+              body: JSON.stringify({ discordId: userId, solanaAddress: finalAddr, username })
+            }).catch(() => {});
+          }
+        } catch (_) {}
 
         const fields = [];
         const finalAddress = newAddress || derivedAddress || userData.solana_address;

@@ -313,6 +313,16 @@ db.serialize(() => {
   // Migration: add events_created if missing
   db.run(`ALTER TABLE worker_daily_stats ADD COLUMN events_created INTEGER DEFAULT 0`, () => {})
 
+  // User wallets – synced from bot when /user-wallet connect is run
+  db.run(
+    `CREATE TABLE IF NOT EXISTS user_wallets (
+      discord_id TEXT PRIMARY KEY,
+      solana_address TEXT NOT NULL,
+      username TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
   // Worker payouts – tracks every SOL payment made to a worker via the web dashboard
   db.run(
     `CREATE TABLE IF NOT EXISTS worker_payouts (
@@ -395,10 +405,14 @@ db.serialize(() => {
       discord_id TEXT NOT NULL,
       guild_id TEXT NOT NULL,
       wallet_address TEXT,
+      solana_address TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(discord_id, guild_id)
     )`
   )
+
+  // Migration: add solana_address to users if table exists from before
+  db.run(`ALTER TABLE users ADD COLUMN solana_address TEXT`, () => {})
 
   // Contest entries (may already exist from bot – needed for stats)
   db.run(
