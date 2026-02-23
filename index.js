@@ -614,7 +614,11 @@ client.on('interactionCreate', async interaction => {
         } catch (error) {
           console.error('❌ Error handling cancel bet:', error);
           try {
-            await interaction.reply({ content: '❌ Bet cancelled.', ephemeral: true });
+            if (interaction.deferred || interaction.replied) {
+              await interaction.editReply({ content: '❌ Bet cancelled.' });
+            } else {
+              await interaction.reply({ content: '❌ Bet cancelled.', ephemeral: true });
+            }
           } catch (_) {}
         }
       }

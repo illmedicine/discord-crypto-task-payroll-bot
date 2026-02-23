@@ -505,7 +505,12 @@ module.exports = {
 
     const slots = await db.getGamblingEventSlots(eventId);
     const chosenSlot = slots.find(s => s.slot_number === slotNumber);
-    const newCount = event.current_players + 1;
+    // Read back actual player count from DB (avoids stale in-memory value after backend sync)
+    let newCount = event.current_players + 1;
+    try {
+      const freshEvent = await db.getGamblingEvent(eventId);
+      if (freshEvent) newCount = freshEvent.current_players;
+    } catch (_) {}
 
     // Build fee display
     let feeDisplay = `${solAmount.toFixed(6)} SOL`;
@@ -710,7 +715,11 @@ module.exports = {
           await channel.send({ content: `🏇 **Horse Race #${eventId}** — All riders in! The race is starting... 🏁` });
         }
       } catch (_) {}
-      await processGamblingEvent(eventId, interaction.client, 'full');
+      try {
+        await processGamblingEvent(eventId, interaction.client, 'full');
+      } catch (procErr) {
+        console.error(`[GamblingEvent] processGamblingEvent error for #${eventId}:`, procErr.message);
+      }
     }
   },
 };

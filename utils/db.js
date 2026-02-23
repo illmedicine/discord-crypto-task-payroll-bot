@@ -1894,12 +1894,24 @@ const getExpiredGamblingEvents = () => {
   });
 };
 
-const updateGamblingEventStatus = (eventId, status) => {
+const updateGamblingEventStatus = (eventId, status, requiredCurrentStatus) => {
   return new Promise((resolve, reject) => {
-    db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId], (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
+    if (requiredCurrentStatus) {
+      // Atomic: only update if current status matches (prevents race conditions)
+      db.run(
+        `UPDATE gambling_events SET status = ? WHERE id = ? AND status = ?`,
+        [status, eventId, requiredCurrentStatus],
+        function (err) {
+          if (err) reject(err);
+          else resolve({ changes: this.changes });
+        }
+      );
+    } else {
+      db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId], function (err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      });
+    }
   });
 };
 
@@ -2040,8 +2052,10 @@ const getGamblingEventBetsWithWallets = (eventId) => {
 const createGamblingEventFromSync = (event, slots) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
+      // Use INSERT OR IGNORE to avoid overwriting local current_players with stale backend data.
+      // Then UPDATE non-critical fields that the backend may have changed.
       db.run(
-        `INSERT OR REPLACE INTO gambling_events
+        `INSERT OR IGNORE INTO gambling_events
           (id, guild_id, channel_id, message_id, title, description, mode, prize_amount, currency, entry_fee,
            min_players, max_players, current_players, duration_minutes, num_slots, winning_slot, created_by, status, ends_at, created_at, qualification_url)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2070,6 +2084,44 @@ const createGamblingEventFromSync = (event, slots) => {
         ],
         function (err) {
           if (err) return reject(err);
+        }
+      );
+
+      // Update non-player-count fields from backend (preserves local current_players)
+      db.run(
+        `UPDATE gambling_events SET
+           channel_id = COALESCE(?, channel_id),
+           message_id = COALESCE(?, message_id),
+           title = COALESCE(?, title),
+           description = COALESCE(?, description),
+           mode = COALESCE(?, mode),
+           prize_amount = COALESCE(?, prize_amount),
+           currency = COALESCE(?, currency),
+           entry_fee = COALESCE(?, entry_fee),
+           min_players = COALESCE(?, min_players),
+           max_players = COALESCE(?, max_players),
+           status = COALESCE(?, status),
+           ends_at = COALESCE(?, ends_at),
+           qualification_url = ?
+         WHERE id = ?`,
+        [
+          event.channel_id,
+          event.message_id || null,
+          event.title,
+          event.description || '',
+          event.mode || 'house',
+          event.prize_amount || 0,
+          event.currency || 'SOL',
+          event.entry_fee || 0,
+          event.min_players,
+          event.max_players,
+          event.status || 'active',
+          event.ends_at || null,
+          event.qualification_url || null,
+          event.id
+        ],
+        function (err) {
+          if (err) console.warn('[DB] createGamblingEventFromSync UPDATE warning:', err.message);
         }
       );
 

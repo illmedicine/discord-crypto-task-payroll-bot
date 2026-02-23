@@ -179,7 +179,7 @@ export default function Workers({ guildId, userRole }: Props) {
   }
 
   const handlePay = async () => {
-    if (!payTarget || !payTargetWallet || !payAmount) return
+    if (!payTarget || !payAmount) return
     const usd = parseFloat(payAmount)
     if (isNaN(usd) || usd <= 0) return
     setPaying(true)
@@ -359,13 +359,31 @@ export default function Workers({ guildId, userRole }: Props) {
             </div>
 
             {/* Wallet status */}
-            <div style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, margin: '8px 0', fontSize: 14 }}>
-              {payWalletLoading ? (
-                <span style={{ color: '#94a3b8' }}>⏳ Checking wallet...</span>
-              ) : payTargetWallet ? (
-                <span style={{ color: '#10b981' }}>🟢 Wallet: {payTargetWallet.slice(0, 6)}...{payTargetWallet.slice(-4)}</span>
-              ) : (
-                <span style={{ color: '#ef4444' }}>🔴 No Wallet Connected — Worker must run <code>/user-wallet connect</code></span>
+            <div style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, margin: '8px 0', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                {payWalletLoading ? (
+                  <span style={{ color: '#94a3b8' }}>⏳ Checking wallet...</span>
+                ) : payTargetWallet ? (
+                  <span style={{ color: '#10b981' }}>🟢 Wallet: {payTargetWallet.slice(0, 6)}...{payTargetWallet.slice(-4)}</span>
+                ) : (
+                  <span style={{ color: '#f59e0b' }}>⚠️ Wallet not cached — will re-check on send</span>
+                )}
+              </div>
+              {!payWalletLoading && !payTargetWallet && (
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 10px', fontSize: 12 }}
+                  onClick={async () => {
+                    setPayWalletLoading(true)
+                    try {
+                      const r = await api.get(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/wallet`)
+                      setPayTargetWallet(r.data?.wallet_address || null)
+                    } catch { setPayTargetWallet(null) }
+                    setPayWalletLoading(false)
+                  }}
+                >
+                  🔄 Retry
+                </button>
               )}
             </div>
 
@@ -404,7 +422,7 @@ export default function Workers({ guildId, userRole }: Props) {
                     step="0.01"
                     value={payAmount}
                     onChange={e => setPayAmount(e.target.value)}
-                    disabled={paying || !payTargetWallet}
+                    disabled={paying}
                     style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#fff', fontSize: 16 }}
                   />
                 </div>
@@ -416,7 +434,7 @@ export default function Workers({ guildId, userRole }: Props) {
                     placeholder="Weekly pay, bonus, etc."
                     value={payMemo}
                     onChange={e => setPayMemo(e.target.value)}
-                    disabled={paying || !payTargetWallet}
+                    disabled={paying}
                     style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#fff', fontSize: 14 }}
                   />
                 </div>
@@ -432,8 +450,8 @@ export default function Workers({ guildId, userRole }: Props) {
                 <button
                   className="btn btn-primary"
                   onClick={handlePay}
-                  disabled={paying || !payTargetWallet || !payAmount || parseFloat(payAmount) <= 0}
-                  style={{ background: '#10b981', minWidth: 140 }}
+                  disabled={paying || !payAmount || parseFloat(payAmount) <= 0}
+                  style={{ background: payTargetWallet ? '#10b981' : '#d97706', minWidth: 140 }}
                 >
                   {paying ? '⏳ Sending...' : `✨ Send $${parseFloat(payAmount || '0').toFixed(2)} USD`}
                 </button>

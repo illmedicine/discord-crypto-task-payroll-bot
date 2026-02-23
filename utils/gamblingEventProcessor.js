@@ -269,8 +269,12 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     console.log(`[GamblingProcessor] Processing event #${eventId} (reason=${reason})`);
 
-    // Mark as ended early to prevent duplicate processing
-    await db.updateGamblingEventStatus(eventId, 'ended');
+    // Atomically mark as ended — only if still active (prevents duplicate processing from race conditions)
+    const statusResult = await db.updateGamblingEventStatus(eventId, 'ended', 'active');
+    if (!statusResult || statusResult.changes === 0) {
+      console.log(`[GamblingProcessor] Event #${eventId} was already claimed by another process, skipping`);
+      return;
+    }
 
     const bets = await db.getGamblingEventBets(eventId);
     const slots = await db.getGamblingEventSlots(eventId);
