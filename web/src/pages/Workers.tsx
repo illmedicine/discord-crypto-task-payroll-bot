@@ -42,31 +42,7 @@ type GuildMember = {
   avatar: string | null
 }
 
-type PayrollSummary = {
-  today: { count: number; total_sol: number; total_usd: number }
-  week: { count: number; total_sol: number; total_usd: number }
-  month: { count: number; total_sol: number; total_usd: number }
-  allTime: { count: number; total_sol: number; total_usd: number }
-  perWorker: { recipient_discord_id: string; username: string; pay_count: number; total_sol: number; total_usd: number; last_paid: string }[]
-  dailyBreakdown: { date: string; count: number; total_sol: number; total_usd: number }[]
-}
-
-type PayoutRecord = {
-  id: number
-  recipient_discord_id: string
-  recipient_username: string
-  recipient_address: string
-  amount_sol: number
-  amount_usd: number | null
-  sol_price_at_time: number | null
-  tx_signature: string | null
-  status: string
-  memo: string | null
-  paid_by: string
-  paid_at: string
-}
-
-type Props = { guildId: string; isOwner?: boolean; userRole?: string }
+type Props = { guildId: string; userRole?: string }
 
 function timeAgo(dateStr: string | null): string {
   if (!dateStr) return 'never'
@@ -97,7 +73,7 @@ const STATUS_COLORS: Record<string, string> = {
   offline: '#64748b',
 }
 
-export default function Workers({ guildId, isOwner, userRole }: Props) {
+export default function Workers({ guildId, userRole }: Props) {
   const [workers, setWorkers] = useState<Worker[]>([])
   const [loading, setLoading] = useState(true)
   const [days, setDays] = useState(30)
@@ -108,21 +84,18 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
   const [addId, setAddId] = useState('')
   const [addRole, setAddRole] = useState<'staff' | 'admin'>('staff')
   const [error, setError] = useState('')
-  // Payroll state
-  const [tab, setTab] = useState<'workers' | 'payroll'>('workers')
+
+  // Pay Worker state
   const [showPayModal, setShowPayModal] = useState(false)
-  const [payTarget, setPayTarget] = useState<WorkerDetail | null>(null)
+  const [payTarget, setPayTarget] = useState<Worker | null>(null)
+  const [payTargetWallet, setPayTargetWallet] = useState<string | null>(null)
+  const [payWalletLoading, setPayWalletLoading] = useState(false)
   const [payAmount, setPayAmount] = useState('')
   const [payMemo, setPayMemo] = useState('')
-  const [payLoading, setPayLoading] = useState(false)
-  const [payError, setPayError] = useState('')
-  const [paySuccess, setPaySuccess] = useState<{ signature: string; amount_sol: number; amount_usd: number | null; sol_price: number | null } | null>(null)
-  const [payTargetWallet, setPayTargetWallet] = useState<string | null>(null)
-  const [payrollSummary, setPayrollSummary] = useState<PayrollSummary | null>(null)
-  const [payrollHistory, setPayrollHistory] = useState<PayoutRecord[]>([])
-  const [payrollPeriod, setPayrollPeriod] = useState<'day' | 'week' | 'month' | 'all'>('month')
-  const [payrollLoading, setPayrollLoading] = useState(false)
-  const strictOwner = userRole === 'owner'
+  const [paying, setPaying] = useState(false)
+  const [payResult, setPayResult] = useState<{ ok: boolean; signature?: string; amount_sol?: number; amount_usd?: number; sol_price?: number; error?: string } | null>(null)
+
+  const isOwner = userRole === 'owner'
 
   const fetchWorkers = useCallback(() => {
     if (!guildId) return
@@ -134,60 +107,6 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
   }, [guildId, days])
 
   useEffect(() => { fetchWorkers() }, [fetchWorkers])
-
-  // Fetch payroll data when payroll tab is active
-  const fetchPayroll = useCallback(() => {
-    if (!guildId) return
-    setPayrollLoading(true)
-    Promise.all([
-      api.get(`/admin/guilds/${guildId}/payroll?period=${payrollPeriod}`),
-      api.get(`/admin/guilds/${guildId}/payroll/history?limit=100`)
-    ])
-      .then(([summaryRes, historyRes]) => {
-        setPayrollSummary(summaryRes.data)
-        setPayrollHistory(historyRes.data || [])
-      })
-      .catch(() => {})
-      .finally(() => setPayrollLoading(false))
-  }, [guildId, payrollPeriod])
-
-  useEffect(() => {
-    if (tab === 'payroll') fetchPayroll()
-  }, [tab, fetchPayroll])
-
-  const openPayModal = async (worker: WorkerDetail) => {
-    setPayTarget(worker)
-    setPayAmount('')
-    setPayMemo('')
-    setPayError('')
-    setPaySuccess(null)
-    setPayTargetWallet(null)
-    setShowPayModal(true)
-    // Fetch wallet status
-    try {
-      const r = await api.get(`/admin/guilds/${guildId}/workers/${worker.discord_id}/wallet`)
-      setPayTargetWallet(r.data?.wallet_address || null)
-    } catch { setPayTargetWallet(null) }
-  }
-
-  const handlePay = async () => {
-    if (!payTarget || !payAmount) return
-    setPayLoading(true)
-    setPayError('')
-    setPaySuccess(null)
-    try {
-      const r = await api.post(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/pay`, {
-        amount_usd: Number(payAmount),
-        memo: payMemo || undefined
-      })
-      setPaySuccess({ signature: r.data.signature, amount_sol: r.data.amount_sol, amount_usd: r.data.amount_usd, sol_price: r.data.sol_price })
-      fetchWorkers()
-      fetchPayroll()
-    } catch (e: any) {
-      setPayError(e?.response?.data?.message || e?.response?.data?.error || 'Payment failed')
-    }
-    setPayLoading(false)
-  }
 
   const openDetail = async (discordId: string) => {
     setDetailLoading(true)
@@ -241,6 +160,44 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
     } catch {}
   }
 
+  // ── Pay Worker ──
+  const openPayModal = async (worker: Worker) => {
+    setPayTarget(worker)
+    setPayTargetWallet(null)
+    setPayAmount('')
+    setPayMemo('')
+    setPayResult(null)
+    setShowPayModal(true)
+    setPayWalletLoading(true)
+    try {
+      const r = await api.get(`/admin/guilds/${guildId}/workers/${worker.discord_id}/wallet`)
+      setPayTargetWallet(r.data?.wallet_address || null)
+    } catch {
+      setPayTargetWallet(null)
+    }
+    setPayWalletLoading(false)
+  }
+
+  const handlePay = async () => {
+    if (!payTarget || !payTargetWallet || !payAmount) return
+    const usd = parseFloat(payAmount)
+    if (isNaN(usd) || usd <= 0) return
+    setPaying(true)
+    setPayResult(null)
+    try {
+      const r = await api.post(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/pay`, {
+        amount_usd: usd,
+        memo: payMemo || undefined,
+      })
+      setPayResult({ ok: true, ...r.data })
+      fetchWorkers() // refresh stats
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.response?.data?.error || 'Payment failed'
+      setPayResult({ ok: false, error: msg })
+    }
+    setPaying(false)
+  }
+
   const admins = workers.filter(w => w.role === 'admin')
   const staff = workers.filter(w => w.role === 'staff')
 
@@ -258,132 +215,96 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
           <p className="text-muted">Manage DCB Staff & Admins — track activity, payouts, and engagement</p>
         </div>
         <div className="page-header-actions">
-          {tab === 'workers' && (
-            <>
-              <select className="form-select" value={days} onChange={e => setDays(Number(e.target.value))}>
-                <option value={7}>Last 7 days</option>
-                <option value={14}>Last 14 days</option>
-                <option value={30}>Last 30 days</option>
-                <option value={90}>Last 90 days</option>
-              </select>
-              <button className="btn btn-primary" onClick={openAddModal}>+ Add Worker</button>
-            </>
-          )}
-          {tab === 'payroll' && (
-            <select className="form-select" value={payrollPeriod} onChange={e => setPayrollPeriod(e.target.value as any)}>
-              <option value="day">Today</option>
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
-              <option value="all">All Time</option>
-            </select>
-          )}
+          <select className="form-select" value={days} onChange={e => setDays(Number(e.target.value))}>
+            <option value={7}>Last 7 days</option>
+            <option value={14}>Last 14 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+          </select>
+          <button className="btn btn-primary" onClick={openAddModal}>+ Add Worker</button>
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div className="payroll-tabs">
-        <button className={`payroll-tab ${tab === 'workers' ? 'payroll-tab-active' : ''}`} onClick={() => setTab('workers')}>
-          👥 Workers
-        </button>
-        <button className={`payroll-tab ${tab === 'payroll' ? 'payroll-tab-active' : ''}`} onClick={() => setTab('payroll')}>
-          💰 Payroll
-        </button>
+      {/* Summary stats bar */}
+      <div className="workers-summary-bar">
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">{workers.length}</span>
+          <span className="workers-summary-label">Total Workers</span>
+        </div>
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">{admins.length}</span>
+          <span className="workers-summary-label">Admins</span>
+        </div>
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">{staff.length}</span>
+          <span className="workers-summary-label">Staff</span>
+        </div>
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">{totalCommands.toLocaleString()}</span>
+          <span className="workers-summary-label">Commands Run</span>
+        </div>
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">{totalPayouts}</span>
+          <span className="workers-summary-label">Payouts Issued</span>
+        </div>
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">◎ {totalPayoutAmt.toFixed(2)}</span>
+          <span className="workers-summary-label">Total Paid Out</span>
+        </div>
+        <div className="workers-summary-stat">
+          <span className="workers-summary-value">{totalMessages.toLocaleString()}</span>
+          <span className="workers-summary-label">Messages</span>
+        </div>
       </div>
 
-      {tab === 'workers' && (
-        <>
-          {/* Summary stats bar */}
-          <div className="workers-summary-bar">
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">{workers.length}</span>
-              <span className="workers-summary-label">Total Workers</span>
-            </div>
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">{admins.length}</span>
-              <span className="workers-summary-label">Admins</span>
-            </div>
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">{staff.length}</span>
-              <span className="workers-summary-label">Staff</span>
-            </div>
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">{totalCommands.toLocaleString()}</span>
-              <span className="workers-summary-label">Commands Run</span>
-            </div>
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">{totalPayouts}</span>
-              <span className="workers-summary-label">Payouts Issued</span>
-            </div>
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">◎ {totalPayoutAmt.toFixed(2)}</span>
-              <span className="workers-summary-label">Total Paid Out</span>
-            </div>
-            <div className="workers-summary-stat">
-              <span className="workers-summary-value">{totalMessages.toLocaleString()}</span>
-              <span className="workers-summary-label">Messages</span>
-            </div>
+      {loading ? (
+        <div className="loading-state">Loading workers...</div>
+      ) : workers.length === 0 ? (
+        <div className="empty-state">
+          <h3>No Workers Configured</h3>
+          <p>Use the <strong>+ Add Worker</strong> button above or the <code>/dcb-role assign</code> command in Discord to add staff members.</p>
+        </div>
+      ) : (
+        <div className="workers-layout">
+          {/* Workers list */}
+          <div className="workers-list">
+            {admins.length > 0 && (
+              <>
+                <div className="workers-section-label"><span className="role-dot role-dot-admin" /> DCB Admins ({admins.length})</div>
+                {admins.map(w => (
+                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} />
+                ))}
+              </>
+            )}
+            {staff.length > 0 && (
+              <>
+                <div className="workers-section-label"><span className="role-dot role-dot-staff" /> DCB Staff ({staff.length})</div>
+                {staff.map(w => (
+                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} />
+                ))}
+              </>
+            )}
           </div>
 
-          {loading ? (
-            <div className="loading-state">Loading workers...</div>
-          ) : workers.length === 0 ? (
-            <div className="empty-state">
-              <h3>No Workers Configured</h3>
-              <p>Use the <strong>+ Add Worker</strong> button above or the <code>/dcb-role assign</code> command in Discord to add staff members.</p>
-            </div>
-          ) : (
-            <div className="workers-layout">
-              {/* Workers list */}
-              <div className="workers-list">
-                {admins.length > 0 && (
-                  <>
-                    <div className="workers-section-label"><span className="role-dot role-dot-admin" /> DCB Admins ({admins.length})</div>
-                    {admins.map(w => (
-                      <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} />
-                    ))}
-                  </>
-                )}
-                {staff.length > 0 && (
-                  <>
-                    <div className="workers-section-label"><span className="role-dot role-dot-staff" /> DCB Staff ({staff.length})</div>
-                    {staff.map(w => (
-                      <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} />
-                    ))}
-                  </>
-                )}
+          {/* Detail panel */}
+          <div className="workers-detail">
+            {detailLoading ? (
+              <div className="loading-state">Loading details...</div>
+            ) : selectedWorker ? (
+              <WorkerDetailPanel
+                worker={selectedWorker}
+                onRoleChange={handleRoleChange}
+                onRemove={handleRemove}
+                onPay={isOwner ? openPayModal : undefined}
+              />
+            ) : (
+              <div className="workers-detail-placeholder">
+                <span style={{ fontSize: 48 }}>👤</span>
+                <p>Select a worker to view details</p>
               </div>
-
-              {/* Detail panel */}
-              <div className="workers-detail">
-                {detailLoading ? (
-                  <div className="loading-state">Loading details...</div>
-                ) : selectedWorker ? (
-                  <WorkerDetailPanel
-                    worker={selectedWorker}
-                    onRoleChange={handleRoleChange}
-                    onRemove={handleRemove}
-                    onPay={strictOwner ? openPayModal : undefined}
-                    isOwner={strictOwner}
-                  />
-                ) : (
-                  <div className="workers-detail-placeholder">
-                    <span style={{ fontSize: 48 }}>👤</span>
-                    <p>Select a worker to view details</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      {tab === 'payroll' && (
-        <PayrollPanel
-          summary={payrollSummary}
-          history={payrollHistory}
-          loading={payrollLoading}
-          period={payrollPeriod}
-        />
+            )}
+          </div>
+        </div>
       )}
 
       {/* Add worker modal */}
@@ -413,103 +334,111 @@ export default function Workers({ guildId, isOwner, userRole }: Props) {
         </div>
       )}
 
-      {/* Pay worker modal */}
+      {/* Pay Worker modal */}
       {showPayModal && payTarget && (
-        <div className="modal-overlay" onClick={() => { if (!payLoading) setShowPayModal(false) }}>
-          <div className="modal-card payroll-pay-modal" onClick={e => e.stopPropagation()}>
-            {paySuccess ? (
-              <div className="payroll-success">
-                <span style={{ fontSize: 48 }}>✅</span>
-                <h3>Payment Sent!</h3>
-                <p>${paySuccess.amount_usd != null ? paySuccess.amount_usd.toFixed(2) : '0.00'} USD sent to {payTarget.display_name || payTarget.username}</p>
-                <p className="text-muted">≈ ◎{paySuccess.amount_sol.toFixed(4)} SOL{paySuccess.sol_price ? ` @ $${paySuccess.sol_price.toFixed(2)}/SOL` : ''}</p>
-                <a
-                  href={`https://solscan.io/tx/${paySuccess.signature}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-secondary"
-                  style={{ marginTop: 12 }}
-                >
-                  View on Solscan ↗
-                </a>
-                <button className="btn btn-primary" onClick={() => setShowPayModal(false)} style={{ marginTop: 8 }}>Close</button>
+        <div className="modal-overlay" onClick={() => { if (!paying) setShowPayModal(false) }}>
+          <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <h3>💸 Pay Worker</h3>
+            <p className="text-muted">Send USD payment from guild treasury to {payTarget.display_name || payTarget.username}</p>
+
+            {/* Worker info */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'rgba(255,255,255,0.05)', borderRadius: 8, margin: '12px 0' }}>
+              <div className="worker-avatar-wrap">
+                {payTarget.avatar ? (
+                  <img src={payTarget.avatar} alt="" className="worker-avatar" />
+                ) : (
+                  <div className="worker-avatar worker-avatar-placeholder">{(payTarget.display_name || payTarget.username || '?')[0].toUpperCase()}</div>
+                )}
               </div>
-            ) : (
-              <>
-                <h3>💸 Pay Worker</h3>
-                <p className="text-muted">Send USD payment from guild treasury to {payTarget.display_name || payTarget.username}</p>
-                {payError && <div className="form-error">{payError}</div>}
+              <div>
+                <div style={{ fontWeight: 600 }}>{payTarget.display_name || payTarget.username}</div>
+                <span className={`worker-role-badge worker-role-badge-${payTarget.role}`}>
+                  {payTarget.role === 'admin' ? '🔴 Admin' : '🔵 Staff'}
+                </span>
+              </div>
+            </div>
 
-                <div className="payroll-pay-recipient">
-                  <div className="worker-avatar-wrap">
-                    {payTarget.avatar ? (
-                      <img src={payTarget.avatar} alt="" className="worker-avatar" />
-                    ) : (
-                      <div className="worker-avatar worker-avatar-placeholder">{(payTarget.display_name || payTarget.username || '?')[0].toUpperCase()}</div>
+            {/* Wallet status */}
+            <div style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, margin: '8px 0', fontSize: 14 }}>
+              {payWalletLoading ? (
+                <span style={{ color: '#94a3b8' }}>⏳ Checking wallet...</span>
+              ) : payTargetWallet ? (
+                <span style={{ color: '#10b981' }}>🟢 Wallet: {payTargetWallet.slice(0, 6)}...{payTargetWallet.slice(-4)}</span>
+              ) : (
+                <span style={{ color: '#ef4444' }}>🔴 No Wallet Connected — Worker must run <code>/user-wallet connect</code></span>
+              )}
+            </div>
+
+            {/* Payment result */}
+            {payResult && (
+              <div style={{ padding: '12px 16px', borderRadius: 8, margin: '8px 0', background: payResult.ok ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239,68,68,0.15)', border: `1px solid ${payResult.ok ? '#10b981' : '#ef4444'}` }}>
+                {payResult.ok ? (
+                  <>
+                    <div style={{ fontWeight: 600, color: '#10b981' }}>✅ Payment Sent!</div>
+                    <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4 }}>
+                      ${payResult.amount_usd?.toFixed(2)} → ◎{payResult.amount_sol?.toFixed(4)} SOL (@ ${payResult.sol_price?.toFixed(2)}/SOL)
+                    </div>
+                    {payResult.signature && (
+                      <a href={`https://solscan.io/tx/${payResult.signature}`} target="_blank" rel="noreferrer"
+                        style={{ fontSize: 12, color: '#60a5fa', marginTop: 4, display: 'inline-block' }}>
+                        View on Solscan ↗
+                      </a>
                     )}
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{payTarget.display_name || payTarget.username}</div>
-                    <span className={`worker-role-badge worker-role-badge-${payTarget.role}`}>
-                      {payTarget.role === 'admin' ? '🔴 Admin' : '🔵 Staff'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="payroll-wallet-status">
-                  {payTargetWallet ? (
-                    <div className="payroll-wallet-connected">
-                      <span>🟢 Wallet Connected</span>
-                      <code>{payTargetWallet.slice(0, 6)}...{payTargetWallet.slice(-4)}</code>
-                    </div>
-                  ) : (
-                    <div className="payroll-wallet-missing">
-                      <span>🔴 No Wallet Connected</span>
-                      <span className="text-muted">Worker must run <code>/user-wallet connect</code></span>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
-                  <div>
-                    <label className="payroll-label">Amount (USD)</label>
-                    <input
-                      type="number"
-                      className="form-input"
-                      placeholder="0.00"
-                      step="0.01"
-                      min="0.01"
-                      max="100000"
-                      value={payAmount}
-                      onChange={e => setPayAmount(e.target.value)}
-                      disabled={payLoading}
-                    />
-                  </div>
-                  <div>
-                    <label className="payroll-label">Memo (optional)</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g. Weekly salary, Bonus, etc."
-                      value={payMemo}
-                      onChange={e => setPayMemo(e.target.value)}
-                      disabled={payLoading}
-                      maxLength={100}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
-                    <button className="btn btn-secondary" onClick={() => setShowPayModal(false)} disabled={payLoading}>Cancel</button>
-                    <button
-                      className="btn btn-pay"
-                      onClick={handlePay}
-                      disabled={payLoading || !payAmount || Number(payAmount) <= 0 || !payTargetWallet}
-                    >
-                      {payLoading ? '⏳ Sending...' : `💸 Send $${payAmount || '0'} USD`}
-                    </button>
-                  </div>
-                </div>
-              </>
+                  </>
+                ) : (
+                  <div style={{ color: '#ef4444' }}>❌ {payResult.error}</div>
+                )}
+              </div>
             )}
+
+            {/* Amount & memo inputs */}
+            {!payResult?.ok && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: '#94a3b8', marginBottom: 4, display: 'block' }}>Amount (USD)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    placeholder="0.00"
+                    min="0.01"
+                    step="0.01"
+                    value={payAmount}
+                    onChange={e => setPayAmount(e.target.value)}
+                    disabled={paying || !payTargetWallet}
+                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#fff', fontSize: 16 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', color: '#94a3b8', marginBottom: 4, display: 'block' }}>Memo (optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Weekly pay, bonus, etc."
+                    value={payMemo}
+                    onChange={e => setPayMemo(e.target.value)}
+                    disabled={paying || !payTargetWallet}
+                    style={{ width: '100%', padding: '10px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#fff', fontSize: 14 }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn btn-secondary" onClick={() => setShowPayModal(false)} disabled={paying}>
+                {payResult?.ok ? 'Close' : 'Cancel'}
+              </button>
+              {!payResult?.ok && (
+                <button
+                  className="btn btn-primary"
+                  onClick={handlePay}
+                  disabled={paying || !payTargetWallet || !payAmount || parseFloat(payAmount) <= 0}
+                  style={{ background: '#10b981', minWidth: 140 }}
+                >
+                  {paying ? '⏳ Sending...' : `✨ Send $${parseFloat(payAmount || '0').toFixed(2)} USD`}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -555,7 +484,7 @@ function WorkerCard({ worker, onSelect, selected }: { worker: Worker; onSelect: 
   )
 }
 
-function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay, isOwner }: { worker: WorkerDetail; onRoleChange: (id: string, role: 'staff' | 'admin') => void; onRemove: (id: string) => void; onPay?: (w: WorkerDetail) => void; isOwner?: boolean }) {
+function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay }: { worker: WorkerDetail; onRoleChange: (id: string, role: 'staff' | 'admin') => void; onRemove: (id: string) => void; onPay?: (worker: WorkerDetail) => void }) {
   return (
     <div className="worker-detail-content">
       <div className="worker-detail-header">
@@ -572,8 +501,8 @@ function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay, isOwner }: {
           <span className={`worker-role-badge worker-role-badge-${worker.role}`}>{worker.role === 'admin' ? '🔴 DCB Admin' : '🔵 DCB Staff'}</span>
         </div>
         <div className="worker-detail-actions">
-          {onPay && isOwner && (
-            <button className="btn btn-pay btn-sm" onClick={() => onPay(worker)}>💸 Pay</button>
+          {onPay && (
+            <button className="btn btn-sm" style={{ background: '#10b981', color: '#fff' }} onClick={() => onPay(worker)}>💸 Pay</button>
           )}
           <select className="form-select form-select-sm" value={worker.role} onChange={e => onRoleChange(worker.discord_id, e.target.value as any)}>
             <option value="staff">DCB Staff</option>
@@ -643,7 +572,6 @@ function activityIcon(type: string): string {
   switch (type) {
     case 'command': return '⌨️'
     case 'payout': return '💸'
-    case 'payout_received': return '💰'
     case 'role_assigned': return '✨'
     case 'role_removed': return '🚫'
     case 'role_promoted': return '⬆️'
@@ -652,128 +580,4 @@ function activityIcon(type: string): string {
     case 'message': return '💬'
     default: return '📋'
   }
-}
-
-// ---- Payroll Panel ----
-
-function PayrollPanel({ summary, history, loading, period }: {
-  summary: PayrollSummary | null
-  history: PayoutRecord[]
-  loading: boolean
-  period: string
-}) {
-  if (loading) return <div className="loading-state">Loading payroll data...</div>
-  if (!summary) return <div className="empty-state"><h3>No Payroll Data</h3><p>Pay your staff from the Workers tab to see payroll reports here.</p></div>
-
-  const periodLabel = period === 'day' ? 'Today' : period === 'week' ? 'This Week' : period === 'month' ? 'This Month' : 'All Time'
-
-  return (
-    <div className="payroll-panel">
-      {/* Period summary cards */}
-      <div className="payroll-summary-grid">
-        <div className={`payroll-summary-card ${period === 'day' ? 'payroll-summary-card-active' : ''}`}>
-          <span className="payroll-summary-card-icon">📅</span>
-          <span className="payroll-summary-card-label">Today</span>
-          <span className="payroll-summary-card-value">${(summary.today.total_usd || 0).toFixed(2)}</span>
-          <span className="payroll-summary-card-sub">{summary.today.count} payment{summary.today.count !== 1 ? 's' : ''}{summary.today.total_sol ? ` · ◎${summary.today.total_sol.toFixed(4)}` : ''}</span>
-        </div>
-        <div className={`payroll-summary-card ${period === 'week' ? 'payroll-summary-card-active' : ''}`}>
-          <span className="payroll-summary-card-icon">📆</span>
-          <span className="payroll-summary-card-label">This Week</span>
-          <span className="payroll-summary-card-value">${(summary.week.total_usd || 0).toFixed(2)}</span>
-          <span className="payroll-summary-card-sub">{summary.week.count} payment{summary.week.count !== 1 ? 's' : ''}{summary.week.total_sol ? ` · ◎${summary.week.total_sol.toFixed(4)}` : ''}</span>
-        </div>
-        <div className={`payroll-summary-card ${period === 'month' ? 'payroll-summary-card-active' : ''}`}>
-          <span className="payroll-summary-card-icon">🗓️</span>
-          <span className="payroll-summary-card-label">This Month</span>
-          <span className="payroll-summary-card-value">${(summary.month.total_usd || 0).toFixed(2)}</span>
-          <span className="payroll-summary-card-sub">{summary.month.count} payment{summary.month.count !== 1 ? 's' : ''}{summary.month.total_sol ? ` · ◎${summary.month.total_sol.toFixed(4)}` : ''}</span>
-        </div>
-        <div className={`payroll-summary-card ${period === 'all' ? 'payroll-summary-card-active' : ''}`}>
-          <span className="payroll-summary-card-icon">🏦</span>
-          <span className="payroll-summary-card-label">All Time</span>
-          <span className="payroll-summary-card-value">${(summary.allTime.total_usd || 0).toFixed(2)}</span>
-          <span className="payroll-summary-card-sub">{summary.allTime.count} payment{summary.allTime.count !== 1 ? 's' : ''}{summary.allTime.total_sol ? ` · ◎${summary.allTime.total_sol.toFixed(4)}` : ''}</span>
-        </div>
-      </div>
-
-      {/* Per-worker breakdown */}
-      {summary.perWorker.length > 0 && (
-        <div className="payroll-section">
-          <h4>👥 Per-Worker Breakdown ({periodLabel})</h4>
-          <div className="payroll-table">
-            <div className="payroll-table-header">
-              <span>Worker</span>
-              <span>Payments</span>
-              <span>Total USD</span>
-              <span>Total SOL</span>
-              <span>Last Paid</span>
-            </div>
-            {summary.perWorker.map(pw => (
-              <div key={pw.recipient_discord_id} className="payroll-table-row">
-                <span className="payroll-table-name">{pw.username || pw.recipient_discord_id}</span>
-                <span>{pw.pay_count}</span>
-                <span className="payroll-usd">${pw.total_usd ? `${pw.total_usd.toFixed(2)}` : '—'}</span>
-                <span className="payroll-sol">◎ {(pw.total_sol || 0).toFixed(4)}</span>
-                <span className="text-muted">{pw.last_paid ? timeAgo(pw.last_paid) : '—'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Daily breakdown chart (text-based) */}
-      {summary.dailyBreakdown.length > 0 && (
-        <div className="payroll-section">
-          <h4>📊 Daily Spending (Last 30 Days)</h4>
-          <div className="payroll-daily-chart">
-            {summary.dailyBreakdown.slice(0, 14).map(d => {
-              const maxUsd = Math.max(...summary.dailyBreakdown.map(dd => dd.total_usd || 0), 0.01)
-              const pct = Math.min(100, ((d.total_usd || 0) / maxUsd) * 100)
-              return (
-                <div key={d.date} className="payroll-daily-row">
-                  <span className="payroll-daily-date">{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                  <div className="payroll-daily-bar-wrap">
-                    <div className="payroll-daily-bar" style={{ width: `${pct}%` }} />
-                  </div>
-                  <span className="payroll-daily-amount">${(d.total_usd || 0).toFixed(2)}</span>
-                  <span className="payroll-daily-count">{d.count}x</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Recent payout history */}
-      <div className="payroll-section">
-        <h4>📜 Payout History</h4>
-        {history.length === 0 ? (
-          <p className="text-muted">No payouts yet.</p>
-        ) : (
-          <div className="payroll-history-list">
-            {history.map(h => (
-              <div key={h.id} className={`payroll-history-item payroll-history-${h.status}`}>
-                <div className="payroll-history-left">
-                  <span className="payroll-history-icon">{h.status === 'confirmed' ? '✅' : h.status === 'pending' ? '⏳' : '❌'}</span>
-                  <div>
-                    <div className="payroll-history-name">{h.recipient_username || h.recipient_discord_id}</div>
-                    {h.memo && <div className="payroll-history-memo">{h.memo}</div>}
-                  </div>
-                </div>
-                <div className="payroll-history-right">
-                  <span className="payroll-history-amount">{h.amount_usd != null ? `$${h.amount_usd.toFixed(2)}` : `◎${h.amount_sol.toFixed(4)}`}</span>
-                  <span className="payroll-history-usd">◎{h.amount_sol.toFixed(4)}</span>
-                  <span className="payroll-history-time">{timeAgo(h.paid_at)}</span>
-                  {h.tx_signature && (
-                    <a href={`https://solscan.io/tx/${h.tx_signature}`} target="_blank" rel="noopener noreferrer" className="payroll-history-tx" title="View on Solscan">↗</a>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
 }

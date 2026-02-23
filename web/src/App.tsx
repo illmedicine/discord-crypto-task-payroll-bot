@@ -1,38 +1,47 @@
 import React, { useEffect, useRef, useState } from 'react'
 import Dashboard from './pages/Dashboard'
-import EventManager from './pages/EventManager'
+import Tasks from './pages/Tasks'
+// VoteEvents replaced by Events (enhanced vote event page with media picker)
+import Contests from './pages/Contests'
+import BulkTasks from './pages/BulkTasks'
+import Events from './pages/Events'
 import History from './pages/History'
 import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
 import QualifyPage from './pages/QualifyPage'
 
+const ScheduledPosts = React.lazy(() => import('./pages/ScheduledPosts'))
+const Proofs = React.lazy(() => import('./pages/Proofs'))
+
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
-import EventTicker from './components/EventTicker'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify'
+type Page = 'dashboard' | 'tasks' | 'bulk_tasks' | 'votes' | 'contests' | 'history' | 'treasury' | 'workers' | 'scheduled' | 'proofs' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
   { id: 'workers', label: 'Workers', icon: '👥' },
-  { id: 'events', label: 'Event Manager', icon: '🎯' },
+  { id: 'tasks', label: 'Tasks', icon: '📋' },
+  { id: 'bulk_tasks', label: 'Bulk Tasks', icon: '📦' },
+  { id: 'contests', label: 'Contests', icon: '🏆' },
+  { id: 'votes', label: 'Vote Events', icon: '🗳️' },
   { id: 'history', label: 'History', icon: '📜' },
+  { id: 'scheduled', label: 'Scheduled Posts', icon: '⏰' },
+  { id: 'proofs', label: 'Proofs', icon: '✅' },
 ]
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
-  const [user, setUser] = useState<{ id: string; username: string; discriminator: string; avatar?: string; auth_provider?: string; google_email?: string; google_picture?: string; google_id?: string } | null>(null)
+  const [user, setUser] = useState<{ id: string; username: string; discriminator: string; auth_provider?: string; google_email?: string; google_picture?: string; google_id?: string } | null>(null)
   const [guilds, setGuilds] = useState<{ id: string; name: string; role?: string }[]>([])
   const [guildId, setGuildId] = useState<string>('')
   const [accountInfo, setAccountInfo] = useState<{ discord_linked: boolean; google_linked: boolean; google_email?: string } | null>(null)
   const [authProviders, setAuthProviders] = useState<{ discord: boolean; google: boolean }>({ discord: true, google: false })
   const [prefsLoaded, setPrefsLoaded] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [qualifyEventId, setQualifyEventId] = useState<number | null>(null)
-  const [qualifyEventType, setQualifyEventType] = useState<'vote' | 'race'>('vote')
   const profileRef = useRef<HTMLDivElement>(null)
 
   // Close profile menu on outside click
@@ -60,26 +69,13 @@ export default function App() {
 
   useEffect(() => {
     // Handle hash-based navigation
-    let hash = window.location.hash.replace(/^#/, '')
-    // Backward compat: old #votes and #gambling → #events
-    if (hash === 'votes' || hash === 'gambling') {
-      hash = 'events'
-      window.location.hash = 'events'
-    }
-    // Check for qualify-{eventId} hash (vote events)
+    const hash = window.location.hash.replace(/^#/, '')
+    // Check for qualify-{eventId} hash
     const qualifyMatch = hash.match(/^qualify-(\d+)$/)
     if (qualifyMatch) {
       setQualifyEventId(Number(qualifyMatch[1]))
-      setQualifyEventType('vote')
       setPage('qualify')
-    }
-    // Check for race-qualify-{eventId} hash (gambling/horse race events)
-    const raceQualifyMatch = hash.match(/^race-qualify-(\d+)$/)
-    if (raceQualifyMatch) {
-      setQualifyEventId(Number(raceQualifyMatch[1]))
-      setQualifyEventType('race')
-      setPage('qualify')
-    } else if (!qualifyMatch && hash && NAV_ITEMS.some(n => n.id === hash)) {
+    } else if (hash && NAV_ITEMS.some(n => n.id === hash)) {
       setPage(hash as Page)
     }
 
@@ -110,8 +106,6 @@ export default function App() {
         } catch (_) {}
         if (!savedGuild) savedGuild = localStorage.getItem('dcb_selected_guild') || ''
         if (!savedPage) savedPage = localStorage.getItem('dcb_selected_page') || ''
-        // Backward compat: old saved page names → events
-        if (savedPage === 'votes' || savedPage === 'gambling') savedPage = 'events'
 
         // Load account info (linked providers)
         try {
@@ -144,7 +138,6 @@ export default function App() {
   const navigate = (p: Page) => {
     setPage(p)
     window.location.hash = p
-    setSidebarOpen(false)
     if (prefsLoaded) savePrefs(guildId, p)
   }
 
@@ -152,9 +145,6 @@ export default function App() {
     setGuildId(newGuildId)
     if (prefsLoaded) savePrefs(newGuildId, page)
   }
-
-  const userRole = guilds.find(g => g.id === guildId)?.role || 'member'
-  const isOwner = userRole === 'owner' || userRole === 'admin'
 
   // Not logged in - show login screen
   if (!user) {
@@ -200,11 +190,8 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      {/* Mobile overlay */}
-      {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
-
       {/* Sidebar */}
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+      <aside className="sidebar">
         <div className="sidebar-brand">
           <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" className="sidebar-brand-logo" />
           <span className="sidebar-brand-text">DCB Event Manager</span>
@@ -226,9 +213,7 @@ export default function App() {
         <div className="sidebar-user-wrapper" ref={profileRef}>
           <button className="sidebar-user" onClick={() => setProfileMenuOpen(v => !v)}>
             <div className="sidebar-user-avatar" title={user.auth_provider === 'google' ? `Google: ${user.google_email || ''}` : `Discord: ${user.username}`}>
-              {user.auth_provider !== 'google' && user.avatar ? (
-                <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-              ) : user.google_picture ? (
+              {user.google_picture ? (
                 <img src={user.google_picture} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
               ) : (
                 user.username.charAt(0).toUpperCase()
@@ -248,9 +233,7 @@ export default function App() {
             <div className="profile-menu">
               <div className="profile-menu-header">
                 <div className="profile-menu-avatar">
-                  {user.auth_provider !== 'google' && user.avatar ? (
-                    <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128`} alt="" />
-                  ) : user.google_picture ? (
+                  {user.google_picture ? (
                     <img src={user.google_picture} alt="" />
                   ) : (
                     user.username.charAt(0).toUpperCase()
@@ -298,9 +281,6 @@ export default function App() {
       {/* Main Content */}
       <div className="main-content">
         <div className="top-bar">
-          <button className="hamburger-btn" onClick={() => setSidebarOpen(v => !v)} aria-label="Toggle menu">
-            <span /><span /><span />
-          </button>
           <select
             className="top-bar-guild-select"
             value={guildId}
@@ -308,7 +288,7 @@ export default function App() {
           >
             {guilds.length === 0 && <option value="">No servers</option>}
             {guilds.map(g => (
-              <option key={g.id} value={g.id}>{g.name}{g.role && g.role !== 'owner' ? ` (${g.role})` : ''}</option>
+              <option key={g.id} value={g.id}>{g.name}</option>
             ))}
           </select>
           <div className="top-bar-actions">
@@ -318,17 +298,20 @@ export default function App() {
           </div>
         </div>
 
-        {guildId && <EventTicker guildId={guildId} />}
-
         <main>
           <PerformanceMonitor />
           <ProfilerLogger id="App">
             {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
-            {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} eventType={qualifyEventType} />}
-            {page === 'events' && <EventManager guildId={guildId} isOwner={isOwner} />}
+            {page === 'tasks' && <Tasks guildId={guildId} />}
+            {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
+            {page === 'bulk_tasks' && <BulkTasks guildId={guildId} />}
+            {page === 'votes' && <Events guildId={guildId} />}
+            {page === 'contests' && <Contests guildId={guildId} />}
             {page === 'history' && <History guildId={guildId} />}
-            {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
-            {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
+            {page === 'treasury' && <Treasury guildId={guildId} />}
+            {page === 'workers' && <Workers guildId={guildId} userRole={guilds.find(g => g.id === guildId)?.role || 'member'} />}
+            {page === 'scheduled' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><ScheduledPosts /></React.Suspense>}
+            {page === 'proofs' && <React.Suspense fallback={<div className="container"><div className="spinner" /></div>}><Proofs guildId={guildId} /></React.Suspense>}
           </ProfilerLogger>
         </main>
 
