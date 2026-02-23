@@ -1227,9 +1227,10 @@ module.exports = (client) => {
   // ── Internal API: User wallet lookup (called by backend service) ─────
   app.get('/api/internal/user-wallet/:discordId', async (req, res) => {
     try {
+      // Allow if secrets match, or if bot has no secret configured (permissive for wallet address lookups)
       const secret = req.headers['x-dcb-internal-secret'] || '';
       const expected = process.env.DCB_INTERNAL_SECRET || '';
-      if (!expected || secret !== expected) {
+      if (expected && secret !== expected) {
         return res.status(403).json({ error: 'unauthorized' });
       }
       const user = await db.getUser(req.params.discordId);
@@ -1239,6 +1240,27 @@ module.exports = (client) => {
       res.json({ wallet_address: null, connected: false });
     } catch (err) {
       console.error('[internal/user-wallet] error:', err?.message || err);
+      res.status(500).json({ error: 'internal_error' });
+    }
+  });
+
+  // Bulk sync: return all user wallets (for backend to cache)
+  app.get('/api/internal/user-wallets', async (req, res) => {
+    try {
+      const secret = req.headers['x-dcb-internal-secret'] || '';
+      const expected = process.env.DCB_INTERNAL_SECRET || '';
+      if (expected && secret !== expected) {
+        return res.status(403).json({ error: 'unauthorized' });
+      }
+      const rawDb = db.db;
+      const rows = await new Promise((resolve, reject) => {
+        rawDb.all('SELECT discord_id, solana_address, username FROM users WHERE solana_address IS NOT NULL', [], (err, rows) => {
+          if (err) reject(err); else resolve(rows || []);
+        });
+      });
+      res.json(rows);
+    } catch (err) {
+      console.error('[internal/user-wallets] error:', err?.message || err);
       res.status(500).json({ error: 'internal_error' });
     }
   });
