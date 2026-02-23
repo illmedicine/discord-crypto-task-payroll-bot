@@ -2642,18 +2642,28 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildMember, async (req, res) => {
     try {
       // Try multiple sources: user_wallets table first, then users table (guild-scoped or global)
-      const walletRow = await db.get(
-        `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
-        [req.params.discordId]
-      )
+      let walletRow = null
+      try {
+        walletRow = await db.get(
+          `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
+          [req.params.discordId]
+        )
+      } catch (dbErr) {
+        console.warn('[worker-wallet] user_wallets query failed:', dbErr?.message)
+      }
       if (walletRow?.solana_address) {
         return res.json({ wallet_address: walletRow.solana_address, connected: true })
       }
       // Fallback: check users table (guild-scoped entries synced from bot)
-      const userRow = await db.get(
-        `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
-        [req.params.discordId]
-      )
+      let userRow = null
+      try {
+        userRow = await db.get(
+          `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
+          [req.params.discordId]
+        )
+      } catch (dbErr) {
+        console.warn('[worker-wallet] users table query failed:', dbErr?.message)
+      }
       if (userRow?.wallet_address) {
         return res.json({ wallet_address: userRow.wallet_address, connected: true })
       }
@@ -2661,22 +2671,32 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       try {
         const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
         if (BOT_API_URL) {
-          const botRes = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${req.params.discordId}`, {
-            headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
-            signal: AbortSignal.timeout(5000)
-          })
-          if (botRes.ok) {
-            const botData = await botRes.json()
-            if (botData?.wallet_address) {
-              // Cache it locally for future lookups
-              await db.run(
-                `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                 ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
-                [req.params.discordId, botData.wallet_address, botData.username || null]
-              )
-              console.log(`[worker-wallet] Synced wallet from bot for ${req.params.discordId}: ${botData.wallet_address.slice(0, 8)}...`)
-              return res.json({ wallet_address: botData.wallet_address, connected: true })
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 5000)
+          try {
+            const botRes = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${req.params.discordId}`, {
+              headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+              signal: controller.signal
+            })
+            clearTimeout(timeout)
+            if (botRes.ok) {
+              const botData = await botRes.json()
+              if (botData?.wallet_address) {
+                // Cache it locally for future lookups
+                try {
+                  await db.run(
+                    `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
+                    [req.params.discordId, botData.wallet_address, botData.username || null]
+                  )
+                } catch (_) {}
+                console.log(`[worker-wallet] Synced wallet from bot for ${req.params.discordId}: ${botData.wallet_address.slice(0, 8)}...`)
+                return res.json({ wallet_address: botData.wallet_address, connected: true })
+              }
             }
+          } catch (fetchErr) {
+            clearTimeout(timeout)
+            console.warn('[worker-wallet] Bot API fetch failed:', fetchErr?.message)
           }
         }
       } catch (botErr) {
@@ -2731,10 +2751,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         try {
           const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
           if (BOT_API_URL) {
+            const _ac = new AbortController(); const _to = setTimeout(() => _ac.abort(), 5000)
             const botRes = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${req.params.discordId}`, {
               headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
-              signal: AbortSignal.timeout(5000)
+              signal: _ac.signal
             })
+            clearTimeout(_to)
             if (botRes.ok) {
               const botData = await botRes.json()
               if (botData?.wallet_address) {
@@ -3548,10 +3570,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       return
     }
     try {
+      const _syncAc = new AbortController(); const _syncTo = setTimeout(() => _syncAc.abort(), 15000)
       const res = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallets`, {
         headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
-        signal: AbortSignal.timeout(15000)
+        signal: _syncAc.signal
       })
+      clearTimeout(_syncTo)
       if (!res.ok) {
         console.warn(`[wallet-sync] Bot returned ${res.status}`)
         return
