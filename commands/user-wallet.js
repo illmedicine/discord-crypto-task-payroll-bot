@@ -106,6 +106,19 @@ module.exports = {
           // If they already have the same address, just save the key if new
           if (existingUser.solana_address === address && privateKey && !existingUser.wallet_secret) {
             await db.setUserWalletSecret(userId, privateKey);
+            // Sync to backend
+            try {
+              const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+              const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+              if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+                await fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+                  body: JSON.stringify({ discordId: userId, solanaAddress: address, username })
+                });
+                console.log(`[user-wallet] Backend sync OK for ${userId} (key-save path)`);
+              }
+            } catch (syncErr) { console.error('[user-wallet] Backend sync error (key-save):', syncErr?.message); }
             return interaction.editReply({
               embeds: [new EmbedBuilder()
                 .setColor('#14F195')
@@ -119,6 +132,21 @@ module.exports = {
               ]
             });
           }
+
+          // Always sync existing wallet to backend (in case previous sync failed)
+          try {
+            const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+            const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+            if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+              await fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+                body: JSON.stringify({ discordId: userId, solanaAddress: existingUser.solana_address, username })
+              });
+              console.log(`[user-wallet] Backend sync OK for ${userId} (already-connected path)`);
+            }
+          } catch (syncErr) { console.error('[user-wallet] Backend sync error (already-connected):', syncErr?.message); }
+
           const embed = new EmbedBuilder()
             .setColor('#FF9800')
             .setTitle('⚠️ Wallet Already Connected')
@@ -161,13 +189,22 @@ module.exports = {
           const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
           const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
           if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
-            fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+            const syncRes = await fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
               body: JSON.stringify({ discordId: userId, solanaAddress: address, username })
-            }).catch(() => {});
+            });
+            if (!syncRes.ok) {
+              console.error(`[user-wallet] Backend sync failed (${syncRes.status}):`, await syncRes.text().catch(() => ''));
+            } else {
+              console.log(`[user-wallet] Backend sync OK for ${userId}`);
+            }
+          } else {
+            console.warn('[user-wallet] Backend sync skipped — DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set');
           }
-        } catch (_) {}
+        } catch (syncErr) {
+          console.error('[user-wallet] Backend sync error:', syncErr?.message || syncErr);
+        }
 
         const fields = [
           { name: 'Wallet Address', value: `\`${address}\`` },
@@ -324,13 +361,22 @@ module.exports = {
           const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
           const finalAddr = newAddress || derivedAddress || userData.solana_address;
           if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET && finalAddr) {
-            fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+            const syncRes = await fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
               body: JSON.stringify({ discordId: userId, solanaAddress: finalAddr, username })
-            }).catch(() => {});
+            });
+            if (!syncRes.ok) {
+              console.error(`[user-wallet] Backend sync failed (${syncRes.status}):`, await syncRes.text().catch(() => ''));
+            } else {
+              console.log(`[user-wallet] Backend sync OK for ${userId}`);
+            }
+          } else {
+            console.warn('[user-wallet] Backend sync skipped — DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set');
           }
-        } catch (_) {}
+        } catch (syncErr) {
+          console.error('[user-wallet] Backend sync error:', syncErr?.message || syncErr);
+        }
 
         const fields = [];
         const finalAddress = newAddress || derivedAddress || userData.solana_address;

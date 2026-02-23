@@ -900,6 +900,112 @@ module.exports = (client) => {
     }
   });
 
+  // ---- Worker Wallet Lookup (uses bot's own users table) ----
+  app.get('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const user = await db.getUser(req.params.discordId);
+      if (user?.solana_address) {
+        return res.json({ wallet_address: user.solana_address, connected: true });
+      }
+      return res.json({ wallet_address: null, connected: false });
+    } catch (err) {
+      console.error('[worker-wallet] error:', err?.message || err);
+      res.status(500).json({ error: 'failed_to_get_wallet' });
+    }
+  });
+
+  // ---- Pay Worker (from guild treasury, using bot's DB) ----
+  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { amount_usd, memo } = req.body || {};
+      const amountUsd = Number(amount_usd);
+      if (!amountUsd || amountUsd <= 0 || amountUsd > 100000) {
+        return res.status(400).json({ error: 'invalid_amount', message: 'Amount must be between $0.01 and $100,000 USD.' });
+      }
+
+      // 1. Verify worker exists
+      const worker = await db.getWorker(req.guild.id, req.params.discordId);
+      if (!worker) return res.status(404).json({ error: 'worker_not_found' });
+
+      // 2. Get worker's connected wallet address from bot's users table
+      const user = await db.getUser(req.params.discordId);
+      const recipientAddress = user?.solana_address || null;
+      if (!recipientAddress) {
+        return res.status(400).json({ error: 'no_wallet', message: 'This worker has not connected a DisCryptoBank user-wallet. They must run /user-wallet connect first.' });
+      }
+
+      // 3. Get guild treasury wallet
+      const guildWallet = await db.getGuildWallet(req.guild.id);
+      if (!guildWallet?.wallet_address) {
+        return res.status(400).json({ error: 'no_treasury', message: 'No treasury wallet configured. Set one up in the Treasury tab.' });
+      }
+      if (!guildWallet.wallet_secret) {
+        return res.status(400).json({ error: 'no_secret', message: 'Treasury wallet private key not configured. Add it in the Treasury tab to enable payouts.' });
+      }
+
+      // 4. Fetch SOL price
+      const crypto = require('../utils/crypto');
+      let solPrice;
+      try {
+        const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+        const priceData = await priceRes.json();
+        solPrice = priceData?.solana?.usd;
+      } catch (_) {}
+      if (!solPrice) {
+        return res.status(502).json({ error: 'price_unavailable', message: 'Unable to fetch SOL price. Try again.' });
+      }
+
+      // 5. Convert USD to SOL
+      const amountSol = amountUsd / solPrice;
+
+      // 6. Send SOL
+      const keypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
+      if (!keypair) {
+        return res.status(400).json({ error: 'invalid_key', message: 'Treasury private key is invalid.' });
+      }
+      const txResult = await crypto.sendSolFrom(keypair, recipientAddress, amountSol);
+      if (!txResult?.success) {
+        return res.status(500).json({ error: 'tx_failed', message: txResult?.error || 'Transaction failed.' });
+      }
+
+      // 7. Log payout
+      const signature = txResult.signature;
+      await db.logActivity(req.guild.id, 'payroll', 'Staff Paid', `Paid ${worker.username || req.params.discordId} $${amountUsd.toFixed(2)} (◎${amountSol.toFixed(4)})${memo ? ': ' + memo : ''}`, `@${req.user.username}`, amountUsd, 'USD', null);
+
+      await db.recordTransaction(req.guild.id, guildWallet.wallet_address, recipientAddress, amountSol, signature);
+
+      res.json({ ok: true, signature, amount_sol: amountSol, amount_usd: amountUsd, sol_price: solPrice });
+    } catch (err) {
+      console.error('[payroll] error:', err?.message || err);
+      res.status(500).json({ error: 'payment_failed', message: err?.message || 'Payment failed.' });
+    }
+  });
+
+  // ---- Payroll Summary & History ----
+  app.get('/api/admin/guilds/:guildId/payroll/summary', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      // Return empty summary since server/api.js may not have worker_payouts table yet
+      res.json({
+        today: { count: 0, total_sol: 0, total_usd: 0 },
+        week: { count: 0, total_sol: 0, total_usd: 0 },
+        month: { count: 0, total_sol: 0, total_usd: 0 },
+        allTime: { count: 0, total_sol: 0, total_usd: 0 },
+        perWorker: [],
+        dailyBreakdown: []
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_payroll' });
+    }
+  });
+
+  app.get('/api/admin/guilds/:guildId/payroll/history', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      res.json([]);
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_history' });
+    }
+  });
+
   // ---- Image proxy for Discord CDN (attachment URLs expire) ----
   app.get('/api/image-proxy', requireAuth, async (req, res) => {
     try {
@@ -1115,6 +1221,25 @@ module.exports = (client) => {
     } catch (err) {
       console.error('[track] error:', err);
       res.status(500).json({ error: 'track_error' });
+    }
+  });
+
+  // ── Internal API: User wallet lookup (called by backend service) ─────
+  app.get('/api/internal/user-wallet/:discordId', async (req, res) => {
+    try {
+      const secret = req.headers['x-dcb-internal-secret'] || '';
+      const expected = process.env.DCB_INTERNAL_SECRET || '';
+      if (!expected || secret !== expected) {
+        return res.status(403).json({ error: 'unauthorized' });
+      }
+      const user = await db.getUser(req.params.discordId);
+      if (user?.solana_address) {
+        return res.json({ wallet_address: user.solana_address, username: user.username, connected: true });
+      }
+      res.json({ wallet_address: null, connected: false });
+    } catch (err) {
+      console.error('[internal/user-wallet] error:', err?.message || err);
+      res.status(500).json({ error: 'internal_error' });
     }
   });
 

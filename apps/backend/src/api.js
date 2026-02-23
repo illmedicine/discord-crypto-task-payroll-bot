@@ -2654,7 +2654,35 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
         [req.params.discordId]
       )
-      res.json({ wallet_address: userRow?.wallet_address || null, connected: !!userRow?.wallet_address })
+      if (userRow?.wallet_address) {
+        return res.json({ wallet_address: userRow.wallet_address, connected: true })
+      }
+      // Fallback: try the bot's integrated API (shares bot's DB which has /user-wallet connect data)
+      try {
+        const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+        if (BOT_API_URL) {
+          const botRes = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${req.params.discordId}`, {
+            headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+            signal: AbortSignal.timeout(5000)
+          })
+          if (botRes.ok) {
+            const botData = await botRes.json()
+            if (botData?.wallet_address) {
+              // Cache it locally for future lookups
+              await db.run(
+                `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                 ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
+                [req.params.discordId, botData.wallet_address, botData.username || null]
+              )
+              console.log(`[worker-wallet] Synced wallet from bot for ${req.params.discordId}: ${botData.wallet_address.slice(0, 8)}...`)
+              return res.json({ wallet_address: botData.wallet_address, connected: true })
+            }
+          }
+        }
+      } catch (botErr) {
+        console.warn('[worker-wallet] Bot API fallback failed:', botErr?.message)
+      }
+      res.json({ wallet_address: null, connected: false })
     } catch (err) {
       console.error('[worker-wallet] error:', err?.message || err)
       res.status(500).json({ error: 'failed_to_get_wallet' })
@@ -2697,6 +2725,33 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           [req.params.discordId]
         )
         recipientAddress = userRow?.wallet_address || null
+      }
+      // Fallback: try the bot's integrated API if wallet not found locally
+      if (!recipientAddress) {
+        try {
+          const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+          if (BOT_API_URL) {
+            const botRes = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${req.params.discordId}`, {
+              headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+              signal: AbortSignal.timeout(5000)
+            })
+            if (botRes.ok) {
+              const botData = await botRes.json()
+              if (botData?.wallet_address) {
+                recipientAddress = botData.wallet_address
+                // Cache it locally
+                await db.run(
+                  `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
+                  [req.params.discordId, botData.wallet_address, botData.username || null]
+                )
+                console.log(`[payroll] Synced wallet from bot for ${req.params.discordId}: ${botData.wallet_address.slice(0, 8)}...`)
+              }
+            }
+          }
+        } catch (botErr) {
+          console.warn('[payroll] Bot API wallet fallback failed:', botErr?.message)
+        }
       }
       if (!recipientAddress) {
         return res.status(400).json({ error: 'no_wallet', message: 'This worker has not connected a DisCryptoBank user-wallet. They must run /user-wallet connect first.' })
