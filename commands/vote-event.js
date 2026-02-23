@@ -789,15 +789,28 @@ module.exports = {
           }
         }
 
-        // Check if the event is now full
+        // Check if the event is now full — auto-start processing like horse race
         if (updatedEvent.current_participants >= updatedEvent.max_participants) {
           try {
             const channel = await interaction.client.channels.fetch(updatedEvent.channel_id);
             if (channel) {
-              await channel.send({ content: `🔒 **Vote Event #${eventId} is now full.** Voting will conclude when all participants submit their votes.` });
+              await channel.send({ content: `🔒 **Photo Event #${eventId} is now full!** 📸 The showdown will begin once all participants submit their votes.` });
             }
           } catch (e) {
             console.error('[VoteEvent] Could not notify channel about event being full:', e);
+          }
+
+          // If all participants have also already voted, fire processing immediately
+          try {
+            const allParticipants = await db.getVoteEventParticipants(eventId);
+            const allVoted = allParticipants.length > 0 && allParticipants.every(p => p.voted_image_id);
+            if (allVoted) {
+              processVoteEvent(eventId, interaction.client, 'full-all-voted').catch(err =>
+                console.error('[VoteEvent] Error processing event on full-all-voted:', err)
+              );
+            }
+          } catch (e) {
+            console.error('[VoteEvent] Error checking votes on full:', e);
           }
         }
       } catch (e) {
