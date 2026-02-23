@@ -11,19 +11,26 @@ type EventInfo = {
   description: string
   prize_amount: number
   currency: string
-  min_participants: number
-  max_participants: number
-  current_participants: number
+  min_participants?: number
+  max_participants?: number
+  current_participants?: number
+  min_players?: number
+  max_players?: number
+  current_players?: number
+  mode?: string
+  entry_fee?: number
   status: string
   qualification_url: string | null
   ends_at: string | null
   created_at: string
-  images: { image_id: string; image_url: string; upload_order: number }[]
+  images?: { image_id: string; image_url: string; upload_order: number }[]
+  slots?: { slot_number: number; label: string; color: string }[]
 }
 
 type Qualification = {
   id: number
-  vote_event_id: number
+  vote_event_id?: number
+  gambling_event_id?: number
   user_id: string
   username: string
   screenshot_url: string
@@ -33,7 +40,7 @@ type Qualification = {
   reviewed_by: string | null
 }
 
-type Props = { eventId: number }
+type Props = { eventId: number; eventType?: 'vote' | 'race' }
 
 /* ------------------------------------------------------------------ */
 /*  Helper                                                             */
@@ -49,7 +56,8 @@ function statusBadge(s: string) {
 /* ================================================================== */
 /*  Component                                                          */
 /* ================================================================== */
-export default function QualifyPage({ eventId }: Props) {
+export default function QualifyPage({ eventId, eventType = 'vote' }: Props) {
+  const apiBase = eventType === 'race' ? '/public/gambling-events' : '/public/vote-events'
   const [event, setEvent] = useState<EventInfo | null>(null)
   const [qual, setQual] = useState<Qualification | null>(null)
   const [loading, setLoading] = useState(true)
@@ -64,8 +72,8 @@ export default function QualifyPage({ eventId }: Props) {
     setLoading(true)
     try {
       const [evRes, qualRes] = await Promise.all([
-        api.get(`/public/vote-events/${eventId}`),
-        api.get(`/public/vote-events/${eventId}/my-qualification`),
+        api.get(`${apiBase}/${eventId}`),
+        api.get(`${apiBase}/${eventId}/my-qualification`),
       ])
       setEvent(evRes.data)
       if (qualRes.data) {
@@ -84,7 +92,7 @@ export default function QualifyPage({ eventId }: Props) {
   /* ---- Auto-poll every 10s to reflect participant/status changes ---- */
   useEffect(() => {
     const id = setInterval(() => {
-      api.get(`/public/vote-events/${eventId}`)
+      api.get(`${apiBase}/${eventId}`)
         .then(r => setEvent(r.data))
         .catch(() => {})
     }, 10000)
@@ -112,7 +120,7 @@ export default function QualifyPage({ eventId }: Props) {
     try {
       const fd = new FormData()
       fd.append('screenshot', fileInputRef.current.files[0])
-      const res = await api.post(`/public/vote-events/${eventId}/qualify`, fd, {
+      const res = await api.post(`${apiBase}/${eventId}/qualify`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setQual(res.data)
@@ -171,22 +179,22 @@ export default function QualifyPage({ eventId }: Props) {
       {/* Event Header Card */}
       <div className="card" style={{ marginBottom: 24 }}>
         <div className="card-header">
-          <div className="card-title">🗳️ {event.title}</div>
+          <div className="card-title">{eventType === 'race' ? '🏇' : '🗳️'} {event.title}</div>
           <span className={statusBadge(event.status)}>{event.status}</span>
         </div>
         <div style={{ padding: '4px 0', fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
           {event.description && <p style={{ marginBottom: 12 }}>{event.description}</p>}
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <span>🎁 <strong>{event.prize_amount} {event.currency}</strong></span>
-            <span>🪑 {event.current_participants}/{event.max_participants} seats</span>
+            <span>🪑 {(event.current_participants ?? event.current_players ?? 0)}/{(event.max_participants ?? event.max_players ?? 0)} seats</span>
             {event.ends_at && (
               <Countdown endsAt={event.ends_at} prefix='⏱️ Ends in ' />
             )}
           </div>
         </div>
 
-        {/* Image previews */}
-        {event.images.length > 0 && (
+        {/* Image previews (vote events) */}
+        {event.images && event.images.length > 0 && (
           <div style={{ display: 'flex', gap: 8, marginTop: 12, overflowX: 'auto', paddingBottom: 4 }}>
             {event.images.map(img => (
               <img
@@ -317,7 +325,9 @@ export default function QualifyPage({ eventId }: Props) {
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
               {qual.status === 'approved'
-                ? 'You are qualified to participate in this vote event! Head to Discord to join and vote.'
+                ? eventType === 'race'
+                  ? 'You are qualified to participate in this horse race! Head to Discord to place your bet.'
+                  : 'You are qualified to participate in this vote event! Head to Discord to join and vote.'
                 : qual.status === 'rejected'
                 ? 'Your qualification was rejected. Please contact an admin for more information.'
                 : 'An admin will review your screenshot soon. Check back later for your status.'}

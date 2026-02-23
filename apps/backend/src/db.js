@@ -498,6 +498,26 @@ db.serialize(() => {
   db.run(`ALTER TABLE gambling_event_bets ADD COLUMN entry_tx_signature TEXT`, () => {})
   db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payout_tx_signature TEXT`, () => {})
   db.run(`ALTER TABLE gambling_event_bets ADD COLUMN wallet_address TEXT`, () => {})
+
+  // Gambling Event Qualifications table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS gambling_event_qualifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gambling_event_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
+      username TEXT DEFAULT '',
+      screenshot_url TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at DATETIME,
+      reviewed_by TEXT,
+      UNIQUE(gambling_event_id, user_id),
+      FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id)
+    )`
+  )
+
+  // Migration: add qualification_url to gambling_events
+  db.run(`ALTER TABLE gambling_events ADD COLUMN qualification_url TEXT`, () => {})
 })
 
 function run(sql, params = []) {

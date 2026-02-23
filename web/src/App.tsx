@@ -32,6 +32,7 @@ export default function App() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [qualifyEventId, setQualifyEventId] = useState<number | null>(null)
+  const [qualifyEventType, setQualifyEventType] = useState<'vote' | 'race'>('vote')
   const profileRef = useRef<HTMLDivElement>(null)
 
   // Close profile menu on outside click
@@ -65,12 +66,20 @@ export default function App() {
       hash = 'events'
       window.location.hash = 'events'
     }
-    // Check for qualify-{eventId} hash
+    // Check for qualify-{eventId} hash (vote events)
     const qualifyMatch = hash.match(/^qualify-(\d+)$/)
     if (qualifyMatch) {
       setQualifyEventId(Number(qualifyMatch[1]))
+      setQualifyEventType('vote')
       setPage('qualify')
-    } else if (hash && NAV_ITEMS.some(n => n.id === hash)) {
+    }
+    // Check for race-qualify-{eventId} hash (gambling/horse race events)
+    const raceQualifyMatch = hash.match(/^race-qualify-(\d+)$/)
+    if (raceQualifyMatch) {
+      setQualifyEventId(Number(raceQualifyMatch[1]))
+      setQualifyEventType('race')
+      setPage('qualify')
+    } else if (!qualifyMatch && hash && NAV_ITEMS.some(n => n.id === hash)) {
       setPage(hash as Page)
     }
 
@@ -315,7 +324,7 @@ export default function App() {
           <PerformanceMonitor />
           <ProfilerLogger id="App">
             {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
-            {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
+            {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} eventType={qualifyEventType} />}
             {page === 'events' && <EventManager guildId={guildId} isOwner={isOwner} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}

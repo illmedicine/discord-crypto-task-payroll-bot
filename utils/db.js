@@ -434,6 +434,26 @@ const initDb = () => {
     db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payout_tx_signature TEXT`, () => {});
     db.run(`ALTER TABLE gambling_event_bets ADD COLUMN wallet_address TEXT`, () => {});
 
+    // Gambling Event Qualifications table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS gambling_event_qualifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gambling_event_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        username TEXT DEFAULT '',
+        screenshot_url TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        reviewed_at DATETIME,
+        reviewed_by TEXT,
+        UNIQUE(gambling_event_id, user_id),
+        FOREIGN KEY(gambling_event_id) REFERENCES gambling_events(id)
+      )
+    `);
+
+    // Migration: add qualification_url to gambling_events
+    db.run(`ALTER TABLE gambling_events ADD COLUMN qualification_url TEXT`, () => {});
+
     // User stats table (fast counters for trust/risk scoring)
     db.run(`
       CREATE TABLE IF NOT EXISTS user_stats (
@@ -1486,6 +1506,33 @@ const getVoteEventQualification = (voteEventId, userId) => {
   });
 };
 
+const addGamblingEventQualification = (gamblingEventId, userId, username, screenshotUrl) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT OR REPLACE INTO gambling_event_qualifications (gambling_event_id, user_id, username, screenshot_url, status, submitted_at)
+       VALUES (?, ?, ?, ?, 'approved', datetime('now'))`,
+      [gamblingEventId, userId, username || '', screenshotUrl],
+      function (err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      }
+    );
+  });
+};
+
+const getGamblingEventQualification = (gamblingEventId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM gambling_event_qualifications WHERE gambling_event_id = ? AND user_id = ?`,
+      [gamblingEventId, userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
 const getVoteEvent = (voteEventId) => {
   return new Promise((resolve, reject) => {
     db.get(
@@ -1779,13 +1826,13 @@ const deleteVoteEvent = (voteEventId) => {
 
 // ==================== GAMBLING EVENT OPERATIONS ====================
 
-const createGamblingEvent = (guildId, channelId, title, description, mode, prizeAmount, currency, entryFee, minPlayers, maxPlayers, durationMinutes, numSlots, createdBy) => {
+const createGamblingEvent = (guildId, channelId, title, description, mode, prizeAmount, currency, entryFee, minPlayers, maxPlayers, durationMinutes, numSlots, createdBy, qualificationUrl) => {
   return new Promise((resolve, reject) => {
     const endsAt = durationMinutes ? new Date(Date.now() + (durationMinutes * 60 * 1000)).toISOString() : null;
     db.run(
-      `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [guildId, channelId, title, description || '', mode || 'house', prizeAmount || 0, currency || 'SOL', entryFee || 0, minPlayers, maxPlayers, durationMinutes, numSlots || 6, createdBy, endsAt],
+      `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at, qualification_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [guildId, channelId, title, description || '', mode || 'house', prizeAmount || 0, currency || 'SOL', entryFee || 0, minPlayers, maxPlayers, durationMinutes, numSlots || 6, createdBy, endsAt, qualificationUrl || null],
       function (err) {
         if (err) reject(err);
         else resolve(this.lastID);
@@ -1996,8 +2043,8 @@ const createGamblingEventFromSync = (event, slots) => {
       db.run(
         `INSERT OR REPLACE INTO gambling_events
           (id, guild_id, channel_id, message_id, title, description, mode, prize_amount, currency, entry_fee,
-           min_players, max_players, current_players, duration_minutes, num_slots, winning_slot, created_by, status, ends_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           min_players, max_players, current_players, duration_minutes, num_slots, winning_slot, created_by, status, ends_at, created_at, qualification_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           event.id,
           event.guild_id,
@@ -2018,7 +2065,8 @@ const createGamblingEventFromSync = (event, slots) => {
           event.created_by,
           event.status || 'active',
           event.ends_at || null,
-          event.created_at || new Date().toISOString()
+          event.created_at || new Date().toISOString(),
+          event.qualification_url || null
         ],
         function (err) {
           if (err) return reject(err);
@@ -2653,4 +2701,6 @@ module.exports = {
   updateGamblingBetPayment,
   getGamblingEventBetsWithWallets,
   deleteGamblingEvent,
+  addGamblingEventQualification,
+  getGamblingEventQualification,
 };

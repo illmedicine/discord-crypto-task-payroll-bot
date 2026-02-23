@@ -516,6 +516,24 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
+    // Handle gambling event qualify button
+    if (interaction.customId.startsWith('gamble_qualify_')) {
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleQualifyButton) {
+        try {
+          await gamblingEventCommand.handleQualifyButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling gambling qualify button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
+    }
+
     // Handle gambling event bet buttons
     if (interaction.customId.startsWith('gamble_bet_')) {
       console.log(`[GamblingBet] 🎰 Button handler entered for customId: ${interaction.customId} (build: ${BUILD_TIMESTAMP})`);

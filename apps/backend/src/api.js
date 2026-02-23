@@ -1702,6 +1702,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     const {
       channel_id, title, description, mode, prize_amount, currency,
       entry_fee, min_players, max_players, duration_minutes, slots,
+      qualification_url,
     } = req.body || {}
 
     if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
@@ -1712,12 +1713,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     const numSlots = slots.length
 
     const r = await db.run(
-      `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at, qualification_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [req.guild.id, String(channel_id), String(title), String(description || ''),
        String(mode || 'house'), Number(prize_amount || 0), String(currency || 'SOL'),
        Number(entry_fee || 0), Number(min_players), Number(max_players),
-       duration_minutes == null ? null : Number(duration_minutes), numSlots, req.user.id, endsAt]
+       duration_minutes == null ? null : Number(duration_minutes), numSlots, req.user.id, endsAt,
+       qualification_url || null]
     )
 
     for (let i = 0; i < slots.length; i++) {
@@ -1819,8 +1821,29 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       if (endTimestamp) mainEmbed.addFields({ name: '⏱️ Ends', value: `<t:${endTimestamp}:R>`, inline: true })
 
+      // Add qualification info to embed if qualification_url is set
+      if (event.qualification_url) {
+        desc += `\n**🔗 Qualification Required:**\n`
+        desc += `• You must qualify before placing a bet\n`
+        desc += `• Click the **✅ Qualify** button below to start\n`
+        mainEmbed.setDescription(desc)
+        mainEmbed.addFields({ name: '🔗 Qualification URL', value: `[Visit this link](${event.qualification_url})` })
+      }
+
       // Build slot bet buttons (up to 5 per row, max 5 rows)
       const components = []
+
+      // Add qualify button row if qualification_url is set
+      if (event.qualification_url) {
+        const qualifyRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`gamble_qualify_${eventId}`)
+            .setLabel('✅ Qualify')
+            .setStyle(ButtonStyle.Success)
+        )
+        components.push(qualifyRow)
+      }
+
       const slotButtons = slots.slice(0, 20).map(s =>
         new ButtonBuilder()
           .setCustomId(`gamble_bet_${eventId}_${s.slot_number}`)
@@ -1858,6 +1881,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         } catch (_) {}
       }
 
+      await db.run('DELETE FROM gambling_event_qualifications WHERE gambling_event_id = ?', [eventId])
       await db.run('DELETE FROM gambling_event_bets WHERE gambling_event_id = ?', [eventId])
       await db.run('DELETE FROM gambling_event_slots WHERE gambling_event_id = ?', [eventId])
       await db.run('DELETE FROM gambling_events WHERE id = ?', [eventId])
@@ -1887,6 +1911,114 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     } catch (err) {
       console.error('[gambling-event] cancel error:', err?.message || err)
       res.status(500).json({ error: 'cancel_failed' })
+    }
+  })
+
+  // ---- Gambling Event Qualifications (Admin) ----
+  app.get('/api/admin/guilds/:guildId/gambling-events/:eventId/qualifications', requireAuth, requireGuildMember, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'gambling_event_not_found' })
+      const rows = await db.all('SELECT * FROM gambling_event_qualifications WHERE gambling_event_id = ? ORDER BY submitted_at DESC', [eventId])
+      res.json(rows)
+    } catch (err) {
+      res.status(500).json({ error: 'failed_to_get_qualifications' })
+    }
+  })
+
+  app.patch('/api/admin/guilds/:guildId/gambling-qualifications/:qualId/review', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const qualId = Number(req.params.qualId)
+      const { status } = req.body || {}
+      if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'invalid_status' })
+      const qual = await db.get('SELECT q.*, e.guild_id FROM gambling_event_qualifications q JOIN gambling_events e ON q.gambling_event_id = e.id WHERE q.id = ?', [qualId])
+      if (!qual || qual.guild_id !== req.guild.id) return res.status(404).json({ error: 'qualification_not_found' })
+      const reviewerId = await resolveCanonicalUserId(req.user)
+      await db.run('UPDATE gambling_event_qualifications SET status = ?, reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?',
+        [status, reviewerId || req.user.id, qualId])
+      const updated = await db.get('SELECT * FROM gambling_event_qualifications WHERE id = ?', [qualId])
+      res.json(updated)
+    } catch (err) {
+      res.status(500).json({ error: 'review_failed' })
+    }
+  })
+
+  // ---- Gambling Event Qualifications (Public / Participant) ----
+  app.get('/api/public/gambling-events/:eventId', requireAuth, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, current_players, num_slots, status, qualification_url, ends_at, created_at FROM gambling_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'not_found' })
+      const slots = await db.all('SELECT slot_number, label, color FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [eventId])
+      res.json({ ...event, slots })
+    } catch (err) {
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  app.get('/api/public/gambling-events/:eventId/my-qualification', requireAuth, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const userId = await resolveCanonicalUserId(req.user)
+      const qual = await db.get('SELECT * FROM gambling_event_qualifications WHERE gambling_event_id = ? AND user_id = ?', [eventId, userId || req.user.id])
+      res.json(qual || null)
+    } catch (err) {
+      res.status(500).json({ error: 'failed' })
+    }
+  })
+
+  app.post('/api/public/gambling-events/:eventId/qualify', requireAuth, upload.single('screenshot'), async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'event_not_found' })
+      if (!event.qualification_url) return res.status(400).json({ error: 'event_has_no_qualification' })
+      if (event.status !== 'active') return res.status(400).json({ error: 'event_not_active' })
+
+      const userId = await resolveCanonicalUserId(req.user)
+      const uid = userId || req.user.id
+      const username = req.user.username || req.user.google_name || uid
+
+      const existing = await db.get('SELECT * FROM gambling_event_qualifications WHERE gambling_event_id = ? AND user_id = ?', [eventId, uid])
+      if (existing) return res.status(409).json({ error: 'already_submitted', qualification: existing })
+
+      let screenshotUrl = req.body?.screenshot_url || ''
+
+      if (req.file && event.channel_id) {
+        try {
+          const channel = await fetchTextChannel(event.guild_id, event.channel_id)
+          const msg = await channel.send({
+            content: `📸 Qualification proof from **${username}** for horse race **${event.title}**`,
+            files: [{ attachment: req.file.buffer, name: req.file.originalname || 'screenshot.png' }]
+          })
+          const atts = msg.attachments
+          if (atts) {
+            if (typeof atts.first === 'function' && atts.size > 0) {
+              screenshotUrl = atts.first().url
+            } else if (Array.isArray(atts) && atts.length > 0) {
+              screenshotUrl = atts[0].url
+            } else if (atts instanceof Map && atts.size > 0) {
+              screenshotUrl = atts.values().next().value?.url
+            }
+          }
+        } catch (uploadErr) {
+          console.error('[gambling-qualify] discord upload failed:', uploadErr?.message)
+        }
+      }
+
+      if (!screenshotUrl) return res.status(400).json({ error: 'screenshot_required' })
+
+      await db.run(
+        'INSERT INTO gambling_event_qualifications (gambling_event_id, user_id, username, screenshot_url) VALUES (?, ?, ?, ?)',
+        [eventId, uid, username, screenshotUrl]
+      )
+      const qual = await db.get('SELECT * FROM gambling_event_qualifications WHERE gambling_event_id = ? AND user_id = ?', [eventId, uid])
+      res.json(qual)
+    } catch (err) {
+      console.error('[gambling-qualify] error:', err?.message || err)
+      if (err?.message?.includes('UNIQUE constraint')) return res.status(409).json({ error: 'already_submitted' })
+      res.status(500).json({ error: 'qualification_failed' })
     }
   })
 
@@ -2977,6 +3109,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         await db.run(
           `UPDATE gambling_events SET current_players = (SELECT COUNT(*) FROM gambling_event_bets WHERE gambling_event_id = ?) WHERE id = ?`,
           [eventId, eventId]
+        ).catch(() => {})
+      } else if (action === 'qualify' && userId) {
+        const { screenshotUrl } = req.body || {}
+        const username = req.body?.username || userId
+        await db.run(
+          `INSERT OR REPLACE INTO gambling_event_qualifications (gambling_event_id, user_id, username, screenshot_url, status, submitted_at) VALUES (?, ?, ?, ?, 'approved', datetime('now'))`,
+          [eventId, userId, username, screenshotUrl || '']
         ).catch(() => {})
       } else if (action === 'status_update' && status) {
         await db.run(

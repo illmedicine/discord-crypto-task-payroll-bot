@@ -46,7 +46,8 @@ type ImageEntry = {
 
 type Qualification = {
   id: number
-  vote_event_id: number
+  vote_event_id?: number
+  gambling_event_id?: number
   user_id: string
   username: string
   screenshot_url: string
@@ -73,6 +74,7 @@ type GamblingEvent = {
   status: string
   channel_id: string
   message_id: string | null
+  qualification_url: string | null
   ends_at: string | null
   created_at: string
 }
@@ -182,6 +184,10 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [rExpandedId, setRExpandedId] = useState<number | null>(null)
   const [rPublishChannelId, setRPublishChannelId] = useState('')
   const [rPublishing, setRPublishing] = useState<number | null>(null)
+  const [rQualificationUrl, setRQualificationUrl] = useState('')
+  const [rQualifications, setRQualifications] = useState<Qualification[]>([])
+  const [rQualLoading, setRQualLoading] = useState(false)
+  const [rReviewingId, setRReviewingId] = useState<number | null>(null)
 
   /* ==================================================================
    *  DATA LOADING
@@ -389,6 +395,48 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
     return `${base}#qualify-${eventId}`
   }
 
+  /* ---- Race Qualifications ---- */
+  const loadRaceQualifications = async (eventId: number) => {
+    if (!guildId) return
+    setRQualLoading(true)
+    try {
+      const res = await api.get(`/admin/guilds/${guildId}/gambling-events/${eventId}/qualifications`)
+      setRQualifications(res.data || [])
+    } catch {
+      setRQualifications([])
+    } finally {
+      setRQualLoading(false)
+    }
+  }
+
+  const handleRaceReview = async (qualId: number, status: 'approved' | 'rejected') => {
+    if (!guildId) return
+    setRReviewingId(qualId)
+    try {
+      await api.patch(`/admin/guilds/${guildId}/gambling-qualifications/${qualId}/review`, { status })
+      if (rExpandedId) await loadRaceQualifications(rExpandedId)
+    } catch {
+      alert('Failed to review qualification.')
+    } finally {
+      setRReviewingId(null)
+    }
+  }
+
+  useEffect(() => {
+    if (rExpandedId && guildId) {
+      const ev = raceEvents.find(e => e.id === rExpandedId)
+      if (ev?.qualification_url) loadRaceQualifications(rExpandedId)
+      else setRQualifications([])
+    } else {
+      setRQualifications([])
+    }
+  }, [rExpandedId, guildId])
+
+  const getRaceQualifyLink = (eventId: number) => {
+    const base = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''
+    return `${base}#race-qualify-${eventId}`
+  }
+
   /* ==================================================================
    *  GAMBLING EVENT HANDLERS
    * ================================================================ */
@@ -432,10 +480,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       max_players: Number(rMaxPlayers) || 10,
       duration_minutes: rDurationMinutes ? Number(rDurationMinutes) : null,
       slots: slots.map(s => ({ label: s.label, color: s.color })),
+      qualification_url: rQualificationUrl || null,
     })
     setRTitle(''); setRDescription(''); setRPrizeAmount('')
     setREntryFee(''); setRMinPlayers('1'); setRMaxPlayers('10')
     setRDurationMinutes(''); setNumSlots(6); setSlots(DEFAULT_SLOTS.slice(0, 6))
+    setRQualificationUrl('')
     await load()
   }
 
@@ -813,9 +863,66 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                                   <div>Min riders: {ev.min_players}</div>
                                   <div>Created: {formatTimeAgo(ev.created_at)}</div>
                                   {ev.winning_slot && <div style={{ color: 'var(--accent-green)', fontWeight: 600 }}>Winning Horse: #{ev.winning_slot}</div>}
+                                  {ev.qualification_url && (
+                                    <div style={{ marginTop: 4 }}>
+                                      🔗 <a href={ev.qualification_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>Qualification URL</a>
+                                      {' | '}
+                                      <span style={{ cursor: 'pointer', color: 'var(--accent-blue)', textDecoration: 'underline' }}
+                                            onClick={() => { navigator.clipboard.writeText(getRaceQualifyLink(ev.id)); alert('Qualify link copied!') }}>
+                                        Copy qualify page link
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </div>
+
+                            {/* Qualification review for gambling events */}
+                            {ev.qualification_url && (
+                              <div style={{ marginTop: 16, borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
+                                <strong style={{ fontSize: 13 }}>📸 Qualifications</strong>
+                                {rQualLoading ? (
+                                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Loading...</div>
+                                ) : rQualifications.length === 0 ? (
+                                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>No qualifications submitted yet.</div>
+                                ) : (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                                    {rQualifications.map(q => (
+                                      <div key={q.id} style={{
+                                        display: 'flex', alignItems: 'center', gap: 12,
+                                        padding: '8px 12px', background: 'var(--bg-primary)',
+                                        borderRadius: 8, border: '1px solid var(--border-color)',
+                                      }}>
+                                        <img src={q.screenshot_url} alt="proof" style={{
+                                          width: 48, height: 48, borderRadius: 6, objectFit: 'cover',
+                                          border: '1px solid var(--border-color)', cursor: 'pointer',
+                                        }} onClick={() => window.open(q.screenshot_url, '_blank')} />
+                                        <div style={{ flex: 1 }}>
+                                          <div style={{ fontSize: 13, fontWeight: 600 }}>{q.username || q.user_id}</div>
+                                          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                            {formatTimeAgo(q.submitted_at)} • <span className={`badge ${q.status === 'approved' ? 'badge-completed' : q.status === 'rejected' ? 'badge-ended' : 'badge-open'}`}>{q.status}</span>
+                                          </div>
+                                        </div>
+                                        {isOwner && q.status === 'pending' && (
+                                          <div style={{ display: 'flex', gap: 4 }}>
+                                            <button className="btn btn-primary btn-sm"
+                                                    disabled={rReviewingId === q.id}
+                                                    onClick={() => handleRaceReview(q.id, 'approved')}>
+                                              ✅
+                                            </button>
+                                            <button className="btn btn-danger btn-sm"
+                                                    disabled={rReviewingId === q.id}
+                                                    onClick={() => handleRaceReview(q.id, 'rejected')}>
+                                              ❌
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1091,6 +1198,14 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                   <input className="form-input" type="number" min="1" value={rDurationMinutes}
                          onChange={e => setRDurationMinutes(e.target.value)} placeholder="∞" />
                 </div>
+              </div>
+
+              {/* Qualification URL */}
+              <div className="form-group">
+                <label className="form-label">Qualification URL <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>(optional)</span></label>
+                <input className="form-input" value={rQualificationUrl}
+                       onChange={e => setRQualificationUrl(e.target.value)}
+                       placeholder="https://... — users must visit this URL and upload a screenshot to qualify" />
               </div>
 
               {/* Horse configuration */}

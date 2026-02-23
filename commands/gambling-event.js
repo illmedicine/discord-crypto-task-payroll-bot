@@ -92,6 +92,7 @@ module.exports = {
         .addIntegerOption(opt => opt.setName('max_players').setDescription('Max players').setRequired(true))
         .addIntegerOption(opt => opt.setName('duration_minutes').setDescription('Duration in minutes').setRequired(false))
         .addIntegerOption(opt => opt.setName('num_slots').setDescription('Number of horses (2-6, default 6)').setRequired(false))
+        .addStringOption(opt => opt.setName('qualification_url').setDescription('URL users must visit to qualify (optional)').setRequired(false))
     )
     .addSubcommand(sub =>
       sub.setName('list')
@@ -127,11 +128,12 @@ module.exports = {
       const maxPlayers = interaction.options.getInteger('max_players');
       const durationMinutes = interaction.options.getInteger('duration_minutes') || null;
       const numSlots = Math.min(Math.max(interaction.options.getInteger('num_slots') || 6, 2), 6);
+      const qualificationUrl = interaction.options.getString('qualification_url') || null;
 
       const eventId = await db.createGamblingEvent(
         interaction.guildId, interaction.channelId,
         title, description, mode, prizeAmount, currency, entryFee,
-        minPlayers, maxPlayers, durationMinutes, numSlots, interaction.user.id
+        minPlayers, maxPlayers, durationMinutes, numSlots, interaction.user.id, qualificationUrl
       );
 
       // Add default slots
@@ -141,10 +143,10 @@ module.exports = {
       }
 
       // Build embed
-      const embed = createGamblingEventEmbed(eventId, title, description, mode, prizeAmount, currency, entryFee, 0, minPlayers, maxPlayers, durationMinutes, slotsToUse);
+      const embed = createGamblingEventEmbed(eventId, title, description, mode, prizeAmount, currency, entryFee, 0, minPlayers, maxPlayers, durationMinutes, slotsToUse, qualificationUrl);
 
-      // Build slot buttons
-      const components = buildSlotButtons(eventId, slotsToUse);
+      // Build slot buttons (with optional qualify button)
+      const components = buildSlotButtons(eventId, slotsToUse, qualificationUrl);
 
       const msg = await interaction.reply({ embeds: [embed], components, fetchReply: true });
       await db.updateGamblingEventMessageId(eventId, msg.id);
@@ -257,6 +259,16 @@ module.exports = {
     }
     if (event.current_players >= event.max_players) {
       return interaction.editReply({ content: '❌ This event is full.' });
+    }
+
+    // Qualification gate: if event requires qualification, check it
+    if (event.qualification_url) {
+      const qual = await db.getGamblingEventQualification(eventId, interaction.user.id);
+      if (!qual) {
+        return interaction.editReply({
+          content: '❌ **Qualification Required!**\n\nYou must qualify before placing a bet.\nClick the **✅ Qualify** button on the event post to get started.'
+        });
+      }
     }
 
     // Check if user already bet
@@ -529,6 +541,126 @@ module.exports = {
     });
   },
 
+  // ---- Button handler: qualify for a gambling event ----
+  async handleQualifyButton(interaction) {
+    const parts = interaction.customId.split('_');
+    const eventId = parseInt(parts[2]);
+    const userId = interaction.user.id;
+
+    try {
+      const event = await getGamblingEventWithFallback(eventId);
+      if (!event) {
+        return interaction.reply({ content: '❌ This horse race event no longer exists.', ephemeral: true });
+      }
+      if (event.status !== 'active') {
+        return interaction.reply({ content: '❌ This horse race has ended.', ephemeral: true });
+      }
+      if (!event.qualification_url) {
+        return interaction.reply({ content: '❌ This event does not require qualification. Click a horse button directly.', ephemeral: true });
+      }
+
+      // Check if already qualified
+      const existingQual = await db.getGamblingEventQualification(eventId, userId);
+      if (existingQual) {
+        return interaction.reply({ content: '✅ You are already qualified for this race! Click a horse button to place your bet.', ephemeral: true });
+      }
+
+      // Check if event is full
+      if (event.current_players >= event.max_players) {
+        return interaction.reply({ content: '❌ This horse race is full. No more riders allowed.', ephemeral: true });
+      }
+
+      const qualEmbed = new EmbedBuilder()
+        .setColor('#3498DB')
+        .setTitle('🔗 Qualification Required')
+        .setDescription(
+          `To qualify for **${event.title}**, you must:\n\n` +
+          `1️⃣ **Click the button below** to open the qualification page\n` +
+          `2️⃣ **Take a screenshot** proving you visited the page\n` +
+          `3️⃣ **Upload your screenshot** in this channel within 5 minutes\n\n` +
+          `⏱️ You have **5 minutes** to upload your screenshot.`
+        )
+        .setFooter({ text: `Horse Race #${eventId} • Qualification Step` })
+        .setTimestamp();
+
+      const urlButton = new ButtonBuilder()
+        .setLabel('🔗 Open Qualification Page')
+        .setStyle(ButtonStyle.Link)
+        .setURL(event.qualification_url);
+
+      const qualRow = new ActionRowBuilder().addComponents(urlButton);
+
+      await interaction.reply({ embeds: [qualEmbed], components: [qualRow], ephemeral: true });
+
+      // Collect the user's next message in the same channel with an image attachment
+      const channel = interaction.channel;
+      if (!channel) return;
+
+      const filter = (msg) => {
+        if (msg.author.id !== userId) return false;
+        if (msg.attachments.size === 0) return false;
+        return msg.attachments.some(att => att.contentType && att.contentType.startsWith('image/'));
+      };
+
+      try {
+        const collected = await channel.awaitMessages({ filter, max: 1, time: 300000, errors: ['time'] });
+        const msg = collected.first();
+        const screenshotAttachment = msg.attachments.find(att => att.contentType && att.contentType.startsWith('image/'));
+
+        if (!screenshotAttachment) {
+          await interaction.followUp({ content: '❌ No valid screenshot image found. Please click **✅ Qualify** again and upload an image.', ephemeral: true });
+          return;
+        }
+
+        // Save qualification with temporary URL first
+        await db.addGamblingEventQualification(eventId, userId, interaction.user.username, screenshotAttachment.url);
+
+        const successEmbed = new EmbedBuilder()
+          .setColor('#2ECC71')
+          .setTitle('✅ Qualification Complete!')
+          .setDescription(
+            `<@${userId}> has been qualified for **${event.title}**!\n\n` +
+            `You can now click a horse button to place your bet. 🏇`
+          )
+          .setThumbnail(interaction.user.displayAvatarURL({ size: 128 }))
+          .setFooter({ text: `Horse Race #${eventId}` })
+          .setTimestamp();
+
+        const { AttachmentBuilder } = require('discord.js');
+        const screenshotFile = new AttachmentBuilder(screenshotAttachment.url, { name: 'proof.png' });
+        successEmbed.setImage('attachment://proof.png');
+
+        const replyMsg = await msg.reply({ embeds: [successEmbed], files: [screenshotFile] });
+
+        // Grab the persistent attachment URL from the bot's reply
+        let persistentUrl = screenshotAttachment.url;
+        try {
+          if (replyMsg.attachments && replyMsg.attachments.size > 0) {
+            persistentUrl = replyMsg.attachments.first().url;
+          }
+        } catch (_) {}
+
+        // Update DB with persistent URL and sync to backend
+        await db.addGamblingEventQualification(eventId, userId, interaction.user.username, persistentUrl);
+        syncBetToBackend({ eventId, action: 'qualify', userId, screenshotUrl: persistentUrl });
+
+        // Try to delete the user's screenshot message to keep channel clean
+        try { await msg.delete(); } catch (_) {}
+
+      } catch (timeoutErr) {
+        await interaction.followUp({ content: '⏱️ Qualification timed out. Click **✅ Qualify** again to restart.', ephemeral: true });
+      }
+
+    } catch (error) {
+      console.error('Gambling event qualify error:', error);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: `❌ Error: ${error.message}`, ephemeral: true });
+      } else {
+        await interaction.reply({ content: `❌ Error: ${error.message}`, ephemeral: true });
+      }
+    }
+  },
+
   // ---- Shared: update embed + auto-process when full ----
   async _updateEmbedAndAutoProcess(interaction, event, eventId, slots, newCount) {
     try {
@@ -542,7 +674,8 @@ module.exports = {
               event.prize_amount, event.currency, event.entry_fee,
               newCount, event.min_players, event.max_players,
               null, // duration doesn't matter for rebuild — timestamp already set
-              slots.map(s => ({ label: s.label, color: s.color }))
+              slots.map(s => ({ label: s.label, color: s.color })),
+              event.qualification_url
             );
             // Preserve original timestamp field if present
             const existingTimerField = originalMsg.embeds[0]?.fields?.find(f => f.name === '⏱️ Ends');
@@ -583,7 +716,7 @@ module.exports = {
 };
 
 // ---- Helper: build embed with rules & T&Cs ----
-function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount, currency, entryFee, currentPlayers, minPlayers, maxPlayers, durationMinutes, slots) {
+function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount, currency, entryFee, currentPlayers, minPlayers, maxPlayers, durationMinutes, slots, qualificationUrl) {
   const modeLabel = mode === 'pot' ? '🏦 Pot Split' : '🏠 House-funded';
   const isPotMode = mode === 'pot';
   const requiresPayment = isPotMode && entryFee > 0;
@@ -657,12 +790,28 @@ function createGamblingEventEmbed(eventId, title, description, mode, prizeAmount
     embed.addFields({ name: '⏱️ Ends', value: `<t:${ts}:R>`, inline: true });
   }
 
+  if (qualificationUrl) {
+    embed.addFields({ name: '🔗 Qualification Required', value: `[Visit this link](${qualificationUrl}) then click **✅ Qualify**` });
+  }
+
   return embed;
 }
 
 // ---- Helper: build horse buttons ----
-function buildSlotButtons(eventId, slots) {
+function buildSlotButtons(eventId, slots, qualificationUrl) {
   const components = [];
+
+  // Add qualify button row if qualification_url is set
+  if (qualificationUrl) {
+    const qualifyRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`gamble_qualify_${eventId}`)
+        .setLabel('✅ Qualify')
+        .setStyle(ButtonStyle.Success)
+    );
+    components.push(qualifyRow);
+  }
+
   const buttons = slots.map((s, i) =>
     new ButtonBuilder()
       .setCustomId(`gamble_bet_${eventId}_${i + 1}`)
