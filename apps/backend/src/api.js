@@ -2654,18 +2654,18 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (walletRow?.solana_address) {
         return res.json({ wallet_address: walletRow.solana_address, connected: true })
       }
-      // Fallback: check users table (guild-scoped entries synced from bot)
+      // Fallback: check users table (use solana_address only — wallet_address column may not exist)
       let userRow = null
       try {
         userRow = await db.get(
-          `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
+          `SELECT solana_address FROM users WHERE discord_id = ? AND solana_address IS NOT NULL LIMIT 1`,
           [req.params.discordId]
         )
       } catch (dbErr) {
         console.warn('[worker-wallet] users table query failed:', dbErr?.message)
       }
-      if (userRow?.wallet_address) {
-        return res.json({ wallet_address: userRow.wallet_address, connected: true })
+      if (userRow?.solana_address) {
+        return res.json({ wallet_address: userRow.solana_address, connected: true })
       }
       // Fallback: try the bot's integrated API (shares bot's DB which has /user-wallet connect data)
       try {
@@ -2737,19 +2737,26 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // 2. Get worker's connected wallet address (check user_wallets first, then users)
       step = 'wallet_lookup'
       let recipientAddress = null
-      const walletRow = await db.get(
-        `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
-        [req.params.discordId]
-      )
-      if (walletRow?.solana_address) {
-        recipientAddress = walletRow.solana_address
-      } else {
-        const userRow = await db.get(
-          `SELECT COALESCE(solana_address, wallet_address) AS wallet_address FROM users WHERE discord_id = ? AND (solana_address IS NOT NULL OR wallet_address IS NOT NULL) LIMIT 1`,
+      // Check user_wallets table first
+      try {
+        const walletRow = await db.get(
+          `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
           [req.params.discordId]
         )
-        recipientAddress = userRow?.wallet_address || null
+        if (walletRow?.solana_address) recipientAddress = walletRow.solana_address
+      } catch (e) { console.warn('[payroll] user_wallets lookup failed:', e?.message) }
+
+      // Fallback: check users table (use solana_address only — wallet_address may not exist)
+      if (!recipientAddress) {
+        try {
+          const userRow = await db.get(
+            `SELECT solana_address FROM users WHERE discord_id = ? AND solana_address IS NOT NULL LIMIT 1`,
+            [req.params.discordId]
+          )
+          if (userRow?.solana_address) recipientAddress = userRow.solana_address
+        } catch (e) { console.warn('[payroll] users table lookup failed:', e?.message) }
       }
+
       // Fallback: try the bot's integrated API if wallet not found locally
       if (!recipientAddress) {
         try {
@@ -2766,11 +2773,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
               if (botData?.wallet_address) {
                 recipientAddress = botData.wallet_address
                 // Cache it locally
-                await db.run(
-                  `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
-                  [req.params.discordId, botData.wallet_address, botData.username || null]
-                )
+                try {
+                  await db.run(
+                    `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                     ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
+                    [req.params.discordId, botData.wallet_address, botData.username || null]
+                  )
+                } catch (_) {}
                 console.log(`[payroll] Synced wallet from bot for ${req.params.discordId}: ${botData.wallet_address.slice(0, 8)}...`)
               }
             }
