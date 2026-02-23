@@ -94,6 +94,8 @@ export default function Workers({ guildId, userRole }: Props) {
   const [payMemo, setPayMemo] = useState('')
   const [paying, setPaying] = useState(false)
   const [payResult, setPayResult] = useState<{ ok: boolean; signature?: string; amount_sol?: number; amount_usd?: number; sol_price?: number; error?: string } | null>(null)
+  const [manualWalletInput, setManualWalletInput] = useState('')
+  const [savingWallet, setSavingWallet] = useState(false)
 
   const isOwner = userRole === 'owner'
 
@@ -167,6 +169,8 @@ export default function Workers({ guildId, userRole }: Props) {
     setPayAmount('')
     setPayMemo('')
     setPayResult(null)
+    setManualWalletInput('')
+    setSavingWallet(false)
     setShowPayModal(true)
     setPayWalletLoading(true)
     try {
@@ -359,31 +363,69 @@ export default function Workers({ guildId, userRole }: Props) {
             </div>
 
             {/* Wallet status */}
-            <div style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, margin: '8px 0', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                {payWalletLoading ? (
-                  <span style={{ color: '#94a3b8' }}>⏳ Checking wallet...</span>
-                ) : payTargetWallet ? (
-                  <span style={{ color: '#10b981' }}>🟢 Wallet: {payTargetWallet.slice(0, 6)}...{payTargetWallet.slice(-4)}</span>
-                ) : (
-                  <span style={{ color: '#f59e0b' }}>⚠️ Wallet not cached — will re-check on send</span>
+            <div style={{ padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, margin: '8px 0', fontSize: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  {payWalletLoading ? (
+                    <span style={{ color: '#94a3b8' }}>⏳ Checking wallet...</span>
+                  ) : payTargetWallet ? (
+                    <span style={{ color: '#10b981' }}>🟢 Wallet: {payTargetWallet.slice(0, 6)}...{payTargetWallet.slice(-4)}</span>
+                  ) : (
+                    <span style={{ color: '#f59e0b' }}>⚠️ No wallet found — enter it manually below</span>
+                  )}
+                </div>
+                {!payWalletLoading && !payTargetWallet && (
+                  <button
+                    className="btn btn-secondary"
+                    style={{ padding: '4px 10px', fontSize: 12 }}
+                    onClick={async () => {
+                      setPayWalletLoading(true)
+                      try {
+                        const r = await api.get(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/wallet`)
+                        setPayTargetWallet(r.data?.wallet_address || null)
+                      } catch { setPayTargetWallet(null) }
+                      setPayWalletLoading(false)
+                    }}
+                  >
+                    🔄 Retry
+                  </button>
                 )}
               </div>
+              {/* Manual wallet entry when not found */}
               {!payWalletLoading && !payTargetWallet && (
-                <button
-                  className="btn btn-secondary"
-                  style={{ padding: '4px 10px', fontSize: 12 }}
-                  onClick={async () => {
-                    setPayWalletLoading(true)
-                    try {
-                      const r = await api.get(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/wallet`)
-                      setPayTargetWallet(r.data?.wallet_address || null)
-                    } catch { setPayTargetWallet(null) }
-                    setPayWalletLoading(false)
-                  }}
-                >
-                  🔄 Retry
-                </button>
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    placeholder="Paste Solana wallet address..."
+                    value={manualWalletInput}
+                    onChange={e => setManualWalletInput(e.target.value)}
+                    disabled={savingWallet}
+                    style={{ flex: 1, padding: '8px 12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: '#fff', fontSize: 13, fontFamily: 'monospace' }}
+                  />
+                  <button
+                    className="btn btn-primary"
+                    style={{ padding: '8px 14px', fontSize: 12, background: '#d97706', whiteSpace: 'nowrap' }}
+                    disabled={savingWallet || !manualWalletInput.trim() || manualWalletInput.trim().length < 32}
+                    onClick={async () => {
+                      setSavingWallet(true)
+                      try {
+                        const r = await api.put(`/admin/guilds/${guildId}/workers/${payTarget.discord_id}/wallet`, {
+                          wallet_address: manualWalletInput.trim()
+                        })
+                        if (r.data?.wallet_address) {
+                          setPayTargetWallet(r.data.wallet_address)
+                          setManualWalletInput('')
+                        }
+                      } catch (e: any) {
+                        const msg = e?.response?.data?.message || 'Failed to save wallet'
+                        alert(msg)
+                      }
+                      setSavingWallet(false)
+                    }}
+                  >
+                    {savingWallet ? '⏳' : '💾 Save'}
+                  </button>
+                </div>
               )}
             </div>
 

@@ -2709,6 +2709,46 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Manually set a worker's wallet address — OWNER ONLY.
+  // This lets owners enter a wallet when the bot is down or the worker hasn't run /user-wallet connect yet.
+  app.put('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const { wallet_address } = req.body || {}
+      if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.trim().length < 32 || wallet_address.trim().length > 48) {
+        return res.status(400).json({ error: 'invalid_wallet', message: 'Please provide a valid Solana wallet address (32-44 characters).' })
+      }
+      const address = wallet_address.trim()
+
+      // Validate it looks like base58 (Solana addresses)
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+        return res.status(400).json({ error: 'invalid_wallet', message: 'Invalid Solana address format.' })
+      }
+
+      // Verify this worker exists in the guild
+      const worker = await db.get(
+        'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
+        [req.guild.id, req.params.discordId]
+      )
+      if (!worker) {
+        return res.status(404).json({ error: 'worker_not_found' })
+      }
+
+      // Upsert into user_wallets
+      await db.run(
+        `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
+        [req.params.discordId, address, worker.username || null]
+      )
+
+      console.log(`[worker-wallet] Owner manually set wallet for ${req.params.discordId}: ${address.slice(0, 8)}...`)
+      res.json({ ok: true, wallet_address: address })
+    } catch (err) {
+      console.error('[worker-wallet] manual set error:', err?.message || err)
+      res.status(500).json({ error: 'failed_to_set_wallet' })
+    }
+  })
+
   // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
   // Accepts amount in USD, converts to SOL at current market price.
   app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
