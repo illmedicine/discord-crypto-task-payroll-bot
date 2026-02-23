@@ -2712,19 +2712,21 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
   // Accepts amount in USD, converts to SOL at current market price.
   app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
+    let step = 'init'
     try {
       // Strict owner check — only the server owner can pay staff
       if (req.userRole !== 'owner') {
         return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can pay staff.' })
       }
 
-      const { amount_usd, memo } = req.body || {}
+      step = 'parse_amount'      const { amount_usd, memo } = req.body || {}
       const amountUsd = Number(amount_usd)
       if (!amountUsd || amountUsd <= 0 || amountUsd > 100000) {
         return res.status(400).json({ error: 'invalid_amount', message: 'Amount must be between $0.01 and $100,000 USD.' })
       }
 
       // 1. Verify worker exists and is active
+      step = 'find_worker'
       const worker = await db.get(
         'SELECT * FROM dcb_workers WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL',
         [req.guild.id, req.params.discordId]
@@ -2732,6 +2734,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (!worker) return res.status(404).json({ error: 'worker_not_found' })
 
       // 2. Get worker's connected wallet address (check user_wallets first, then users)
+      step = 'wallet_lookup'
       let recipientAddress = null
       const walletRow = await db.get(
         `SELECT solana_address FROM user_wallets WHERE discord_id = ?`,
@@ -2780,6 +2783,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       }
 
       // 3. Get guild treasury wallet + secret
+      step = 'treasury_lookup'
       const guildWallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       if (!guildWallet?.wallet_address) {
         return res.status(400).json({ error: 'no_treasury', message: 'No treasury wallet configured. Set one up in the Treasury tab.' })
@@ -2789,6 +2793,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       }
 
       // 4. Fetch SOL price to convert USD → SOL
+      step = 'fetch_sol_price'
       let solPrice = 0
       try {
         const priceRes = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 })
@@ -2803,6 +2808,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const amountSol = amountUsd / solPrice
 
       // 5. Create pending payout record
+      step = 'create_payout_record'
       const payerDiscordId = await resolveCanonicalUserId(req.user)
       const { lastID: payoutId } = await db.run(
         `INSERT INTO worker_payouts (guild_id, recipient_discord_id, recipient_address, amount_sol, amount_usd, sol_price_at_time, status, memo, paid_by)
@@ -2811,9 +2817,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       )
 
       // 6. Execute Solana transfer
+      step = 'solana_transfer'
       try {
         const { Connection, PublicKey, Transaction: SolTransaction, SystemProgram, sendAndConfirmTransaction, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js')
-        const bs58 = require('bs58')
+        let bs58
+        try { bs58 = require('bs58') } catch (_) { bs58 = { decode: (s) => Buffer.from(s, 'base64') } }
 
         const rpcUrl = guildWallet.network === 'devnet'
           ? 'https://api.devnet.solana.com'
@@ -2883,8 +2891,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         res.status(500).json({ error: 'transaction_failed', message: txErr?.message || 'Solana transaction failed.' })
       }
     } catch (err) {
-      console.error('[payroll] pay error:', err?.message || err)
-      res.status(500).json({ error: 'pay_failed' })
+      console.error(`[payroll] pay error at step=${step}:`, err?.message || err, err?.stack)
+      res.status(500).json({ error: 'pay_failed', message: `[${step}] ${err?.message || 'Unknown error'}` })
     }
   })
 
