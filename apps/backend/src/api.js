@@ -2820,8 +2820,24 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       step = 'solana_transfer'
       try {
         const { Connection, PublicKey, Transaction: SolTransaction, SystemProgram, sendAndConfirmTransaction, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js')
-        let bs58
-        try { bs58 = require('bs58') } catch (_) { bs58 = { decode: (s) => Buffer.from(s, 'base64') } }
+
+        // Base58 decoder (avoids ESM-only bs58 v5 require() issue)
+        const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+        function decodeBase58(str) {
+          const bytes = []
+          for (const c of str) {
+            let carry = BASE58_ALPHABET.indexOf(c)
+            if (carry < 0) throw new Error('Invalid base58 character: ' + c)
+            for (let j = 0; j < bytes.length; j++) {
+              carry += bytes[j] * 58
+              bytes[j] = carry & 0xff
+              carry >>= 8
+            }
+            while (carry > 0) { bytes.push(carry & 0xff); carry >>= 8 }
+          }
+          for (const c of str) { if (c === '1') bytes.push(0); else break }
+          return new Uint8Array(bytes.reverse())
+        }
 
         const rpcUrl = guildWallet.network === 'devnet'
           ? 'https://api.devnet.solana.com'
@@ -2834,7 +2850,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         if (secret.startsWith('[')) {
           senderKeypair = Keypair.fromSecretKey(new Uint8Array(JSON.parse(secret)))
         } else {
-          senderKeypair = Keypair.fromSecretKey(new Uint8Array(bs58.decode(secret)))
+          senderKeypair = Keypair.fromSecretKey(decodeBase58(secret))
         }
 
         const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL)
