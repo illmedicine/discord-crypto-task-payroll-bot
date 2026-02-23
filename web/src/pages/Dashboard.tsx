@@ -275,9 +275,9 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
             <span className="qa-icon">👥</span>
             Workers
           </button>
-          <button className="quick-action-btn" onClick={() => onNavigate('votes')}>
-            <span className="qa-icon">🗳️</span>
-            Vote Events
+          <button className="quick-action-btn" onClick={() => onNavigate('events')}>
+            <span className="qa-icon">🎯</span>
+            Event Manager
           </button>
           <button className="quick-action-btn" onClick={() => onNavigate('history')}>
             <span className="qa-icon">📜</span>

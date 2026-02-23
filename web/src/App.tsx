@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import Dashboard from './pages/Dashboard'
-import Events from './pages/Events'
-import GamblingEvents from './pages/GamblingEvents'
+import EventManager from './pages/EventManager'
 import History from './pages/History'
 import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
@@ -12,14 +11,13 @@ import ProfilerLogger from './components/ProfilerLogger'
 import EventTicker from './components/EventTicker'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'votes' | 'gambling' | 'history' | 'treasury' | 'workers' | 'qualify'
+type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
   { id: 'workers', label: 'Workers', icon: '👥' },
-  { id: 'votes', label: 'Vote Events', icon: '🗳️' },
-  { id: 'gambling', label: 'Horse Race', icon: '🏇' },
+  { id: 'events', label: 'Event Manager', icon: '🎯' },
   { id: 'history', label: 'History', icon: '📜' },
 ]
 
@@ -61,7 +59,12 @@ export default function App() {
 
   useEffect(() => {
     // Handle hash-based navigation
-    const hash = window.location.hash.replace(/^#/, '')
+    let hash = window.location.hash.replace(/^#/, '')
+    // Backward compat: old #votes and #gambling → #events
+    if (hash === 'votes' || hash === 'gambling') {
+      hash = 'events'
+      window.location.hash = 'events'
+    }
     // Check for qualify-{eventId} hash
     const qualifyMatch = hash.match(/^qualify-(\d+)$/)
     if (qualifyMatch) {
@@ -98,6 +101,8 @@ export default function App() {
         } catch (_) {}
         if (!savedGuild) savedGuild = localStorage.getItem('dcb_selected_guild') || ''
         if (!savedPage) savedPage = localStorage.getItem('dcb_selected_page') || ''
+        // Backward compat: old saved page names → events
+        if (savedPage === 'votes' || savedPage === 'gambling') savedPage = 'events'
 
         // Load account info (linked providers)
         try {
@@ -311,8 +316,7 @@ export default function App() {
           <ProfilerLogger id="App">
             {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
             {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} />}
-            {page === 'votes' && <Events guildId={guildId} isOwner={isOwner} />}
-            {page === 'gambling' && <GamblingEvents guildId={guildId} isOwner={isOwner} />}
+            {page === 'events' && <EventManager guildId={guildId} isOwner={isOwner} />}
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}

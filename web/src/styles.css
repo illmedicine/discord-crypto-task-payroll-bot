@@ -2364,3 +2364,140 @@ h3 {
   .payroll-daily-row { grid-template-columns: 60px 1fr 70px; }
   .payroll-daily-count { display: none; }
 }
+
+/* ===== Event Manager ===== */
+
+/* Summary bar */
+.em-summary-bar {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.em-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px 20px;
+  min-width: 90px;
+  transition: border-color var(--transition-fast);
+}
+
+.em-stat:hover {
+  border-color: var(--accent-blue);
+}
+
+.em-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+.em-stat-value.em-stat-active {
+  color: var(--accent-green);
+}
+
+.em-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Filter tabs */
+.em-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0;
+}
+
+.em-tab {
+  padding: 8px 18px;
+  border-radius: 8px 8px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-muted);
+  transition: all var(--transition-fast);
+  margin-bottom: -1px;
+}
+
+.em-tab:hover {
+  color: var(--text-secondary);
+  background: rgba(99, 140, 255, 0.06);
+}
+
+.em-tab.active {
+  background: var(--bg-card);
+  color: var(--accent-blue);
+  border-color: var(--border-color);
+  font-weight: 600;
+}
+
+/* Section card inside event manager */
+.em-section {
+  border-left: 3px solid var(--accent-blue);
+}
+
+/* Create form type switcher */
+.em-create-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.em-create-tab {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  transition: all var(--transition-fast);
+}
+
+.em-create-tab:hover {
+  color: var(--text-secondary);
+}
+
+.em-create-tab.active {
+  background: var(--gradient-primary);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(99, 140, 255, 0.25);
+}
+
+@media (max-width: 768px) {
+  .em-summary-bar {
+    gap: 8px;
+  }
+  .em-stat {
+    padding: 8px 14px;
+    min-width: 70px;
+  }
+  .em-stat-value {
+    font-size: 18px;
+  }
+  .em-tabs {
+    overflow-x: auto;
+  }
+  .em-tab {
+    white-space: nowrap;
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+}
