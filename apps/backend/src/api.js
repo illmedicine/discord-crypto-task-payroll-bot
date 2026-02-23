@@ -2719,7 +2719,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can pay staff.' })
       }
 
-      step = 'parse_amount'      const { amount_usd, memo } = req.body || {}
+      step = 'parse_amount'
+      const { amount_usd, memo } = req.body || {}
       const amountUsd = Number(amount_usd)
       if (!amountUsd || amountUsd <= 0 || amountUsd > 100000) {
         return res.status(400).json({ error: 'invalid_amount', message: 'Amount must be between $0.01 and $100,000 USD.' })
