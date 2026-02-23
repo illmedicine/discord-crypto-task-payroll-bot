@@ -42,7 +42,7 @@ type GuildMember = {
   avatar: string | null
 }
 
-type Props = { guildId: string; userRole?: string }
+type Props = { guildId: string; isOwner?: boolean; userRole?: string }
 
 function timeAgo(dateStr: string | null): string {
   if (!dateStr) return 'never'
