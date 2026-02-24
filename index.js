@@ -34,6 +34,11 @@ const { ANCHOR_GUILD_ID, prefixLine, getTrustRisk } = require('./utils/trustRisk
 // Validate encryption env vars at startup
 validateEncryptionEnv();
 
+// Migrate any existing plaintext secrets to encrypted form
+db.migrateSecretsToEncrypted().catch(err => {
+  console.error('[MIGRATION] Secret migration failed:', err.message);
+});
+
 // ---- Backend activity sync ----
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';

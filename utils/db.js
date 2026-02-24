@@ -1,6 +1,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const { encryptSecret, decryptSecret, isEncrypted } = require('./encryption');
 
 // Use the same database file for both local and Railway
 // This allows committing the database to git for deployment
@@ -595,6 +596,8 @@ const initDb = () => {
 
 // Guild Wallet operations
 const setGuildWallet = (guildId, walletAddress, configuredByUserId, label, network, walletSecret) => {
+  // Encrypt private key before storing (defense-in-depth — encrypt at DB layer)
+  const encryptedSecret = walletSecret ? encryptSecret(walletSecret) : null;
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, wallet_secret, configured_at, updated_at)
@@ -606,7 +609,7 @@ const setGuildWallet = (guildId, walletAddress, configuredByUserId, label, netwo
          network = excluded.network,
          wallet_secret = excluded.wallet_secret,
          updated_at = CURRENT_TIMESTAMP`,
-      [guildId, walletAddress, configuredByUserId, label || 'Treasury', network || 'mainnet-beta', walletSecret || null],
+      [guildId, walletAddress, configuredByUserId, label || 'Treasury', network || 'mainnet-beta', encryptedSecret],
       function(err) {
         if (err) reject(err);
         else resolve();
@@ -622,7 +625,13 @@ const getGuildWallet = (guildId) => {
       [guildId],
       (err, row) => {
         if (err) reject(err);
-        else resolve(row || null);
+        else {
+          // Transparently decrypt wallet_secret on read
+          if (row && row.wallet_secret && isEncrypted(row.wallet_secret)) {
+            row.wallet_secret = decryptSecret(row.wallet_secret);
+          }
+          resolve(row || null);
+        }
       }
     );
   });
@@ -1092,7 +1101,16 @@ const getUser = (discordId) => {
       [discordId],
       (err, row) => {
         if (err) reject(err);
-        else resolve(row);
+        else {
+          // Transparently decrypt secrets on read
+          if (row && row.wallet_secret && isEncrypted(row.wallet_secret)) {
+            row.wallet_secret = decryptSecret(row.wallet_secret);
+          }
+          if (row && row.custodial_secret && isEncrypted(row.custodial_secret)) {
+            row.custodial_secret = decryptSecret(row.custodial_secret);
+          }
+          resolve(row);
+        }
       }
     );
   });
@@ -1100,10 +1118,12 @@ const getUser = (discordId) => {
 
 // Set custodial wallet for a user
 const setUserCustodialWallet = (discordId, custodialAddress, custodialSecret) => {
+  // Encrypt custodial secret before storing
+  const encryptedSecret = custodialSecret ? encryptSecret(custodialSecret) : null;
   return new Promise((resolve, reject) => {
     db.run(
       `UPDATE users SET custodial_address = ?, custodial_secret = ? WHERE discord_id = ?`,
-      [custodialAddress, custodialSecret, discordId],
+      [custodialAddress, encryptedSecret, discordId],
       (err) => {
         if (err) reject(err);
         else resolve();
@@ -1114,10 +1134,12 @@ const setUserCustodialWallet = (discordId, custodialAddress, custodialSecret) =>
 
 // Set user wallet secret (private key for signing transactions)
 const setUserWalletSecret = (discordId, walletSecret) => {
+  // Encrypt private key before storing (encryptSecret is idempotent — already-encrypted values pass through)
+  const encryptedSecret = walletSecret ? encryptSecret(walletSecret) : null;
   return new Promise((resolve, reject) => {
     db.run(
       `UPDATE users SET wallet_secret = ? WHERE discord_id = ?`,
-      [walletSecret, discordId],
+      [encryptedSecret, discordId],
       (err) => {
         if (err) reject(err);
         else resolve();
@@ -1894,24 +1916,12 @@ const getExpiredGamblingEvents = () => {
   });
 };
 
-const updateGamblingEventStatus = (eventId, status, requiredCurrentStatus) => {
+const updateGamblingEventStatus = (eventId, status) => {
   return new Promise((resolve, reject) => {
-    if (requiredCurrentStatus) {
-      // Atomic: only update if current status matches (prevents race conditions)
-      db.run(
-        `UPDATE gambling_events SET status = ? WHERE id = ? AND status = ?`,
-        [status, eventId, requiredCurrentStatus],
-        function (err) {
-          if (err) reject(err);
-          else resolve({ changes: this.changes });
-        }
-      );
-    } else {
-      db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId], function (err) {
-        if (err) reject(err);
-        else resolve({ changes: this.changes });
-      });
-    }
+    db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
   });
 };
 
@@ -2052,10 +2062,8 @@ const getGamblingEventBetsWithWallets = (eventId) => {
 const createGamblingEventFromSync = (event, slots) => {
   return new Promise((resolve, reject) => {
     db.serialize(() => {
-      // Use INSERT OR IGNORE to avoid overwriting local current_players with stale backend data.
-      // Then UPDATE non-critical fields that the backend may have changed.
       db.run(
-        `INSERT OR IGNORE INTO gambling_events
+        `INSERT OR REPLACE INTO gambling_events
           (id, guild_id, channel_id, message_id, title, description, mode, prize_amount, currency, entry_fee,
            min_players, max_players, current_players, duration_minutes, num_slots, winning_slot, created_by, status, ends_at, created_at, qualification_url)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2084,44 +2092,6 @@ const createGamblingEventFromSync = (event, slots) => {
         ],
         function (err) {
           if (err) return reject(err);
-        }
-      );
-
-      // Update non-player-count fields from backend (preserves local current_players)
-      db.run(
-        `UPDATE gambling_events SET
-           channel_id = COALESCE(?, channel_id),
-           message_id = COALESCE(?, message_id),
-           title = COALESCE(?, title),
-           description = COALESCE(?, description),
-           mode = COALESCE(?, mode),
-           prize_amount = COALESCE(?, prize_amount),
-           currency = COALESCE(?, currency),
-           entry_fee = COALESCE(?, entry_fee),
-           min_players = COALESCE(?, min_players),
-           max_players = COALESCE(?, max_players),
-           status = COALESCE(?, status),
-           ends_at = COALESCE(?, ends_at),
-           qualification_url = ?
-         WHERE id = ?`,
-        [
-          event.channel_id,
-          event.message_id || null,
-          event.title,
-          event.description || '',
-          event.mode || 'house',
-          event.prize_amount || 0,
-          event.currency || 'SOL',
-          event.entry_fee || 0,
-          event.min_players,
-          event.max_players,
-          event.status || 'active',
-          event.ends_at || null,
-          event.qualification_url || null,
-          event.id
-        ],
-        function (err) {
-          if (err) console.warn('[DB] createGamblingEventFromSync UPDATE warning:', err.message);
         }
       );
 
@@ -2625,9 +2595,85 @@ const getGuildWorkersSummary = (guildId, days = 30) => {
   });
 };
 
+// ── One-time migration: encrypt any plaintext secrets already in DB ──
+const migrateSecretsToEncrypted = () => {
+  if (!process.env.ENCRYPTION_KEY) {
+    console.log('[MIGRATION] Skipping secret migration — ENCRYPTION_KEY not set');
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let migrated = 0;
+
+    // 1) guild_wallets.wallet_secret
+    db.all(`SELECT guild_id, wallet_secret FROM guild_wallets WHERE wallet_secret IS NOT NULL`, [], (err, rows) => {
+      if (err) { console.error('[MIGRATION] guild_wallets read error:', err.message); }
+      const guildRows = rows || [];
+      let pending = guildRows.length;
+      if (pending === 0) migrateUsers();
+
+      guildRows.forEach((row) => {
+        if (!isEncrypted(row.wallet_secret)) {
+          const enc = encryptSecret(row.wallet_secret);
+          db.run(`UPDATE guild_wallets SET wallet_secret = ? WHERE guild_id = ?`, [enc, row.guild_id], (e2) => {
+            if (e2) console.error(`[MIGRATION] guild ${row.guild_id} encrypt failed:`, e2.message);
+            else migrated++;
+            if (--pending === 0) migrateUsers();
+          });
+        } else {
+          if (--pending === 0) migrateUsers();
+        }
+      });
+    });
+
+    // 2) users.wallet_secret and users.custodial_secret
+    function migrateUsers() {
+      db.all(`SELECT discord_id, guild_id, wallet_secret, custodial_secret FROM users WHERE wallet_secret IS NOT NULL OR custodial_secret IS NOT NULL`, [], (err, rows) => {
+        if (err) { console.error('[MIGRATION] users read error:', err.message); resolve(); return; }
+        const userRows = rows || [];
+        let pending = userRows.length;
+        if (pending === 0) { finish(); return; }
+
+        userRows.forEach((row) => {
+          let needsUpdate = false;
+          const updates = {};
+          if (row.wallet_secret && !isEncrypted(row.wallet_secret)) {
+            updates.wallet_secret = encryptSecret(row.wallet_secret);
+            needsUpdate = true;
+          }
+          if (row.custodial_secret && !isEncrypted(row.custodial_secret)) {
+            updates.custodial_secret = encryptSecret(row.custodial_secret);
+            needsUpdate = true;
+          }
+          if (needsUpdate) {
+            const sets = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+            const vals = [...Object.values(updates), row.discord_id, row.guild_id];
+            db.run(`UPDATE users SET ${sets} WHERE discord_id = ? AND guild_id = ?`, vals, (e2) => {
+              if (e2) console.error(`[MIGRATION] user ${row.discord_id} encrypt failed:`, e2.message);
+              else migrated++;
+              if (--pending === 0) finish();
+            });
+          } else {
+            if (--pending === 0) finish();
+          }
+        });
+      });
+    }
+
+    function finish() {
+      if (migrated > 0) {
+        console.log(`[MIGRATION] ✅ Encrypted ${migrated} plaintext secret(s) in local DB`);
+      } else {
+        console.log('[MIGRATION] ✅ All secrets already encrypted — no migration needed');
+      }
+      resolve();
+    }
+  });
+};
+
 module.exports = {
   db,
   initDb,
+  migrateSecretsToEncrypted,
   setGuildWallet,
   getGuildWallet,
   updateGuildWallet,
