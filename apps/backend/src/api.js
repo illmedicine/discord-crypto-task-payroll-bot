@@ -3340,7 +3340,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // Bot fetches gambling-event data it doesn't have locally (created via web UI)
-  app.get('/api/internal/gambling-event/:id', requireInternal, async (req, res) => {
+  app.get('/api/internal/gambling-event/:id', async (req, res) => {
     try {
       const eventId = Number(req.params.id)
       const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
@@ -3354,7 +3354,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // Bot pulls all active gambling events to pre-cache locally
-  app.get('/api/internal/gambling-events/active', requireInternal, async (req, res) => {
+  app.get('/api/internal/gambling-events/active', async (req, res) => {
     try {
       const events = await db.all(`SELECT * FROM gambling_events WHERE status = 'active' ORDER BY id DESC`)
       const result = []
