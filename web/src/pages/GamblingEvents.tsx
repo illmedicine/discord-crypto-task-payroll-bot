@@ -153,31 +153,41 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
       alert('Title and at least 2 slots are required.')
       return
     }
+    if (!channelId) {
+      alert('Please select a channel first. If no channels are listed, make sure the bot has access to text channels in your server.')
+      return
+    }
 
-    await api.post(`/admin/guilds/${guildId}/gambling-events`, {
-      channel_id: channelId,
-      title,
-      description,
-      mode,
-      prize_amount: mode === 'house' ? (prizeAmount ? Number(prizeAmount) : 0) : 0,
-      currency,
-      entry_fee: mode === 'pot' ? (entryFee ? Number(entryFee) : 0) : 0,
-      min_players: Number(minPlayers) || 1,
-      max_players: Number(maxPlayers) || 10,
-      duration_minutes: durationMinutes ? Number(durationMinutes) : null,
-      slots: slots.map(s => ({ label: s.label, color: s.color })),
-    })
+    try {
+      await api.post(`/admin/guilds/${guildId}/gambling-events`, {
+        channel_id: channelId,
+        title,
+        description,
+        mode,
+        prize_amount: mode === 'house' ? (prizeAmount ? Number(prizeAmount) : 0) : 0,
+        currency,
+        entry_fee: mode === 'pot' ? (entryFee ? Number(entryFee) : 0) : 0,
+        min_players: Number(minPlayers) || 1,
+        max_players: Number(maxPlayers) || 10,
+        duration_minutes: durationMinutes ? Number(durationMinutes) : null,
+        slots: slots.map(s => ({ label: s.label, color: s.color })),
+      })
 
-    setTitle('')
-    setDescription('')
-    setPrizeAmount('')
-    setEntryFee('')
-    setMinPlayers('1')
-    setMaxPlayers('10')
-    setDurationMinutes('')
-    setNumSlots(6)
-    setSlots(DEFAULT_SLOTS.slice(0, 6))
-    await load()
+      setTitle('')
+      setDescription('')
+      setPrizeAmount('')
+      setEntryFee('')
+      setMinPlayers('1')
+      setMaxPlayers('10')
+      setDurationMinutes('')
+      setNumSlots(6)
+      setSlots(DEFAULT_SLOTS.slice(0, 6))
+      await load()
+    } catch (err: any) {
+      const detail = err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Unknown error'
+      alert(`Failed to create horse race: ${detail}`)
+      console.error('[GamblingEvents] Create error:', err?.response?.data || err)
+    }
   }
 
   /* ================================================================ */

@@ -1755,8 +1755,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // ---- Gambling Events ----
   app.get('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildMember, async (req, res) => {
-    const rows = await db.all('SELECT * FROM gambling_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
-    res.json(rows)
+    try {
+      const rows = await db.all('SELECT * FROM gambling_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
+      res.json(rows || [])
+    } catch (err) {
+      console.error('[gambling-events] GET list error:', err?.message || err)
+      res.status(500).json({ error: 'list_failed', detail: err?.message })
+    }
   })
 
   app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, async (req, res) => {
@@ -1766,9 +1771,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       qualification_url,
     } = req.body || {}
 
-    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
-    if (!min_players || !max_players) return res.status(400).json({ error: 'missing_player_limits' })
-    if (!Array.isArray(slots) || slots.length < 2) return res.status(400).json({ error: 'at_least_two_slots_required' })
+    console.log('[gambling-event] CREATE body:', JSON.stringify({ channel_id, title, mode, min_players, max_players, slotsLen: Array.isArray(slots) ? slots.length : typeof slots }))
+    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields', detail: `channel_id=${!!channel_id}, title=${!!title}` })
+    if (min_players == null || max_players == null) return res.status(400).json({ error: 'missing_player_limits', detail: `min=${min_players}, max=${max_players}` })
+    if (!Array.isArray(slots) || slots.length < 2) return res.status(400).json({ error: 'at_least_two_slots_required', detail: `slots=${JSON.stringify(slots)}` })
 
     const endsAt = duration_minutes ? new Date(Date.now() + (Number(duration_minutes) * 60 * 1000)).toISOString() : null
     const numSlots = slots.length
