@@ -4,6 +4,10 @@ const crypto = require('../utils/crypto');
 const { processGamblingEvent, HORSE_PRESETS } = require('../utils/gamblingEventProcessor');
 const { getGuildWalletWithFallback } = require('../utils/walletSync');
 
+// Build identifier for deployment verification
+const GAMBLING_BUILD = '20260224a';
+console.log(`[GamblingEvent] Module loaded (build: ${GAMBLING_BUILD})`);
+
 // ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
@@ -105,8 +109,66 @@ async function getGamblingEventWithFallback(eventId, interaction = null) {
     }
   }
 
+  // Fifth (nuclear) fallback: create a minimal event from the interaction alone
+  // This allows bets to be placed even if we can't parse the embed fully
+  if (!event && interaction) {
+    console.log(`[GamblingEvent] NUCLEAR FALLBACK: creating minimal event #${eventId} from interaction context`);
+    try {
+      const msg = interaction.message;
+      // Count how many gamble_bet buttons exist to determine slot count
+      let slotCount = 0;
+      const nuclearSlots = [];
+      if (msg?.components) {
+        for (const row of msg.components) {
+          for (const comp of (row.components || [])) {
+            if (comp.customId?.startsWith(`gamble_bet_${eventId}_`)) {
+              slotCount++;
+              const sn = parseInt(comp.customId.split('_').pop());
+              nuclearSlots.push({ slot_number: sn, label: comp.label || `Horse #${sn}`, color: '#888' });
+            }
+          }
+        }
+      }
+      if (slotCount === 0) slotCount = 6; // default
+      event = {
+        id: eventId,
+        guild_id: interaction.guildId,
+        channel_id: interaction.channelId,
+        message_id: msg?.id || null,
+        title: `Event #${eventId}`,
+        description: `Event #${eventId}`,
+        mode: 'house',
+        prize_amount: 0,
+        currency: 'SOL',
+        entry_fee: 0,
+        min_players: 2,
+        max_players: 20,
+        current_players: 0,
+        duration_minutes: null,
+        num_slots: slotCount,
+        winning_slot: null,
+        created_by: null,
+        status: 'active',
+        ends_at: null,
+        created_at: new Date().toISOString(),
+        qualification_url: null
+      };
+      // Try to save
+      try {
+        await db.createGamblingEventFromSync(event, nuclearSlots);
+        console.log(`[GamblingEvent] ✅ Nuclear fallback saved event #${eventId} with ${nuclearSlots.length} slots`);
+      } catch (dbErr) {
+        console.warn(`[GamblingEvent] Nuclear fallback DB save failed:`, dbErr.message);
+      }
+    } catch (nuclearErr) {
+      console.error(`[GamblingEvent] Nuclear fallback failed:`, nuclearErr.message);
+      event = null;
+    }
+  }
+
   if (!event) {
     const diag = {
+      build: GAMBLING_BUILD,
       localDb: 'miss',
       backendUrl: !!DCB_BACKEND_URL,
       backendSecret: !!DCB_INTERNAL_SECRET,
@@ -117,7 +179,7 @@ async function getGamblingEventWithFallback(eventId, interaction = null) {
       embedTitle: interaction?.message?.embeds?.[0]?.title || 'none',
       componentRows: interaction?.message?.components?.length || 0,
     };
-    console.error(`[GamblingEvent] ❌ Event #${eventId} NOT FOUND anywhere. Diagnostics:`, JSON.stringify(diag));
+    console.error(`[GamblingEvent] ❌ Event #${eventId} NOT FOUND even with nuclear fallback. Diagnostics:`, JSON.stringify(diag));
   }
   return event;
 }
@@ -437,8 +499,8 @@ module.exports = {
       const embedCount = interaction.message?.embeds?.length || 0;
       const embedTitle = interaction.message?.embeds?.[0]?.title || 'none';
       const compRows = interaction.message?.components?.length || 0;
-      console.log(`[GamblingEvent] Event #${eventId} not found. msg=${hasMsg}, embeds=${embedCount}, title="${embedTitle}", rows=${compRows}`);
-      return interaction.editReply({ content: `❌ Horse race event not found.\n\`Debug: id=${eventId}, msg=${hasMsg}, embeds=${embedCount}, title="${embedTitle}", backendUrl=${!!DCB_BACKEND_URL}\`` });
+      console.error(`[GamblingEvent] handleBetButton: Event #${eventId} not found after ALL fallbacks. msg=${hasMsg}, embeds=${embedCount}, title="${embedTitle}", rows=${compRows}`);
+      return interaction.editReply({ content: `❌ Horse race event not found (build: ${GAMBLING_BUILD}).\n\`Debug: id=${eventId}, msg=${hasMsg}, embeds=${embedCount}, title="${embedTitle}", rows=${compRows}, backendUrl=${!!DCB_BACKEND_URL}\`` });
     }
     console.log(`[GamblingEvent] Event #${eventId} fetched: mode=${event.mode}, currency=${event.currency}, entry_fee=${event.entry_fee}, status=${event.status}`);
     if (event.status !== 'active') {
@@ -587,7 +649,7 @@ module.exports = {
     console.log(`[GamblingConfirm] Confirm bet: eventId=${eventId}, slot=${slotNumber}, user=${interaction.user.id}`);
 
     const event = await getGamblingEventWithFallback(eventId, interaction);
-    if (!event) return interaction.editReply({ content: '❌ Horse race event not found.', embeds: [], components: [] });
+    if (!event) return interaction.editReply({ content: `❌ Horse race event not found (build: ${GAMBLING_BUILD}, handler: confirm).`, embeds: [], components: [] });
     if (event.status !== 'active') return interaction.editReply({ content: '❌ This horse race is no longer active.', embeds: [], components: [] });
     if (event.current_players >= event.max_players) return interaction.editReply({ content: '❌ This event is full.', embeds: [], components: [] });
 
@@ -737,7 +799,7 @@ module.exports = {
     try {
       const event = await getGamblingEventWithFallback(eventId, interaction);
       if (!event) {
-        return interaction.reply({ content: '❌ This horse race event no longer exists.', ephemeral: true });
+        return interaction.reply({ content: `❌ This horse race event no longer exists (build: ${GAMBLING_BUILD}).`, ephemeral: true });
       }
       if (event.status !== 'active') {
         return interaction.reply({ content: '❌ This horse race has ended.', ephemeral: true });
