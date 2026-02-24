@@ -3304,6 +3304,41 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+
+  // PUBLIC gambling event lookup - no auth needed
+  // This allows the bot to fetch events even when DCB_INTERNAL_SECRET is misconfigured
+  app.get('/api/public/gambling-event/:id', async (req, res) => {
+    try {
+      const eventId = Number(req.params.id)
+      if (!eventId || isNaN(eventId)) return res.status(400).json({ error: 'invalid_id' })
+      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'not_found' })
+      const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [eventId])
+      console.log(`[public] gambling event #${eventId} fetched`)
+      res.json({ event, slots })
+    } catch (err) {
+      console.error('[public] gambling-event fetch error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // PUBLIC active gambling events list - no auth needed
+  app.get('/api/public/gambling-events/active', async (req, res) => {
+    try {
+      const events = await db.all(`SELECT * FROM gambling_events WHERE status = 'active' ORDER BY id DESC`)
+      const result = []
+      for (const event of (events || [])) {
+        const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [event.id])
+        result.push({ event, slots })
+      }
+      console.log(`[public] active gambling events: ${result.length} found`)
+      res.json({ events: result })
+    } catch (err) {
+      console.error('[public] gambling-events/active fetch error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot fetches gambling-event data it doesn't have locally (created via web UI)
   app.get('/api/internal/gambling-event/:id', requireInternal, async (req, res) => {
     try {
