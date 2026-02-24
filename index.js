@@ -25,6 +25,8 @@ console.log('[ENV] DISCORD_CLIENT_SECRET set:', !!process.env.DISCORD_CLIENT_SEC
 console.log('[ENV] DCB_SESSION_SECRET set:', !!process.env.DCB_SESSION_SECRET);
 console.log('[ENV] SOLANA_RPC_URL set:', !!process.env.SOLANA_RPC_URL);
 console.log('[ENV] SOLANA_PRIVATE_KEY set:', !!process.env.SOLANA_PRIVATE_KEY);
+console.log('[ENV] DCB_BACKEND_URL set:', !!process.env.DCB_BACKEND_URL);
+console.log('[ENV] DCB_INTERNAL_SECRET set:', !!process.env.DCB_INTERNAL_SECRET);
 
 const crypto = require('./utils/crypto');
 const db = require('./utils/db');
