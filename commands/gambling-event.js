@@ -13,55 +13,60 @@ const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
 
 async function fetchGamblingEventFromBackend(eventId, attempt = 1) {
-  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) {
-    console.warn(`[GamblingEvent] Backend fallback SKIPPED for #${eventId} — DCB_BACKEND_URL=${!!DCB_BACKEND_URL}, DCB_INTERNAL_SECRET=${!!DCB_INTERNAL_SECRET}`);
+  if (!DCB_BACKEND_URL) {
+    console.warn(`[GamblingEvent] Backend fallback SKIPPED for #${eventId} — DCB_BACKEND_URL not set`);
     return null;
   }
-  try {
-    const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event/${eventId}`;
-    console.log(`[GamblingEvent] Fetching event #${eventId} from backend (attempt ${attempt}): ${url}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, {
-      headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    if (!res.ok) {
-      console.warn(`[GamblingEvent] Backend returned ${res.status} for event #${eventId}`);
-      // Retry once on 5xx errors
-      if (res.status >= 500 && attempt < 2) {
-        await new Promise(r => setTimeout(r, 1000));
-        return fetchGamblingEventFromBackend(eventId, attempt + 1);
-      }
-      return null;
-    }
-    const data = await res.json();
-    const { event, slots } = data;
-    if (!event) {
-      console.warn(`[GamblingEvent] Backend returned OK but no event data for #${eventId}`);
-      return null;
-    }
 
-    console.log(`[GamblingEvent] ✅ Got event #${eventId} from backend: title="${event.title}", status=${event.status}`);
+  // Try public endpoint first (no secret needed), then fall back to internal
+  const urls = [
+    `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/public/gambling-event/${eventId}`,
+    ...(DCB_INTERNAL_SECRET ? [`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event/${eventId}`] : [])
+  ];
 
-    // Cache into bot's local database
+  for (const url of urls) {
     try {
-      await db.createGamblingEventFromSync(event, slots);
-      console.log(`[GamblingEvent] ✅ Cached event #${eventId} into local DB`);
-    } catch (syncErr) {
-      console.warn(`[GamblingEvent] Sync cache warning for #${eventId}:`, syncErr.message);
+      console.log(`[GamblingEvent] Fetching event #${eventId} (attempt ${attempt}): ${url}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const headers = {};
+      if (url.includes('/internal/') && DCB_INTERNAL_SECRET) {
+        headers['x-dcb-internal-secret'] = DCB_INTERNAL_SECRET;
+      }
+      const res = await fetch(url, { headers, signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        console.warn(`[GamblingEvent] ${url} returned ${res.status} for event #${eventId}`);
+        continue;
+      }
+      const data = await res.json();
+      const { event, slots } = data;
+      if (!event) {
+        console.warn(`[GamblingEvent] ${url} returned OK but no event data for #${eventId}`);
+        continue;
+      }
+
+      console.log(`[GamblingEvent] ✅ Got event #${eventId} from backend: title="${event.title}", status=${event.status}`);
+
+      // Cache into bot's local database
+      try {
+        await db.createGamblingEventFromSync(event, slots);
+        console.log(`[GamblingEvent] ✅ Cached event #${eventId} into local DB`);
+      } catch (syncErr) {
+        console.warn(`[GamblingEvent] Sync cache warning for #${eventId}:`, syncErr.message);
+      }
+      return event;
+    } catch (err) {
+      console.error(`[GamblingEvent] Fetch error for #${eventId} at ${url}:`, err.message);
     }
-    return event;
-  } catch (err) {
-    console.error(`[GamblingEvent] Backend fetch error for #${eventId} (attempt ${attempt}):`, err.message);
-    // Retry once on network errors
-    if (attempt < 2) {
-      await new Promise(r => setTimeout(r, 1000));
-      return fetchGamblingEventFromBackend(eventId, attempt + 1);
-    }
-    return null;
   }
+
+  // Retry once on failure
+  if (attempt < 2) {
+    await new Promise(r => setTimeout(r, 1000));
+    return fetchGamblingEventFromBackend(eventId, attempt + 1);
+  }
+  return null;
 }
 
 async function getGamblingEventWithFallback(eventId, interaction = null) {

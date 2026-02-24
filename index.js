@@ -46,20 +46,19 @@ const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
 
 // Validate backend connectivity at startup
-if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+if (DCB_BACKEND_URL) {
   console.log(`[BACKEND] ✅ DCB_BACKEND_URL configured: ${DCB_BACKEND_URL}`);
-  // Test connectivity (fire-and-forget)
-  fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-events/active`, {
-    headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
-  }).then(r => {
-    if (r.ok) console.log('[BACKEND] ✅ Backend connectivity verified');
-    else console.warn(`[BACKEND] ⚠️ Backend responded with ${r.status} — gambling event sync may not work`);
-  }).catch(err => {
-    console.error(`[BACKEND] ❌ Cannot reach backend: ${err.message} — gambling events created from web dashboard will NOT be found by the bot!`);
-  });
+  // Test connectivity with public endpoint (no secret needed)
+  fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/public/gambling-events/active`)
+    .then(r => {
+      if (r.ok) console.log('[BACKEND] ✅ Backend connectivity verified (public endpoint)');
+      else console.warn(`[BACKEND] ⚠️ Backend public endpoint returned ${r.status}`);
+    }).catch(err => {
+      console.error(`[BACKEND] ❌ Cannot reach backend: ${err.message}`);
+    });
 } else {
-  console.warn('[BACKEND] ⚠️ DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set — gambling events created from web dashboard will NOT be found by the bot');
-  console.warn('[BACKEND]    Set both env vars on the bot service to enable backend sync');
+  console.warn('[BACKEND] ⚠️ DCB_BACKEND_URL not set — gambling events created from web dashboard will NOT be found by the bot');
+  console.warn('[BACKEND]    Set DCB_BACKEND_URL on the bot service pointing to your backend URL');
 }
 
 function pushToBackend(endpoint, body) {
@@ -345,36 +344,45 @@ client.once('clientReady', async () => {
 
   // Pre-cache active gambling events from backend so button clicks work immediately
   async function syncActiveGamblingEventsFromBackend() {
-    if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
-    try {
-      const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-events/active`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(url, {
-        headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
-        signal: controller.signal
-      });
-      clearTimeout(timeout);
-      if (!res.ok) {
-        console.warn(`[GamblingSync] Backend returned ${res.status} for active events sync`);
-        return;
-      }
-      const { events } = await res.json();
-      if (!Array.isArray(events)) return;
-      let synced = 0;
-      for (const { event, slots } of events) {
-        try {
-          await db.createGamblingEventFromSync(event, slots);
-          synced++;
-        } catch (_) {}
-      }
-      if (synced > 0) {
-        console.log(`[GamblingSync] ✅ Pre-cached ${synced} active gambling event(s) from backend`);
-      }
-    } catch (err) {
-      // Silently ignore — non-critical background sync
-      if (err.name !== 'AbortError') {
-        console.warn(`[GamblingSync] Active event sync error:`, err.message);
+    if (!DCB_BACKEND_URL) return;
+
+    // Try public endpoint first (no secret needed), then internal
+    const urls = [
+      `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/public/gambling-events/active`,
+      ...(DCB_INTERNAL_SECRET ? [`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-events/active`] : [])
+    ];
+
+    for (const url of urls) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const headers = {};
+        if (url.includes('/internal/') && DCB_INTERNAL_SECRET) {
+          headers['x-dcb-internal-secret'] = DCB_INTERNAL_SECRET;
+        }
+        const res = await fetch(url, { headers, signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok) {
+          console.warn(`[GamblingSync] ${url} returned ${res.status}`);
+          continue;
+        }
+        const { events } = await res.json();
+        if (!Array.isArray(events)) continue;
+        let synced = 0;
+        for (const { event, slots } of events) {
+          try {
+            await db.createGamblingEventFromSync(event, slots);
+            synced++;
+          } catch (_) {}
+        }
+        if (synced > 0) {
+          console.log(`[GamblingSync] ✅ Pre-cached ${synced} active gambling event(s) from backend`);
+        }
+        return; // Success — don't try next URL
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn(`[GamblingSync] sync error at ${url}:`, err.message);
+        }
       }
     }
   }
