@@ -1237,12 +1237,21 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         content: req.body.caption || '📸 Event image upload',
         files: [{ attachment: req.file.buffer, name: req.file.originalname || 'image.png' }],
       })
-      const att = msg.attachments.first()
+      // Handle both discord.js Message (Collection with .first()) and raw REST JSON (plain array)
+      let att
+      if (msg.attachments && typeof msg.attachments.first === 'function') {
+        att = msg.attachments.first()
+      } else if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+        att = msg.attachments[0]
+      } else {
+        console.error('[upload] No attachments in response:', JSON.stringify(msg).slice(0, 500))
+        return res.status(500).json({ error: 'no_attachment_in_response' })
+      }
       res.json({
         id: att.id,
         url: att.url,
-        proxyURL: att.proxyURL,
-        name: att.name,
+        proxyURL: att.proxyURL || att.proxy_url,
+        name: att.name || att.filename,
         messageId: msg.id,
       })
     } catch (err) {
