@@ -43,6 +43,23 @@ db.migrateSecretsToEncrypted().catch(err => {
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
 
+// Validate backend connectivity at startup
+if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+  console.log(`[BACKEND] ✅ DCB_BACKEND_URL configured: ${DCB_BACKEND_URL}`);
+  // Test connectivity (fire-and-forget)
+  fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-events/active`, {
+    headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
+  }).then(r => {
+    if (r.ok) console.log('[BACKEND] ✅ Backend connectivity verified');
+    else console.warn(`[BACKEND] ⚠️ Backend responded with ${r.status} — gambling event sync may not work`);
+  }).catch(err => {
+    console.error(`[BACKEND] ❌ Cannot reach backend: ${err.message} — gambling events created from web dashboard will NOT be found by the bot!`);
+  });
+} else {
+  console.warn('[BACKEND] ⚠️ DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set — gambling events created from web dashboard will NOT be found by the bot');
+  console.warn('[BACKEND]    Set both env vars on the bot service to enable backend sync');
+}
+
 function pushToBackend(endpoint, body) {
   if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
   const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}${endpoint}`;
@@ -320,13 +337,79 @@ client.once('clientReady', async () => {
     }
   }, 30000); // Check every 30 seconds
 
-  // Gambling Event end checker - runs every 30 seconds
+  // Gambling Event end checker + active event sync - runs every 30 seconds
   const { processGamblingEvent } = require('./utils/gamblingEventProcessor');
-  console.log('🎰 Starting gambling event end checker...');
+  console.log('🎰 Starting gambling event end checker + sync...');
+
+  // Pre-cache active gambling events from backend so button clicks work immediately
+  async function syncActiveGamblingEventsFromBackend() {
+    if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
+    try {
+      const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-events/active`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(url, {
+        headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        console.warn(`[GamblingSync] Backend returned ${res.status} for active events sync`);
+        return;
+      }
+      const { events } = await res.json();
+      if (!Array.isArray(events)) return;
+      let synced = 0;
+      for (const { event, slots } of events) {
+        try {
+          await db.createGamblingEventFromSync(event, slots);
+          synced++;
+        } catch (_) {}
+      }
+      if (synced > 0) {
+        console.log(`[GamblingSync] ✅ Pre-cached ${synced} active gambling event(s) from backend`);
+      }
+    } catch (err) {
+      // Silently ignore — non-critical background sync
+      if (err.name !== 'AbortError') {
+        console.warn(`[GamblingSync] Active event sync error:`, err.message);
+      }
+    }
+  }
+
+  // Run initial sync immediately, then every 30 seconds
+  syncActiveGamblingEventsFromBackend();
+
   setInterval(async () => {
     try {
+      // Sync active events from backend to local cache
+      await syncActiveGamblingEventsFromBackend();
+
+      // Check for expired gambling events
       const expiredGamblingEvents = await db.getExpiredGamblingEvents();
       for (const event of expiredGamblingEvents) {
+        // Verify against backend before processing (like vote events)
+        if (DCB_BACKEND_URL && DCB_INTERNAL_SECRET) {
+          try {
+            const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event/${event.id}`;
+            const res = await fetch(url, {
+              headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET }
+            });
+            if (res.ok) {
+              const { event: backendEvent } = await res.json();
+              if (backendEvent) {
+                const endsAtMs = backendEvent.ends_at ? new Date(backendEvent.ends_at).getTime() : 0;
+                if (backendEvent.status === 'active' && endsAtMs > Date.now()) {
+                  try { await db.createGamblingEventFromSync(backendEvent, []); } catch (_) {}
+                  console.log(`[GamblingEvent] Skipping premature expiry for #${event.id} — backend says still active until ${backendEvent.ends_at}`);
+                  continue;
+                }
+              }
+            }
+          } catch (backendErr) {
+            console.warn(`[GamblingEvent] Backend check failed for #${event.id}, proceeding with local data:`, backendErr.message);
+          }
+        }
         await processGamblingEvent(event.id, client, 'time');
       }
     } catch (error) {

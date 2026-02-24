@@ -3303,6 +3303,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot pulls all active gambling events to pre-cache locally
+  app.get('/api/internal/gambling-events/active', requireInternal, async (req, res) => {
+    try {
+      const events = await db.all(`SELECT * FROM gambling_events WHERE status = 'active' ORDER BY id DESC`)
+      const result = []
+      for (const event of (events || [])) {
+        const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [event.id])
+        result.push({ event, slots })
+      }
+      res.json({ events: result })
+    } catch (err) {
+      console.error('[internal] gambling-events/active fetch error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot pushes gambling bet/status back to keep backend DB in sync
   app.post('/api/internal/gambling-event-sync', requireInternal, async (req, res) => {
     try {

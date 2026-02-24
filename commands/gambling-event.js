@@ -8,37 +8,62 @@ const { getGuildWalletWithFallback } = require('../utils/walletSync');
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
 
-async function fetchGamblingEventFromBackend(eventId) {
-  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return null;
+async function fetchGamblingEventFromBackend(eventId, attempt = 1) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) {
+    console.warn(`[GamblingEvent] Backend fallback SKIPPED for #${eventId} — DCB_BACKEND_URL=${!!DCB_BACKEND_URL}, DCB_INTERNAL_SECRET=${!!DCB_INTERNAL_SECRET}`);
+    return null;
+  }
   try {
     const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/gambling-event/${eventId}`;
+    console.log(`[GamblingEvent] Fetching event #${eventId} from backend (attempt ${attempt}): ${url}`);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     const res = await fetch(url, {
       headers: { 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
       signal: controller.signal
     });
     clearTimeout(timeout);
-    if (!res.ok) return null;
-    const { event, slots } = await res.json();
-    if (!event) return null;
+    if (!res.ok) {
+      console.warn(`[GamblingEvent] Backend returned ${res.status} for event #${eventId}`);
+      // Retry once on 5xx errors
+      if (res.status >= 500 && attempt < 2) {
+        await new Promise(r => setTimeout(r, 1000));
+        return fetchGamblingEventFromBackend(eventId, attempt + 1);
+      }
+      return null;
+    }
+    const data = await res.json();
+    const { event, slots } = data;
+    if (!event) {
+      console.warn(`[GamblingEvent] Backend returned OK but no event data for #${eventId}`);
+      return null;
+    }
+
+    console.log(`[GamblingEvent] ✅ Got event #${eventId} from backend: title="${event.title}", status=${event.status}`);
 
     // Cache into bot's local database
     try {
       await db.createGamblingEventFromSync(event, slots);
-      console.log(`[GamblingEvent] Synced event #${eventId} from backend DB`);
+      console.log(`[GamblingEvent] ✅ Cached event #${eventId} into local DB`);
     } catch (syncErr) {
       console.warn(`[GamblingEvent] Sync cache warning for #${eventId}:`, syncErr.message);
     }
     return event;
   } catch (err) {
-    console.error(`[GamblingEvent] Backend fetch error for #${eventId}:`, err.message);
+    console.error(`[GamblingEvent] Backend fetch error for #${eventId} (attempt ${attempt}):`, err.message);
+    // Retry once on network errors
+    if (attempt < 2) {
+      await new Promise(r => setTimeout(r, 1000));
+      return fetchGamblingEventFromBackend(eventId, attempt + 1);
+    }
     return null;
   }
 }
 
 async function getGamblingEventWithFallback(eventId) {
   let event = await db.getGamblingEvent(eventId);
+  console.log(`[GamblingEvent] Local DB lookup for #${eventId}: ${event ? `found (status=${event.status})` : 'NOT FOUND'}`);
+
   // Always try backend to get authoritative state
   const backendEvent = await fetchGamblingEventFromBackend(eventId);
   if (backendEvent) {
@@ -47,6 +72,10 @@ async function getGamblingEventWithFallback(eventId) {
     const localPlayers = event ? event.current_players : 0;
     event = backendEvent;
     event.current_players = Math.max(localPlayers, backendEvent.current_players || 0);
+  }
+
+  if (!event) {
+    console.error(`[GamblingEvent] ❌ Event #${eventId} not found in local DB or backend. DCB_BACKEND_URL set: ${!!DCB_BACKEND_URL}, DCB_INTERNAL_SECRET set: ${!!DCB_INTERNAL_SECRET}`);
   }
   return event;
 }
@@ -505,12 +534,7 @@ module.exports = {
 
     const slots = await db.getGamblingEventSlots(eventId);
     const chosenSlot = slots.find(s => s.slot_number === slotNumber);
-    // Read back actual player count from DB (avoids stale in-memory value after backend sync)
-    let newCount = event.current_players + 1;
-    try {
-      const freshEvent = await db.getGamblingEvent(eventId);
-      if (freshEvent) newCount = freshEvent.current_players;
-    } catch (_) {}
+    const newCount = event.current_players + 1;
 
     // Build fee display
     let feeDisplay = `${solAmount.toFixed(6)} SOL`;
@@ -715,11 +739,7 @@ module.exports = {
           await channel.send({ content: `🏇 **Horse Race #${eventId}** — All riders in! The race is starting... 🏁` });
         }
       } catch (_) {}
-      try {
-        await processGamblingEvent(eventId, interaction.client, 'full');
-      } catch (procErr) {
-        console.error(`[GamblingEvent] processGamblingEvent error for #${eventId}:`, procErr.message);
-      }
+      await processGamblingEvent(eventId, interaction.client, 'full');
     }
   },
 };
