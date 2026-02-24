@@ -60,7 +60,7 @@ async function fetchGamblingEventFromBackend(eventId, attempt = 1) {
   }
 }
 
-async function getGamblingEventWithFallback(eventId) {
+async function getGamblingEventWithFallback(eventId, interaction = null) {
   let event = await db.getGamblingEvent(eventId);
   console.log(`[GamblingEvent] Local DB lookup for #${eventId}: ${event ? `found (status=${event.status})` : 'NOT FOUND'}`);
 
@@ -74,10 +74,112 @@ async function getGamblingEventWithFallback(eventId) {
     event.current_players = Math.max(localPlayers, backendEvent.current_players || 0);
   }
 
+  // Third fallback: reconstruct from the Discord message embed
+  if (!event && interaction) {
+    console.log(`[GamblingEvent] Trying embed reconstruction for #${eventId}...`);
+    event = await reconstructEventFromEmbed(interaction, eventId);
+  }
+
   if (!event) {
-    console.error(`[GamblingEvent] ❌ Event #${eventId} not found in local DB or backend. DCB_BACKEND_URL set: ${!!DCB_BACKEND_URL}, DCB_INTERNAL_SECRET set: ${!!DCB_INTERNAL_SECRET}`);
+    console.error(`[GamblingEvent] ❌ Event #${eventId} not found in local DB, backend, or embed. DCB_BACKEND_URL set: ${!!DCB_BACKEND_URL}, DCB_INTERNAL_SECRET set: ${!!DCB_INTERNAL_SECRET}`);
   }
   return event;
+}
+
+// Last-resort fallback: reconstruct event from the Discord message embed
+async function reconstructEventFromEmbed(interaction, eventId) {
+  try {
+    const msg = interaction.message;
+    if (!msg) { console.log('[GamblingEvent] No interaction.message for embed reconstruction'); return null; }
+    const embed = msg.embeds?.[0];
+    if (!embed) { console.log('[GamblingEvent] No embed found on message'); return null; }
+
+    console.log(`[GamblingEvent] Reconstructing event #${eventId} from embed: "${embed.title}"`);
+
+    // Parse title: "🎰 DCB Gambling Event: {title}"
+    const title = embed.title?.replace(/^.*?DCB Gambling Event:\s*/, '').trim() || `Event #${eventId}`;
+
+    // Parse mode from "🎲 Mode" field
+    const modeField = embed.fields?.find(f => f.name.includes('Mode'));
+    const mode = modeField?.value?.includes('Pot') ? 'pot' : 'house';
+
+    // Parse players from "🪑 Players" field: "0/10"
+    const playersField = embed.fields?.find(f => f.name.includes('Players'));
+    let currentPlayers = 0, maxPlayers = 10;
+    if (playersField?.value) {
+      const m = playersField.value.match(/(\d+)\s*\/\s*(\d+)/);
+      if (m) { currentPlayers = parseInt(m[1]); maxPlayers = parseInt(m[2]); }
+    }
+
+    // Parse min players from "✅ Min to Spin" field
+    const minField = embed.fields?.find(f => f.name.includes('Min'));
+    const minPlayers = minField?.value ? parseInt(minField.value) || 2 : 2;
+
+    // Parse entry fee + currency from description
+    let entryFee = 0, currency = 'SOL', prizeAmount = 0;
+    const desc = embed.description || '';
+    const feeMatch = desc.match(/Entry fee:\s*\*\*(\d+(?:\.\d+)?)\s+(\w+)\*\*/i);
+    if (feeMatch) { entryFee = parseFloat(feeMatch[1]); currency = feeMatch[2]; }
+
+    // Parse prize from Prize Pool field
+    const prizeField = embed.fields?.find(f => f.name.includes('Prize'));
+    if (prizeField?.value) {
+      const pm = prizeField.value.match(/(\d+(?:\.\d+)?)\s+(\w+)/);
+      if (pm) { prizeAmount = parseFloat(pm[1]); if (!feeMatch) currency = pm[2]; }
+    }
+
+    // Parse ends_at from "⏱️ Ends" field (Discord timestamp: <t:1234567890:R>)
+    const endsField = embed.fields?.find(f => f.name.includes('Ends'));
+    let endsAt = null;
+    if (endsField?.value) {
+      const tsMatch = endsField.value.match(/<t:(\d+)/);
+      if (tsMatch) endsAt = new Date(parseInt(tsMatch[1]) * 1000).toISOString();
+    }
+
+    // Extract slots from button components on the message
+    const slots = [];
+    for (const row of (msg.components || [])) {
+      for (const comp of (row.components || [])) {
+        if (comp.customId?.startsWith(`gamble_bet_${eventId}_`)) {
+          const slotNum = parseInt(comp.customId.split('_').pop());
+          slots.push({ slot_number: slotNum, label: comp.label || `Horse #${slotNum}`, color: '#888' });
+        }
+      }
+    }
+
+    const event = {
+      id: eventId,
+      guild_id: interaction.guildId,
+      channel_id: interaction.channelId,
+      message_id: msg.id,
+      title,
+      description: title,
+      mode,
+      prize_amount: prizeAmount,
+      currency,
+      entry_fee: entryFee,
+      min_players: minPlayers,
+      max_players: maxPlayers,
+      current_players: currentPlayers,
+      duration_minutes: null,
+      num_slots: slots.length || 6,
+      winning_slot: null,
+      created_by: null,
+      status: 'active',
+      ends_at: endsAt,
+      created_at: new Date().toISOString(),
+      qualification_url: null
+    };
+
+    // Save to local DB so subsequent lookups work
+    await db.createGamblingEventFromSync(event, slots);
+    console.log(`[GamblingEvent] ✅ Reconstructed event #${eventId} from embed: title="${title}", mode=${mode}, fee=${entryFee} ${currency}, players=${currentPlayers}/${maxPlayers}, slots=${slots.length}`);
+
+    return event;
+  } catch (err) {
+    console.error(`[GamblingEvent] Embed reconstruction failed for #${eventId}:`, err.message);
+    return null;
+  }
 }
 
 // Fire-and-forget sync of bet actions back to backend DB
@@ -277,7 +379,7 @@ module.exports = {
 
     // NOTE: deferReply is now called by index.js before this handler runs
 
-    const event = await getGamblingEventWithFallback(eventId);
+    const event = await getGamblingEventWithFallback(eventId, interaction);
     if (!event) {
       console.log(`[GamblingEvent] Event #${eventId} not found in local or backend DB`);
       return interaction.editReply({ content: '❌ Horse race event not found.' });
@@ -428,7 +530,7 @@ module.exports = {
 
     console.log(`[GamblingConfirm] Confirm bet: eventId=${eventId}, slot=${slotNumber}, user=${interaction.user.id}`);
 
-    const event = await getGamblingEventWithFallback(eventId);
+    const event = await getGamblingEventWithFallback(eventId, interaction);
     if (!event) return interaction.editReply({ content: '❌ Horse race event not found.', embeds: [], components: [] });
     if (event.status !== 'active') return interaction.editReply({ content: '❌ This horse race is no longer active.', embeds: [], components: [] });
     if (event.current_players >= event.max_players) return interaction.editReply({ content: '❌ This event is full.', embeds: [], components: [] });
@@ -577,7 +679,7 @@ module.exports = {
     const userId = interaction.user.id;
 
     try {
-      const event = await getGamblingEventWithFallback(eventId);
+      const event = await getGamblingEventWithFallback(eventId, interaction);
       if (!event) {
         return interaction.reply({ content: '❌ This horse race event no longer exists.', ephemeral: true });
       }
