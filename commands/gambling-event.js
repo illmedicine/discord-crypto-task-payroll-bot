@@ -77,11 +77,26 @@ async function getGamblingEventWithFallback(eventId, interaction = null) {
   // Third fallback: reconstruct from the Discord message embed
   if (!event && interaction) {
     console.log(`[GamblingEvent] Trying embed reconstruction for #${eventId}...`);
-    event = await reconstructEventFromEmbed(interaction, eventId);
+    try {
+      event = await reconstructEventFromEmbed(interaction, eventId);
+    } catch (embedErr) {
+      console.error(`[GamblingEvent] Embed reconstruction threw:`, embedErr);
+    }
   }
 
   if (!event) {
-    console.error(`[GamblingEvent] ❌ Event #${eventId} not found in local DB, backend, or embed. DCB_BACKEND_URL set: ${!!DCB_BACKEND_URL}, DCB_INTERNAL_SECRET set: ${!!DCB_INTERNAL_SECRET}`);
+    const diag = {
+      localDb: 'miss',
+      backendUrl: !!DCB_BACKEND_URL,
+      backendSecret: !!DCB_INTERNAL_SECRET,
+      backendResult: backendEvent ? 'found' : 'miss',
+      hasInteraction: !!interaction,
+      hasMessage: !!interaction?.message,
+      hasEmbeds: interaction?.message?.embeds?.length || 0,
+      embedTitle: interaction?.message?.embeds?.[0]?.title || 'none',
+      componentRows: interaction?.message?.components?.length || 0,
+    };
+    console.error(`[GamblingEvent] ❌ Event #${eventId} NOT FOUND anywhere. Diagnostics:`, JSON.stringify(diag));
   }
   return event;
 }
@@ -92,7 +107,15 @@ async function reconstructEventFromEmbed(interaction, eventId) {
     const msg = interaction.message;
     if (!msg) { console.log('[GamblingEvent] No interaction.message for embed reconstruction'); return null; }
     const embed = msg.embeds?.[0];
-    if (!embed) { console.log('[GamblingEvent] No embed found on message'); return null; }
+    if (!embed) { console.log(`[GamblingEvent] No embed found on message (embeds.length=${msg.embeds?.length}, hasComponents=${!!msg.components?.length})`); return null; }
+    
+    // Log raw embed data for debugging
+    console.log(`[GamblingEvent] Embed data: title="${embed.title}", fields=${embed.fields?.length || 0}, desc.length=${embed.description?.length || 0}`);
+    if (embed.fields) {
+      for (const f of embed.fields) {
+        console.log(`[GamblingEvent]   field: name="${f.name}", value="${String(f.value).slice(0, 50)}"`);
+      }
+    }
 
     console.log(`[GamblingEvent] Reconstructing event #${eventId} from embed: "${embed.title}"`);
 
@@ -138,8 +161,11 @@ async function reconstructEventFromEmbed(interaction, eventId) {
 
     // Extract slots from button components on the message
     const slots = [];
+    console.log(`[GamblingEvent] Message has ${msg.components?.length || 0} component rows`);
     for (const row of (msg.components || [])) {
+      console.log(`[GamblingEvent]   Row has ${row.components?.length || 0} components`);
       for (const comp of (row.components || [])) {
+        console.log(`[GamblingEvent]     Component: customId="${comp.customId}", label="${comp.label}", type=${comp.type}`);
         if (comp.customId?.startsWith(`gamble_bet_${eventId}_`)) {
           const slotNum = parseInt(comp.customId.split('_').pop());
           slots.push({ slot_number: slotNum, label: comp.label || `Horse #${slotNum}`, color: '#888' });
@@ -172,8 +198,13 @@ async function reconstructEventFromEmbed(interaction, eventId) {
     };
 
     // Save to local DB so subsequent lookups work
-    await db.createGamblingEventFromSync(event, slots);
-    console.log(`[GamblingEvent] ✅ Reconstructed event #${eventId} from embed: title="${title}", mode=${mode}, fee=${entryFee} ${currency}, players=${currentPlayers}/${maxPlayers}, slots=${slots.length}`);
+    try {
+      await db.createGamblingEventFromSync(event, slots);
+      console.log(`[GamblingEvent] ✅ Reconstructed event #${eventId} from embed: title="${title}", mode=${mode}, fee=${entryFee} ${currency}, players=${currentPlayers}/${maxPlayers}, slots=${slots.length}`);
+    } catch (dbErr) {
+      console.error(`[GamblingEvent] ⚠️ DB save after reconstruction failed for #${eventId}:`, dbErr.message);
+      // Still return the event even if DB save fails — it's in memory
+    }
 
     return event;
   } catch (err) {
@@ -381,8 +412,12 @@ module.exports = {
 
     const event = await getGamblingEventWithFallback(eventId, interaction);
     if (!event) {
-      console.log(`[GamblingEvent] Event #${eventId} not found in local or backend DB`);
-      return interaction.editReply({ content: '❌ Horse race event not found.' });
+      const hasMsg = !!interaction.message;
+      const embedCount = interaction.message?.embeds?.length || 0;
+      const embedTitle = interaction.message?.embeds?.[0]?.title || 'none';
+      const compRows = interaction.message?.components?.length || 0;
+      console.log(`[GamblingEvent] Event #${eventId} not found. msg=${hasMsg}, embeds=${embedCount}, title="${embedTitle}", rows=${compRows}`);
+      return interaction.editReply({ content: `❌ Horse race event not found.\n\`Debug: id=${eventId}, msg=${hasMsg}, embeds=${embedCount}, title="${embedTitle}", backendUrl=${!!DCB_BACKEND_URL}\`` });
     }
     console.log(`[GamblingEvent] Event #${eventId} fetched: mode=${event.mode}, currency=${event.currency}, entry_fee=${event.entry_fee}, status=${event.status}`);
     if (event.status !== 'active') {
