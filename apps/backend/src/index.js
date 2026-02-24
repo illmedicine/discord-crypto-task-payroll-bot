@@ -49,6 +49,23 @@ async function populateGuildCache() {
 }
 
 async function startServer() {
+  // Validate encryption environment at startup
+  const encKey = process.env.ENCRYPTION_KEY
+  const e2eKey = process.env.E2E_TRANSPORT_KEY
+  if (!encKey) {
+    console.warn('[ENCRYPTION] ⚠️  ENCRYPTION_KEY not set — private keys stored in plaintext')
+    console.warn('[ENCRYPTION]    Generate: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"')
+  } else if (encKey.length !== 64) {
+    console.error('[ENCRYPTION] ❌ ENCRYPTION_KEY invalid (need 64 hex chars, got ' + encKey.length + ')')
+  } else {
+    console.log('[ENCRYPTION] ✅ ENCRYPTION_KEY configured')
+  }
+  if (e2eKey && e2eKey.length === 64) {
+    console.log('[ENCRYPTION] ✅ E2E_TRANSPORT_KEY configured (separate transit key)')
+  } else if (!e2eKey) {
+    console.log('[ENCRYPTION] ℹ️  E2E_TRANSPORT_KEY not set — using ENCRYPTION_KEY for transit')
+  }
+
   await populateGuildCache()
   const port = process.env.PORT || 3000
   const app = buildApi({ discordClient: client })

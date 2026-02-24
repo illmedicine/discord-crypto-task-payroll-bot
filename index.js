@@ -23,11 +23,16 @@ console.log('[ENV] DISCORD_TOKEN set:', !!process.env.DISCORD_TOKEN);
 console.log('[ENV] DISCORD_CLIENT_ID set:', !!process.env.DISCORD_CLIENT_ID);
 console.log('[ENV] DISCORD_CLIENT_SECRET set:', !!process.env.DISCORD_CLIENT_SECRET);
 console.log('[ENV] DCB_SESSION_SECRET set:', !!process.env.DCB_SESSION_SECRET);
-
+console.log('[ENV] SOLANA_RPC_URL set:', !!process.env.SOLANA_RPC_URL);
+console.log('[ENV] SOLANA_PRIVATE_KEY set:', !!process.env.SOLANA_PRIVATE_KEY);
 
 const crypto = require('./utils/crypto');
 const db = require('./utils/db');
+const { validateEncryptionEnv } = require('./utils/encryption');
 const { ANCHOR_GUILD_ID, prefixLine, getTrustRisk } = require('./utils/trustRisk');
+
+// Validate encryption env vars at startup
+validateEncryptionEnv();
 
 // ---- Backend activity sync ----
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
@@ -614,11 +619,7 @@ client.on('interactionCreate', async interaction => {
         } catch (error) {
           console.error('❌ Error handling cancel bet:', error);
           try {
-            if (interaction.deferred || interaction.replied) {
-              await interaction.editReply({ content: '❌ Bet cancelled.' });
-            } else {
-              await interaction.reply({ content: '❌ Bet cancelled.', ephemeral: true });
-            }
+            await interaction.reply({ content: '❌ Bet cancelled.', ephemeral: true });
           } catch (_) {}
         }
       }

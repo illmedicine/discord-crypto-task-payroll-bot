@@ -36,6 +36,8 @@ SOLANA_PRIVATE_KEY=your_solana_private_key
 SOLANA_PUBLIC_KEY=your_solana_wallet_public_address
 PHANTOM_ENABLED=true
 CLUSTER=mainnet-beta
+ENCRYPTION_KEY=your_64_hex_char_key
+E2E_TRANSPORT_KEY=optional_64_hex_char_key
 ```
 
 **Important**: Never commit your `.env` file to GitHub!

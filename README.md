@@ -86,6 +86,8 @@ SOLANA_PRIVATE_KEY=your_solana_private_key_base58
 SOLANA_PUBLIC_KEY=your_solana_wallet_address
 PHANTOM_ENABLED=true
 CLUSTER=mainnet-beta
+ENCRYPTION_KEY=          # generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+E2E_TRANSPORT_KEY=      # optional, separate transit key
 ```
 
 5. **Start the bot**
@@ -133,6 +135,8 @@ node index.js
 | `SOLANA_PUBLIC_KEY` | Wallet public address |
 | `PHANTOM_ENABLED` | Enable Phantom integration |
 | `CLUSTER` | Solana cluster (mainnet-beta/devnet) |
+| `ENCRYPTION_KEY` | 64 hex chars (256-bit) — encrypts private keys at rest |
+| `E2E_TRANSPORT_KEY` | 64 hex chars (256-bit) — optional separate key for transit encryption between bot ↔ backend. Falls back to `ENCRYPTION_KEY` if not set |
 
 ## Project Structure
 

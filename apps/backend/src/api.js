@@ -12,6 +12,58 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 *
 module.exports = function buildApi({ discordClient }) {
   const app = express()
 
+  // ---- Secret encryption helpers (AES-256-GCM, mirrors utils/db.js) ----
+  const ENCRYPTION_PREFIX = 'enc:';
+  const _getEncKey = () => {
+    const hex = process.env.ENCRYPTION_KEY;
+    if (!hex || hex.length !== 64) return null;
+    return Buffer.from(hex, 'hex');
+  };
+  const encryptSecret = (plain) => {
+    if (!plain) return plain;
+    const key = _getEncKey(); if (!key) return plain;
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let enc = cipher.update(plain, 'utf8', 'base64'); enc += cipher.final('base64');
+    return `${ENCRYPTION_PREFIX}${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${enc}`;
+  };
+  const decryptSecret = (stored) => {
+    if (!stored || !stored.startsWith(ENCRYPTION_PREFIX)) return stored;
+    const key = _getEncKey(); if (!key) return null;
+    try {
+      const [ivB64, tagB64, cB64] = stored.slice(ENCRYPTION_PREFIX.length).split(':');
+      const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
+      d.setAuthTag(Buffer.from(tagB64, 'base64'));
+      let r = d.update(cB64, 'base64', 'utf8'); r += d.final('utf8'); return r;
+    } catch { return null; }
+  };
+
+  // ---- E2E Transport encryption (second layer for bot <-> backend transit) ----
+  const E2E_TRANSPORT_PREFIX = 'e2e:';
+  const _getTransportKey = () => {
+    const hex = process.env.E2E_TRANSPORT_KEY;
+    if (hex && hex.length === 64) return Buffer.from(hex, 'hex');
+    return _getEncKey(); // fallback to at-rest key
+  };
+  const encryptTransport = (value) => {
+    if (!value || value.startsWith(E2E_TRANSPORT_PREFIX)) return value;
+    const key = _getTransportKey(); if (!key) return value;
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let enc = cipher.update(value, 'utf8', 'base64'); enc += cipher.final('base64');
+    return `${E2E_TRANSPORT_PREFIX}${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${enc}`;
+  };
+  const decryptTransport = (value) => {
+    if (!value || !value.startsWith(E2E_TRANSPORT_PREFIX)) return value;
+    const key = _getTransportKey(); if (!key) return null;
+    try {
+      const [ivB64, tagB64, cB64] = value.slice(E2E_TRANSPORT_PREFIX.length).split(':');
+      const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
+      d.setAuthTag(Buffer.from(tagB64, 'base64'));
+      let r = d.update(cB64, 'base64', 'utf8'); r += d.final('utf8'); return r;
+    } catch { return null; }
+  };
+
   app.use(express.json())
   app.use(cookieParser())
 
@@ -2130,7 +2182,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (wallet) {
         // Never expose wallet_secret to the web frontend — just indicate if it's set
         const { wallet_secret, ...safeWallet } = wallet
-        res.json({ ...safeWallet, has_secret: !!wallet_secret })
+        // Decrypt to check truthiness, but never send the value
+        const decrypted = decryptSecret(wallet_secret)
+        res.json({ ...safeWallet, has_secret: !!decrypted })
       } else {
         res.json(null)
       }
@@ -2162,7 +2216,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
            network = excluded.network,
            wallet_secret = excluded.wallet_secret,
            updated_at = CURRENT_TIMESTAMP`,
-        [req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta', wallet_secret || null]
+        [req.guild.id, wallet_address.trim(), req.user.id, label || 'Treasury', network || 'mainnet-beta', wallet_secret ? encryptSecret(wallet_secret) : null]
       )
       await db.run(
         'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -2194,7 +2248,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         if (updates.wallet_secret && !updates.wallet_secret.trim().startsWith('[') && updates.wallet_secret.trim().length >= 32 && updates.wallet_secret.trim().length <= 50) {
           return res.status(400).json({ error: 'secret_too_short', message: 'That looks like a public wallet address (32-44 chars), not a private key. A Solana secret key is ~88 characters in base58. Export from Phantom → Settings → Security → Show Secret Key.' })
         }
-        fields.push('wallet_secret = ?'); params.push(updates.wallet_secret)
+        fields.push('wallet_secret = ?'); params.push(updates.wallet_secret ? encryptSecret(updates.wallet_secret) : updates.wallet_secret)
       }
       if (fields.length) {
         fields.push('updated_at = CURRENT_TIMESTAMP')
@@ -2894,9 +2948,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           : (process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com')
         const conn = new Connection(rpcUrl, 'confirmed')
 
-        // Parse treasury secret key
+        // Parse treasury secret key — decrypt if encrypted
         let senderKeypair
-        const secret = guildWallet.wallet_secret.trim()
+        const rawSecret = guildWallet.wallet_secret.trim()
+        const secret = rawSecret.startsWith('enc:') ? decryptSecret(rawSecret) : rawSecret
+        if (!secret) {
+          await db.run(`UPDATE worker_payouts SET status = 'failed' WHERE id = ?`, [payoutId])
+          return res.status(500).json({ error: 'decryption_failed', message: 'Unable to decrypt treasury wallet secret. Check ENCRYPTION_KEY.' })
+        }
         if (secret.startsWith('[')) {
           senderKeypair = Keypair.fromSecretKey(new Uint8Array(JSON.parse(secret)))
         } else {
@@ -3397,6 +3456,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.params.guildId])
+      // Wrap wallet_secret with E2E transport encryption before sending over the wire
+      if (wallet && wallet.wallet_secret) {
+        wallet.wallet_secret = encryptTransport(wallet.wallet_secret)
+      }
       res.json({ wallet: wallet || null })
     } catch (err) {
       console.error('[internal] guild-wallet GET error:', err?.message)
@@ -3407,7 +3470,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Bot pushes wallet connect/update to backend DB
   app.post('/api/internal/guild-wallet-sync', requireInternal, async (req, res) => {
     try {
-      const { guildId, action, wallet_address, label, network, configured_by, wallet_secret } = req.body || {}
+      let { guildId, action, wallet_address, label, network, configured_by, wallet_secret } = req.body || {}
+      // Strip E2E transport encryption layer (bot wraps secrets before sending over the wire)
+      if (wallet_secret && typeof wallet_secret === 'string' && wallet_secret.startsWith(E2E_TRANSPORT_PREFIX)) {
+        wallet_secret = decryptTransport(wallet_secret)
+      }
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
 
       if (action === 'disconnect') {
@@ -3427,7 +3494,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
            network = excluded.network,
            wallet_secret = excluded.wallet_secret,
            updated_at = CURRENT_TIMESTAMP`,
-        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta', wallet_secret || null]
+        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta', wallet_secret ? encryptSecret(wallet_secret) : null]
       )
       console.log(`[internal] wallet synced for guild ${guildId}: ${wallet_address.slice(0,8)}...`)
       res.json({ ok: true })
@@ -3677,6 +3744,32 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   setTimeout(() => syncAllWalletsFromBot(), 5000)
   // Repeat every 10 minutes
   setInterval(() => syncAllWalletsFromBot(), 10 * 60 * 1000)
+
+  // ---- Migrate existing plaintext secrets to encrypted form ----
+  setTimeout(async () => {
+    const key = process.env.ENCRYPTION_KEY
+    if (!key || key.length !== 64) {
+      console.log('[BACKEND-MIGRATE] ENCRYPTION_KEY not set — skipping secret migration')
+      return
+    }
+    try {
+      const rows = await db.all('SELECT guild_id, wallet_secret FROM guild_wallets WHERE wallet_secret IS NOT NULL')
+      let migrated = 0
+      for (const row of rows) {
+        if (row.wallet_secret && !row.wallet_secret.startsWith('enc:')) {
+          const encrypted = encryptSecret(row.wallet_secret)
+          if (encrypted !== row.wallet_secret) {
+            await db.run('UPDATE guild_wallets SET wallet_secret = ? WHERE guild_id = ?', [encrypted, row.guild_id])
+            migrated++
+            console.log(`[BACKEND-MIGRATE] Encrypted guild wallet secret for guild ${row.guild_id}`)
+          }
+        }
+      }
+      console.log(`[BACKEND-MIGRATE] Migration complete. ${migrated} secrets encrypted.`)
+    } catch (err) {
+      console.error('[BACKEND-MIGRATE] Migration error:', err?.message || err)
+    }
+  }, 3000)
 
   return app
 }

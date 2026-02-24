@@ -8,18 +8,28 @@
  */
 
 const db = require('./db');
+const { decryptSecret, encryptSecret, isEncrypted, encryptTransport, decryptTransport, isTransportEncrypted } = require('./encryption');
 
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
 
-/** Fire-and-forget push wallet change to backend */
+/** Fire-and-forget push wallet change to backend (double-encrypts secret for E2E transit) */
 function syncWalletToBackend(body) {
   if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
   const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/guild-wallet-sync`;
+  // Layer 1: ensure at-rest encryption
+  const safeBody = { ...body };
+  if (safeBody.wallet_secret && !isEncrypted(safeBody.wallet_secret)) {
+    safeBody.wallet_secret = encryptSecret(safeBody.wallet_secret);
+  }
+  // Layer 2: wrap with E2E transport encryption for the wire
+  if (safeBody.wallet_secret) {
+    safeBody.wallet_secret = encryptTransport(safeBody.wallet_secret);
+  }
   fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
-    body: JSON.stringify(body)
+    body: JSON.stringify(safeBody)
   }).then(r => {
     if (!r.ok) console.error(`[WALLET-SYNC] backend push failed: ${r.status}`);
     else console.log(`[WALLET-SYNC] wallet synced to backend for guild ${body.guildId}`);
@@ -64,8 +74,18 @@ async function getGuildWalletWithFallback(guildId) {
   if (result.reachable) {
     if (result.wallet) {
       // Backend has wallet — sync to local DB if anything differs (address, secret, etc.)
+      // Strip E2E transport layer first, then decrypt at-rest encryption
+      let rawSecret = result.wallet.wallet_secret || null;
+      if (rawSecret && isTransportEncrypted(rawSecret)) {
+        rawSecret = decryptTransport(rawSecret);
+      }
+      const backendSecret = rawSecret
+        ? (isEncrypted(rawSecret) ? decryptSecret(rawSecret) : rawSecret)
+        : null;
+
       // Merge: prefer backend secret, fall back to local secret for same address
-      const mergedSecret = result.wallet.wallet_secret
+      // Note: localWallet.wallet_secret is already decrypted by getGuildWallet()
+      const mergedSecret = backendSecret
         || (localWallet && localWallet.wallet_address === result.wallet.wallet_address ? localWallet.wallet_secret : null)
         || null;
 
@@ -75,6 +95,7 @@ async function getGuildWalletWithFallback(guildId) {
         || (result.wallet.label && localWallet.label !== result.wallet.label);
       if (needsSync) {
         try {
+          // setGuildWallet will encrypt mergedSecret before storing
           await db.setGuildWallet(
             guildId,
             result.wallet.wallet_address,
