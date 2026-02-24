@@ -84,6 +84,27 @@ async function getGamblingEventWithFallback(eventId, interaction = null) {
     }
   }
 
+  // Fourth fallback: if interaction.message had no embeds, try fetching the message via REST
+  if (!event && interaction && interaction.message?.id && interaction.channelId) {
+    try {
+      console.log(`[GamblingEvent] Trying REST message fetch for channel=${interaction.channelId} msg=${interaction.message.id}`);
+      const channel = await interaction.client.channels.fetch(interaction.channelId);
+      if (channel) {
+        const freshMsg = await channel.messages.fetch(interaction.message.id);
+        if (freshMsg && freshMsg.embeds?.length > 0) {
+          console.log(`[GamblingEvent] REST fetch got message with ${freshMsg.embeds.length} embeds`);
+          // Create a fake interaction-like object with the fresh message
+          const fakeInteraction = { message: freshMsg, guildId: interaction.guildId, channelId: interaction.channelId };
+          event = await reconstructEventFromEmbed(fakeInteraction, eventId);
+        } else {
+          console.log(`[GamblingEvent] REST fetch msg has ${freshMsg?.embeds?.length || 0} embeds`);
+        }
+      }
+    } catch (restErr) {
+      console.error(`[GamblingEvent] REST message fetch failed:`, restErr.message);
+    }
+  }
+
   if (!event) {
     const diag = {
       localDb: 'miss',
