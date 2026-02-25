@@ -311,21 +311,17 @@ module.exports = function buildApi({ discordClient }) {
         req.userRole = 'owner'
         return next()
       }
-      // Fallback: check via OAuth token (with auto-refresh) — allow owners AND admins
+      // Fallback: check via OAuth token (with auto-refresh) — OWNER ONLY
+      // Only the server owner (treasury private key holder) can create events or issue payments
       const userGuilds = await fetchUserGuildsViaOAuth(discordId)
       if (userGuilds) {
         const userGuild = userGuilds.find(g => g.id === guildId)
-        if (userGuild) {
-          const isOwner = userGuild.owner === true
-          const perms = BigInt(userGuild.permissions || 0)
-          const isAdmin = (perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n
-          if (isOwner || isAdmin) {
-            req.guild = guild
-            req.userRole = isOwner ? 'owner' : 'admin'
-            return next()
-          }
+        if (userGuild && userGuild.owner === true) {
+          req.guild = guild
+          req.userRole = 'owner'
+          return next()
         }
-        console.warn(`[requireGuildOwner] User ${discordId} lacks owner/admin perms for guild ${guildId}`)
+        console.warn(`[requireGuildOwner] User ${discordId} is not the owner of guild ${guildId}`)
       } else {
         console.warn(`[requireGuildOwner] No OAuth guilds available for user ${discordId}`)
       }

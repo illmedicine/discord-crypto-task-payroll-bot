@@ -276,6 +276,32 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       return;
     }
 
+    // Immediately disable buttons on the original event message to prevent new bets
+    try {
+      if (event.message_id && event.channel_id) {
+        const channel = await client.channels.fetch(event.channel_id);
+        if (channel) {
+          const originalMsg = await channel.messages.fetch(event.message_id);
+          if (originalMsg && originalMsg.components?.length > 0) {
+            const { ActionRowBuilder, ButtonBuilder } = require('discord.js');
+            const disabledRows = originalMsg.components.map(row => {
+              const newRow = ActionRowBuilder.from(row);
+              newRow.components = row.components.map(comp => {
+                const btn = ButtonBuilder.from(comp);
+                btn.setDisabled(true);
+                return btn;
+              });
+              return newRow;
+            });
+            await originalMsg.edit({ components: disabledRows });
+            console.log(`[GamblingProcessor] Disabled buttons on original message for event #${eventId}`);
+          }
+        }
+      }
+    } catch (btnErr) {
+      console.warn(`[GamblingProcessor] Could not disable buttons for event #${eventId}:`, btnErr.message);
+    }
+
     const bets = await db.getGamblingEventBets(eventId);
     const slots = await db.getGamblingEventSlots(eventId);
     const guildWallet = await getGuildWalletWithFallback(event.guild_id);

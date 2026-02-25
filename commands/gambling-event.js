@@ -511,6 +511,12 @@ module.exports = {
     if (event.status !== 'active') {
       return interaction.editReply({ content: '❌ This horse race is no longer active.' });
     }
+    // Double-check fresh status from local DB to catch race conditions
+    const freshCheck = await db.getGamblingEvent(eventId);
+    if (freshCheck && freshCheck.status !== 'active') {
+      console.log(`[GamblingEvent] Race condition caught: event #${eventId} status changed to ${freshCheck.status} during bet flow`);
+      return interaction.editReply({ content: '❌ This horse race has already ended.' });
+    }
     if (event.current_players >= event.max_players) {
       return interaction.editReply({ content: '❌ This event is full.' });
     }
@@ -656,6 +662,12 @@ module.exports = {
     const event = await getGamblingEventWithFallback(eventId, interaction);
     if (!event) return interaction.editReply({ content: `❌ Horse race event not found (build: ${GAMBLING_BUILD}, handler: confirm).`, embeds: [], components: [] });
     if (event.status !== 'active') return interaction.editReply({ content: '❌ This horse race is no longer active.', embeds: [], components: [] });
+    // Fresh DB re-check to catch race conditions
+    const freshCheck = await db.getGamblingEvent(eventId);
+    if (freshCheck && freshCheck.status !== 'active') {
+      console.log(`[GamblingConfirm] Race condition caught: event #${eventId} status=${freshCheck.status}`);
+      return interaction.editReply({ content: '❌ This horse race has already ended.', embeds: [], components: [] });
+    }
     if (event.current_players >= event.max_players) return interaction.editReply({ content: '❌ This event is full.', embeds: [], components: [] });
 
     // Check if user already bet (double-click guard)
