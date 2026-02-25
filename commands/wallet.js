@@ -18,7 +18,7 @@ module.exports = {
         )
         .addStringOption(option =>
           option.setName('secret')
-            .setDescription('Base58 private key for auto-payouts (kept encrypted, never shown)')
+            .setDescription('Base58 private key for auto-payouts (AES-256-GCM encrypted at rest, never shown)')
             .setRequired(false)
         )
     )

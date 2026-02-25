@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { api } from '../api'
+import api from '../api'
+import axios from 'axios'
 
 type Worker = {
   discord_id: string
@@ -99,16 +100,24 @@ export default function Workers({ guildId, userRole }: Props) {
 
   const isOwner = userRole === 'owner'
 
-  const fetchWorkers = useCallback(() => {
+  const fetchWorkers = useCallback((signal?: AbortSignal) => {
     if (!guildId) return
     setLoading(true)
-    api.get(`/admin/guilds/${guildId}/workers?days=${days}`)
+    api.get(`/admin/guilds/${guildId}/workers?days=${days}`, { signal })
       .then(r => setWorkers(r.data || []))
-      .catch(() => setWorkers([]))
+      .catch((err) => { if (!axios.isCancel(err)) setWorkers([]) })
       .finally(() => setLoading(false))
   }, [guildId, days])
 
-  useEffect(() => { fetchWorkers() }, [fetchWorkers])
+  // Clear stale state and re-fetch when guild or days changes;
+  // abort in-flight request on re-run to prevent race conditions.
+  useEffect(() => {
+    setWorkers([])
+    setSelectedWorker(null)
+    const ac = new AbortController()
+    fetchWorkers(ac.signal)
+    return () => ac.abort()
+  }, [fetchWorkers])
 
   const openDetail = async (discordId: string) => {
     setDetailLoading(true)
