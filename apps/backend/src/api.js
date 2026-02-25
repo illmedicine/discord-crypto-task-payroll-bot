@@ -311,17 +311,21 @@ module.exports = function buildApi({ discordClient }) {
         req.userRole = 'owner'
         return next()
       }
-      // Fallback: check via OAuth token (with auto-refresh) — OWNER ONLY
-      // Only the server owner (treasury private key holder) can create events or issue payments
+      // Fallback: check via OAuth token (with auto-refresh) — allow owners AND admins
       const userGuilds = await fetchUserGuildsViaOAuth(discordId)
       if (userGuilds) {
         const userGuild = userGuilds.find(g => g.id === guildId)
-        if (userGuild && userGuild.owner === true) {
-          req.guild = guild
-          req.userRole = 'owner'
-          return next()
+        if (userGuild) {
+          const isOwner = userGuild.owner === true
+          const perms = BigInt(userGuild.permissions || 0)
+          const isAdmin = (perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n
+          if (isOwner || isAdmin) {
+            req.guild = guild
+            req.userRole = isOwner ? 'owner' : 'admin'
+            return next()
+          }
         }
-        console.warn(`[requireGuildOwner] User ${discordId} is not the owner of guild ${guildId}`)
+        console.warn(`[requireGuildOwner] User ${discordId} lacks owner/admin perms for guild ${guildId}`)
       } else {
         console.warn(`[requireGuildOwner] No OAuth guilds available for user ${discordId}`)
       }
@@ -379,6 +383,15 @@ module.exports = function buildApi({ discordClient }) {
       console.error(`[requireGuildMember] Guild fetch failed:`, err?.message)
       return res.status(404).json({ error: 'guild_not_found' })
     }
+  }
+
+  // Strict owner-only check — use after requireGuildOwner on financial endpoints
+  // (event creation, publishing, payments, wallet management)
+  function requireOwnerOnly(req, res, next) {
+    if (req.userRole !== 'owner') {
+      return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can perform this action' })
+    }
+    next()
   }
 
   // Fetch a text channel and return a wrapper with send/messages.fetch that works in REST-only mode
@@ -1020,7 +1033,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const { recipient_address, amount, description } = req.body || {}
     if (!recipient_address || amount == null) return res.status(400).json({ error: 'missing_fields' })
     const r = await db.run(
@@ -1036,7 +1049,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const {
       channel_id,
       title,
@@ -1078,7 +1091,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(contest)
   })
 
-  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const contestId = Number(req.params.contestId)
     const contest = await db.get('SELECT * FROM contests WHERE id = ?', [contestId])
     if (!contest || contest.guild_id !== req.guild.id) return res.status(404).json({ error: 'contest_not_found' })
@@ -1127,7 +1140,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const { title, description, payout_amount, payout_currency, total_slots } = req.body || {}
     if (!title || payout_amount == null || !total_slots) return res.status(400).json({ error: 'missing_fields' })
     const r = await db.run(
@@ -1139,7 +1152,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(task)
   })
 
-  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const taskId = Number(req.params.taskId)
     const task = await db.get('SELECT * FROM bulk_tasks WHERE id = ?', [taskId])
     if (!task || task.guild_id !== req.guild.id) return res.status(404).json({ error: 'bulk_task_not_found' })
@@ -1385,7 +1398,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const {
       channel_id,
       title,
@@ -1455,7 +1468,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(event)
   })
 
-  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
@@ -1760,7 +1773,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     const {
       channel_id, title, description, mode, prize_amount, currency,
       entry_fee, min_players, max_players, duration_minutes, slots,
@@ -1797,7 +1810,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(event)
   })
 
-  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       console.log(`[gambling-event] publish requested for event #${eventId}, guild=${req.guild.id}, clientUser=${!!discordClient.user}`)
@@ -2204,7 +2217,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       const { wallet_address, label, network, wallet_secret } = req.body || {}
       if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
@@ -2240,7 +2253,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       const updates = req.body || {}
       const fields = []; const params = []
@@ -2273,7 +2286,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       await db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       await db.run(
@@ -2286,7 +2299,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       const { budget_total, budget_currency } = req.body || {}
       if (budget_total == null || Number(budget_total) < 0) return res.status(400).json({ error: 'invalid_budget' })
@@ -2298,7 +2311,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       await db.run('UPDATE guild_wallets SET budget_spent = 0, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?', [req.guild.id])
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
@@ -2382,7 +2395,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     try {
       const { channel_id, title, description, event_type, prize_amount, currency, max_participants, starts_at, ends_at } = req.body || {}
       if (!title) return res.status(400).json({ error: 'missing_title' })
@@ -2816,7 +2829,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
   // Accepts amount in USD, converts to SOL at current market price.
-  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
     let step = 'init'
     try {
       // Strict owner check — only the server owner can pay staff
