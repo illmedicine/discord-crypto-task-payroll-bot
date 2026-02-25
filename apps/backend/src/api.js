@@ -426,6 +426,30 @@ module.exports = function buildApi({ discordClient }) {
     next()
   }
 
+
+  // Normalize a raw Discord API message to have discord.js-compatible attachment Map
+  function _normalizeRESTMessage(msg) {
+    if (!msg) return msg
+    if (Array.isArray(msg.attachments)) {
+      const arr = msg.attachments.map(a => [a.id, {
+        ...a,
+        contentType: a.content_type || a.contentType,
+        proxyURL: a.proxy_url || a.proxyURL,
+        name: a.filename || a.name,
+      }])
+      const attMap = new Map(arr)
+      attMap.first = function() { return this.values().next().value }
+      msg.attachments = attMap
+    }
+    msg.author = msg.author || {}
+    if (!msg.author.tag && msg.author.username) {
+      msg.author.tag = msg.author.discriminator && msg.author.discriminator !== '0'
+        ? `${msg.author.username}#${msg.author.discriminator}` : msg.author.username
+    }
+    msg.createdAt = msg.timestamp ? new Date(msg.timestamp) : new Date()
+    return msg
+  }
+
   // Fetch a text channel and return a wrapper with send/messages.fetch that works in REST-only mode
   async function fetchTextChannel(guildId, channelId) {
     // Only try discord.js if client is fully connected (has gateway session)

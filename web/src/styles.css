@@ -374,6 +374,7 @@ body {
   margin-left: 260px;
   flex: 1;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 .top-bar {
@@ -1908,6 +1909,7 @@ h3 {
 /* ===== Event History Ticker ===== */
 .event-ticker-wrap {
   animation: pageIn 0.4s ease;
+  overflow: hidden;
 }
 
 .event-ticker-stats {
@@ -1970,6 +1972,7 @@ h3 {
 
 .event-ticker-track-wrapper {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   position: relative;
   height: 100%;
