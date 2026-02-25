@@ -154,7 +154,7 @@ module.exports = function buildApi({ discordClient }) {
 
     // 2. Try discord.js guilds.fetch — creates a proper Guild with managers
     try {
-      guild = await discordClient.guilds.fetch(guildId)
+      guild = await discordClient.guilds.fetch({ guild: guildId, force: true })
       if (guild && typeof guild.channels?.fetch === 'function') return guild
     } catch (err) {
       console.warn(`[resolveGuild] guilds.fetch failed for ${guildId}:`, err?.message)
@@ -311,7 +311,30 @@ module.exports = function buildApi({ discordClient }) {
         req.userRole = 'owner'
         return next()
       }
-      // Fallback: check via OAuth token (with auto-refresh) — allow owners AND admins
+      // Fallback 1: verify via bot REST API (survives redeploys, no stored tokens needed)
+      try {
+        const restMember = await fetchMemberViaREST(guildId, discordId)
+        if (restMember) {
+          // Member found via REST — check roles for admin perms using guild role list
+          try {
+            const guildRoles = await discordBotAPI(`/guilds/${guildId}/roles`)
+            if (guildRoles) {
+              const memberRoleIds = new Set(restMember.roles || [])
+              for (const role of guildRoles) {
+                if (memberRoleIds.has(role.id)) {
+                  const rolePerms = BigInt(role.permissions || 0)
+                  if ((rolePerms & 0x8n) !== 0n || (rolePerms & 0x20n) !== 0n) {
+                    req.guild = guild
+                    req.userRole = 'admin'
+                    return next()
+                  }
+                }
+              }
+            }
+          } catch (___) {}
+        }
+      } catch (__) {}
+      // Fallback 2: check via OAuth token (with auto-refresh) — allow owners AND admins
       const userGuilds = await fetchUserGuildsViaOAuth(discordId)
       if (userGuilds) {
         const userGuild = userGuilds.find(g => g.id === guildId)
@@ -365,7 +388,16 @@ module.exports = function buildApi({ discordClient }) {
         }
         throw new Error('No members manager (REST-only fallback)')
       } catch (_) {
-        // Fallback: check via user's stored Discord OAuth token (with auto-refresh)
+        // Fallback 1: verify membership via bot REST API (survives redeploys)
+        try {
+          const restMember = await fetchMemberViaREST(guildId, discordId)
+          if (restMember) {
+            req.guild = guild
+            req.userRole = 'member'
+            return next()
+          }
+        } catch (__) {}
+        // Fallback 2: check via user's stored Discord OAuth token (with auto-refresh)
         const userGuilds = await fetchUserGuildsViaOAuth(discordId)
         if (userGuilds) {
           const userGuild = userGuilds.find(g => g.id === guildId)
