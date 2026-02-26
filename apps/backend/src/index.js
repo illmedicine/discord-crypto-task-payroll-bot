@@ -26,13 +26,21 @@ client.rest.setToken(process.env.DISCORD_TOKEN)
 // Populate guild cache via REST (replaces gateway-based cache)
 async function populateGuildCache() {
   try {
-    const res = await fetch('https://discord.com/api/v10/users/@me/guilds?limit=200', {
-      headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const guilds = await res.json()
-    console.log(`[backend] Fetched ${guilds.length} guilds via REST`)
-    for (const g of guilds) {
+    let allGuilds = []
+    let after = '0'
+    while (true) {
+      const res = await fetch(`https://discord.com/api/v10/users/@me/guilds?limit=200&after=${after}`, {
+        headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` }
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const guilds = await res.json()
+      if (guilds.length === 0) break
+      allGuilds = allGuilds.concat(guilds)
+      after = guilds[guilds.length - 1].id
+      if (guilds.length < 200) break
+    }
+    console.log(`[backend] Fetched ${allGuilds.length} guilds via REST`)
+    for (const g of allGuilds) {
       if (!client.guilds.cache.has(g.id)) {
         client.guilds.cache.set(g.id, {
           id: g.id,

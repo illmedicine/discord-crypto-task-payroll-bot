@@ -2985,6 +2985,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       } catch (_) {}
 
       if (!solPrice || solPrice <= 0) {
+        try {
+          const priceRes = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 5000 })
+          solPrice = parseFloat(priceRes.data?.data?.amount) || 0
+        } catch (_) {}
+      }
+
+      if (!solPrice || solPrice <= 0) {
+        try {
+          const priceRes = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 5000 })
+          solPrice = parseFloat(priceRes.data?.result?.SOLUSD?.c?.[0]) || 0
+        } catch (_) {}
+      }
+
+      if (!solPrice || solPrice <= 0) {
         return res.status(503).json({ error: 'price_unavailable', message: 'Unable to fetch SOL price. Please try again in a moment.' })
       }
 
@@ -3721,8 +3735,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
             { timeout: 8000 }
           );
-          return data?.solana?.usd || 0;
-        } catch { return 0; }
+          if (data?.solana?.usd) return data.solana.usd;
+        } catch (_) {}
+        
+        try {
+          const { data } = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 8000 });
+          if (data?.data?.amount) return parseFloat(data.data.amount);
+        } catch (_) {}
+        
+        try {
+          const { data } = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 8000 });
+          if (data?.result?.SOLUSD?.c?.[0]) return parseFloat(data.result.SOLUSD.c[0]);
+        } catch (_) {}
+        
+        return 0;
       }
 
       // Fetch SOL price + wallet balances (best-effort)
