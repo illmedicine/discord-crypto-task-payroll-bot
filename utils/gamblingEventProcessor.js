@@ -447,7 +447,8 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         // Validate keypair once before looping through winners  
         const treasuryKeypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
         if (!treasuryKeypair) {
-          console.error(`[HorseRace] Event #${eventId}: Treasury keypair is invalid — wallet_secret may be a public address, not a private key`);
+          const secretPreview = guildWallet.wallet_secret ? `${guildWallet.wallet_secret.slice(0, 8)}... (len=${guildWallet.wallet_secret.length})` : 'NULL';
+          console.error(`[HorseRace] Event #${eventId}: Treasury keypair is invalid — wallet_secret preview: ${secretPreview}`);
           for (const userId of winnerUserIds) {
             await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null).catch(() => {});
             paymentResults.push({ userId, success: false, reason: 'Treasury private key is invalid — update in DCB Event Manager → Treasury' });

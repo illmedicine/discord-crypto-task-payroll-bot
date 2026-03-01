@@ -374,7 +374,6 @@ body {
   margin-left: 260px;
   flex: 1;
   min-height: 100vh;
-  overflow-x: hidden;
 }
 
 .top-bar {
@@ -1909,7 +1908,6 @@ h3 {
 /* ===== Event History Ticker ===== */
 .event-ticker-wrap {
   animation: pageIn 0.4s ease;
-  overflow: hidden;
 }
 
 .event-ticker-stats {
@@ -1972,7 +1970,6 @@ h3 {
 
 .event-ticker-track-wrapper {
   flex: 1;
-  min-width: 0;
   overflow: hidden;
   position: relative;
   height: 100%;
@@ -2059,3 +2056,815 @@ h3 {
   }
 }
 
+/* ================================================================== */
+/*  MOBILE APP — Native Feel (Capacitor / Android)                     */
+/* ================================================================== */
+
+.mobile-app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  background: var(--bg-primary);
+  position: relative;
+  /* Prevent text selection for native feel */
+  -webkit-user-select: none;
+  user-select: none;
+  /* Prevent overscroll bounce */
+  overscroll-behavior: none;
+}
+
+/* Allow text selection in content areas */
+.mobile-content input,
+.mobile-content textarea,
+.mobile-content .form-input,
+.mobile-content .form-textarea,
+.mobile-content p,
+.mobile-content td,
+.mobile-content .activity-text {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Status bar spacer */
+.mobile-statusbar-spacer {
+  height: env(safe-area-inset-top, 28px);
+  min-height: 28px;
+  background: rgba(6, 10, 19, 0.95);
+  flex-shrink: 0;
+}
+
+/* ===== Mobile Header ===== */
+.mobile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 10px 14px;
+  background: rgba(12, 18, 33, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+.mobile-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mobile-header-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(99,140,255,0.25);
+}
+
+.mobile-header-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mobile-header-app-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+  line-height: 1.2;
+}
+
+.mobile-guild-btn {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-guild-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.mobile-profile-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  border: none;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  box-shadow: 0 2px 8px rgba(99,140,255,0.25);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-profile-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+/* ===== Guild Picker Dropdown ===== */
+.mobile-guild-picker {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 28px) + 54px);
+  left: 12px;
+  right: 12px;
+  background: rgba(17, 24, 43, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  z-index: 200;
+  overflow: hidden;
+  animation: mobileSlideDown 0.2s ease-out;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+@keyframes mobileSlideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.mobile-guild-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(56, 78, 119, 0.12);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s;
+}
+
+.mobile-guild-option:last-child { border-bottom: none; }
+.mobile-guild-option:active { background: rgba(99,140,255,0.1); }
+
+.mobile-guild-option.active {
+  background: rgba(99,140,255,0.08);
+  color: var(--accent-blue);
+}
+
+.mobile-guild-option-name { flex: 1; }
+
+.mobile-guild-option-role {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+  background: rgba(56, 78, 119, 0.15);
+  border-radius: 10px;
+}
+
+.mobile-guild-check {
+  color: var(--accent-blue);
+  font-weight: 700;
+  font-size: 16px;
+}
+
+/* ===== Overlay for dropdowns/sheets ===== */
+.mobile-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 150;
+  animation: mobileFadeIn 0.15s ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes mobileFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ===== Profile Bottom Sheet ===== */
+.mobile-profile-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(17, 24, 43, 0.98);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  border-top: 1px solid var(--border-color);
+  z-index: 200;
+  padding: 8px 0 calc(env(safe-area-inset-bottom, 16px) + 16px);
+  animation: mobileSheetUp 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+@keyframes mobileSheetUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.mobile-sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+  margin: 8px auto 16px;
+}
+
+.mobile-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 20px 16px;
+}
+
+.mobile-profile-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.mobile-profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.mobile-profile-info { min-width: 0; }
+
+.mobile-profile-name {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mobile-profile-provider {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.mobile-profile-email {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-sheet-divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 16px;
+}
+
+.mobile-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 20px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s;
+}
+
+.mobile-sheet-item:active {
+  background: rgba(99,140,255,0.08);
+}
+
+.mobile-sheet-item.danger {
+  color: #ef4444;
+}
+
+/* ===== Scrollable Content ===== */
+.mobile-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* Override container padding for mobile */
+.mobile-content .container {
+  padding: 16px 14px;
+  max-width: 100%;
+}
+
+/* ===== Bottom Tab Bar ===== */
+.mobile-tab-bar {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  background: rgba(12, 18, 33, 0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.mobile-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 4px 6px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s;
+  position: relative;
+  min-height: 52px;
+}
+
+.mobile-tab.active {
+  color: var(--accent-blue);
+}
+
+.mobile-tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 2px;
+  background: var(--accent-blue);
+  border-radius: 0 0 2px 2px;
+}
+
+.mobile-tab-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.mobile-tab-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.mobile-safe-bottom {
+  height: env(safe-area-inset-bottom, 0px);
+  background: rgba(12, 18, 33, 0.97);
+  flex-shrink: 0;
+}
+
+/* ===== Mobile Content Overrides ===== */
+
+/* Stats grid — 2 columns on mobile */
+.mobile-app .stats-grid {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.mobile-app .stat-card {
+  padding: 14px;
+  gap: 10px;
+}
+
+.mobile-app .stat-icon {
+  width: 38px;
+  height: 38px;
+  font-size: 16px;
+}
+
+.mobile-app .stat-value {
+  font-size: 22px;
+}
+
+.mobile-app .stat-label {
+  font-size: 10px;
+}
+
+/* Balance card — compact */
+.mobile-app .balance-card {
+  padding: 18px 16px;
+  border-radius: var(--radius-lg);
+  margin-bottom: 16px;
+}
+
+.mobile-app .balance-value {
+  font-size: 28px;
+}
+
+.mobile-app .balance-actions {
+  gap: 8px;
+}
+
+/* Dashboard grid — single column */
+.mobile-app .dashboard-grid {
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+/* Cards — tighter on mobile */
+.mobile-app .card {
+  padding: 16px;
+  border-radius: 14px;
+}
+
+/* Quick actions — compact grid */
+.mobile-app .quick-actions {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.mobile-app .quick-action-btn {
+  padding: 14px 8px;
+  gap: 6px;
+  font-size: 11px;
+  border-radius: 12px;
+}
+
+.mobile-app .quick-action-btn .qa-icon {
+  font-size: 20px;
+}
+
+/* Tables — horizontal scroll on mobile */
+.mobile-app .table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-app .data-table {
+  min-width: 500px;
+}
+
+/* Forms — full width */
+.mobile-app .form-row {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.mobile-app .form-input,
+.mobile-app .form-select,
+.mobile-app .form-textarea {
+  font-size: 16px; /* Prevents iOS zoom on focus */
+  padding: 12px 14px;
+}
+
+/* Buttons — larger tap targets */
+.mobile-app .btn {
+  padding: 12px 18px;
+  font-size: 14px;
+  min-height: 44px;
+}
+
+.mobile-app .btn-sm {
+  padding: 8px 12px;
+  font-size: 12px;
+  min-height: 36px;
+}
+
+/* Badges — slightly bigger for touch */
+.mobile-app .badge {
+  padding: 5px 12px;
+  font-size: 11px;
+}
+
+/* Page headers */
+.mobile-app h2 {
+  font-size: 20px;
+  margin-bottom: 14px;
+}
+
+.mobile-app h3 {
+  font-size: 15px;
+  margin-bottom: 10px;
+  margin-top: 18px;
+}
+
+/* Section header */
+.mobile-app .section-header {
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mobile-app .section-title {
+  font-size: 17px;
+}
+
+/* Footer — hide on mobile (we have tab bar) */
+.mobile-app .app-footer {
+  display: none;
+}
+
+/* Workers page */
+.mobile-app .workers-page {
+  padding: 16px 14px;
+}
+
+.mobile-app .workers-layout {
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.mobile-app .workers-summary-bar {
+  padding: 12px 14px;
+  gap: 8px;
+}
+
+.mobile-app .workers-summary-value {
+  font-size: 18px;
+}
+
+.mobile-app .worker-card {
+  padding: 12px 14px;
+}
+
+/* Treasury */
+.mobile-app .treasury-wallet-card {
+  padding: 18px 16px;
+}
+
+.mobile-app .treasury-balance-value {
+  font-size: 26px;
+}
+
+.mobile-app .treasury-grid {
+  grid-template-columns: 1fr;
+}
+
+.mobile-app .treasury-actions {
+  flex-wrap: wrap;
+}
+
+/* Modal — full width on mobile */
+.mobile-app .modal-card {
+  min-width: unset;
+  max-width: calc(100vw - 32px);
+  width: 100%;
+  margin: 16px;
+  padding: 24px 20px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.mobile-app .modal-overlay {
+  padding: 0 16px;
+}
+
+/* Activity items */
+.mobile-app .activity-item {
+  padding: 8px 0;
+  gap: 8px;
+}
+
+.mobile-app .activity-text {
+  font-size: 12px;
+}
+
+/* Item cards */
+.mobile-app .item-card {
+  padding: 12px;
+}
+
+/* Ticker — compact */
+.mobile-app .event-ticker-stats {
+  padding: 8px 12px;
+  gap: 10px;
+}
+
+.mobile-app .ticker-stat-value {
+  font-size: 0.9rem;
+}
+
+.mobile-app .event-ticker {
+  height: 36px;
+}
+
+.mobile-app .event-ticker-item {
+  padding: 0 10px;
+  font-size: 0.7rem;
+}
+
+/* Vote event media grid */
+.mobile-app .ve-media-grid {
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 6px;
+}
+
+.mobile-app .ve-selected-images {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+/* Mini form */
+.mobile-app .mini-form input,
+.mobile-app .mini-form select,
+.mobile-app .mini-form textarea {
+  width: 100%;
+  font-size: 16px;
+  margin-right: 0;
+  margin-bottom: 10px;
+}
+
+.mobile-app .mini-form button {
+  width: 100%;
+  padding: 12px 20px;
+}
+
+/* Hamburger — hide on mobile (we use tab bar) */
+.mobile-app .hamburger-btn {
+  display: none;
+}
+
+/* Top bar — hide on mobile (we use mobile header) */
+.mobile-app .top-bar {
+  display: none;
+}
+
+/* Scrollbar — hide on mobile for native feel */
+.mobile-app ::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-app * {
+  scrollbar-width: none;
+}
+
+/* Login screen mobile overrides */
+.mobile-app .login-container {
+  padding: 16px;
+}
+
+.mobile-app .login-card {
+  padding: 32px 24px;
+  border-radius: var(--radius-lg);
+}
+
+.mobile-app .login-card h1 {
+  font-size: 22px;
+}
+
+/* Tap highlight removal for all buttons */
+.mobile-app button,
+.mobile-app a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Active state feedback */
+.mobile-app .card:active {
+  transform: scale(0.99);
+  transition: transform 0.1s;
+}
+
+.mobile-app .stat-card:active {
+  transform: scale(0.97);
+}
+
+.mobile-app .quick-action-btn:active {
+  transform: scale(0.95);
+}
+
+/* Remove hover effects on mobile */
+.mobile-app .stat-card:hover,
+.mobile-app .item-card:hover,
+.mobile-app .worker-card:hover,
+.mobile-app .quick-action-btn:hover {
+  transform: none;
+  box-shadow: var(--shadow-card);
+}
+
+/* Qualify page steps — compact */
+.mobile-app .qualify-steps {
+  padding: 14px 8px;
+  gap: 0;
+}
+
+.mobile-app .qualify-step-num {
+  width: 30px;
+  height: 30px;
+  font-size: 12px;
+}
+
+.mobile-app .qualify-step {
+  font-size: 10px;
+}
+
+.mobile-app .qualify-step-line {
+  width: 28px;
+  margin: 0 4px;
+  margin-bottom: 18px;
+}
+
+/* Budget section */
+.mobile-app .budget-stat-row {
+  gap: 8px;
+}
+
+.mobile-app .budget-stat {
+  min-width: 80px;
+  padding: 10px 8px;
+}
+
+.mobile-app .budget-stat-value {
+  font-size: 16px;
+}
+
+.mobile-app .budget-form {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mobile-app .budget-form > * {
+  min-width: unset;
+}
+
+/* Transaction list */
+.mobile-app .tx-item {
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.mobile-app .tx-icon {
+  width: 34px;
+  height: 34px;
+  font-size: 14px;
+}
+
+/* Tabs / Filters */
+.mobile-app .activity-tabs {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  gap: 4px;
+  padding-bottom: 2px;
+  flex-wrap: nowrap;
+}
+
+.mobile-app .activity-tab {
+  padding: 6px 12px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Pulse animation for live indicators */
+.mobile-app .balance-label .live-dot {
+  width: 7px;
+  height: 7px;
+}

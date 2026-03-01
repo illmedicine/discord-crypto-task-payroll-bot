@@ -98,7 +98,8 @@ export default function Workers({ guildId, userRole }: Props) {
   const [manualWalletInput, setManualWalletInput] = useState('')
   const [savingWallet, setSavingWallet] = useState(false)
 
-  const isOwner = userRole === 'owner'
+  const isOwner = userRole === 'owner' || userRole === 'admin'
+  const isServerOwner = userRole === 'owner'
 
   const fetchWorkers = useCallback((signal?: AbortSignal) => {
     if (!guildId) return
@@ -234,7 +235,7 @@ export default function Workers({ guildId, userRole }: Props) {
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>
           </select>
-          <button className="btn btn-primary" onClick={openAddModal}>+ Add Worker</button>
+          {isServerOwner && <button className="btn btn-primary" onClick={openAddModal}>+ Add Worker</button>}
         </div>
       </div>
 
@@ -306,8 +307,8 @@ export default function Workers({ guildId, userRole }: Props) {
             ) : selectedWorker ? (
               <WorkerDetailPanel
                 worker={selectedWorker}
-                onRoleChange={handleRoleChange}
-                onRemove={handleRemove}
+                onRoleChange={isServerOwner ? handleRoleChange : undefined}
+                onRemove={isServerOwner ? handleRemove : undefined}
                 onPay={isOwner ? openPayModal : undefined}
               />
             ) : (
@@ -553,7 +554,7 @@ function WorkerCard({ worker, onSelect, selected }: { worker: Worker; onSelect: 
   )
 }
 
-function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay }: { worker: WorkerDetail; onRoleChange: (id: string, role: 'staff' | 'admin') => void; onRemove: (id: string) => void; onPay?: (worker: WorkerDetail) => void }) {
+function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay }: { worker: WorkerDetail; onRoleChange?: (id: string, role: 'staff' | 'admin') => void; onRemove?: (id: string) => void; onPay?: (worker: WorkerDetail) => void }) {
   return (
     <div className="worker-detail-content">
       <div className="worker-detail-header">
@@ -573,11 +574,15 @@ function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay }: { worker: 
           {onPay && (
             <button className="btn btn-sm" style={{ background: '#10b981', color: '#fff' }} onClick={() => onPay(worker)}>💸 Pay</button>
           )}
-          <select className="form-select form-select-sm" value={worker.role} onChange={e => onRoleChange(worker.discord_id, e.target.value as any)}>
-            <option value="staff">DCB Staff</option>
-            <option value="admin">DCB Admin</option>
-          </select>
-          <button className="btn btn-sm btn-danger" onClick={() => onRemove(worker.discord_id)}>Remove</button>
+          {onRoleChange && (
+            <select className="form-select form-select-sm" value={worker.role} onChange={e => onRoleChange(worker.discord_id, e.target.value as any)}>
+              <option value="staff">DCB Staff</option>
+              <option value="admin">DCB Admin</option>
+            </select>
+          )}
+          {onRemove && (
+            <button className="btn btn-sm btn-danger" onClick={() => onRemove(worker.discord_id)}>Remove</button>
+          )}
         </div>
       </div>
 

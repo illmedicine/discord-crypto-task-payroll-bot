@@ -47,7 +47,9 @@ async function populateGuildCache() {
           name: g.name,
           ownerId: null,
           icon: g.icon,
-          fetch: async () => client.guilds.fetch(g.id)
+          partial: true,  // Mark as partial so guilds.fetch() will re-fetch from REST instead of returning this stub
+          _stub: true,    // Custom flag so resolveGuild can detect these stubs
+          fetch: async () => client.guilds.fetch({ guild: g.id, force: true })
         })
       }
     }

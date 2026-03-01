@@ -9,6 +9,13 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "@capacitor/android": "^8.1.0",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/core": "^8.1.0",
+    "@capacitor/haptics": "^8.0.1",
+    "@capacitor/keyboard": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.1",
     "@types/react-window": "^1.8.8",
     "axios": "^1.4.0",
     "react": "^18.2.0",
@@ -16,6 +23,7 @@
     "react-window": "^1.8.8"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.1.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^5.1.4",

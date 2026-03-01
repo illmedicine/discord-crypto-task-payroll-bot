@@ -14,13 +14,22 @@ module.exports = function buildApi({ discordClient }) {
 
   // ---- Secret encryption helpers (AES-256-GCM, mirrors utils/db.js) ----
   const ENCRYPTION_PREFIX = 'enc:';
+  const E2E_TRANSPORT_PREFIX = 'e2e:';
   const _getEncKey = () => {
     const hex = process.env.ENCRYPTION_KEY;
     if (!hex || hex.length !== 64) return null;
     return Buffer.from(hex, 'hex');
   };
+  const _getTransportKey = () => {
+    const hex = process.env.E2E_TRANSPORT_KEY;
+    if (hex && hex.length === 64) return Buffer.from(hex, 'hex');
+    return _getEncKey(); // fallback to at-rest key
+  };
+  const isEncryptedValue = (v) => typeof v === 'string' && v.startsWith(ENCRYPTION_PREFIX);
+  const isTransportEncrypted = (v) => typeof v === 'string' && v.startsWith(E2E_TRANSPORT_PREFIX);
   const encryptSecret = (plain) => {
     if (!plain) return plain;
+    if (isEncryptedValue(plain)) return plain; // already at-rest encrypted — don't double-encrypt
     const key = _getEncKey(); if (!key) return plain;
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
@@ -37,31 +46,17 @@ module.exports = function buildApi({ discordClient }) {
       let r = d.update(cB64, 'base64', 'utf8'); r += d.final('utf8'); return r;
     } catch { return null; }
   };
-
-  // ---- E2E Transport encryption (second layer for bot <-> backend transit) ----
-  const E2E_TRANSPORT_PREFIX = 'e2e:';
-  const _getTransportKey = () => {
-    const hex = process.env.E2E_TRANSPORT_KEY;
-    if (hex && hex.length === 64) return Buffer.from(hex, 'hex');
-    return _getEncKey(); // fallback to at-rest key
-  };
-  const encryptTransport = (value) => {
-    if (!value || value.startsWith(E2E_TRANSPORT_PREFIX)) return value;
-    const key = _getTransportKey(); if (!key) return value;
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let enc = cipher.update(value, 'utf8', 'base64'); enc += cipher.final('base64');
-    return `${E2E_TRANSPORT_PREFIX}${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${enc}`;
-  };
+  /** Strip E2E transport encryption layer (e2e:iv:tag:ciphertext → plaintext or enc:...) */
   const decryptTransport = (value) => {
-    if (!value || !value.startsWith(E2E_TRANSPORT_PREFIX)) return value;
+    if (!value || !isTransportEncrypted(value)) return value;
     const key = _getTransportKey(); if (!key) return null;
     try {
-      const [ivB64, tagB64, cB64] = value.slice(E2E_TRANSPORT_PREFIX.length).split(':');
+      const payload = value.slice(E2E_TRANSPORT_PREFIX.length);
+      const [ivB64, tagB64, cB64] = payload.split(':');
       const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
       d.setAuthTag(Buffer.from(tagB64, 'base64'));
       let r = d.update(cB64, 'base64', 'utf8'); r += d.final('utf8'); return r;
-    } catch { return null; }
+    } catch (err) { console.error('[internal] transport decryption failed:', err.message); return null; }
   };
 
   app.use(express.json())
@@ -148,14 +143,14 @@ module.exports = function buildApi({ discordClient }) {
   // Resolve a guild to a proper discord.js Guild object (with channels/members managers)
   // or fall back to raw REST guild info. Stubs from populateGuildCache lack these managers.
   async function resolveGuild(guildId) {
-    // 1. Check cache for a proper Guild object (has channels manager)
+    // 1. Check cache for a proper Guild object (has channels manager AND valid ownerId)
     let guild = discordClient.guilds.cache.get(guildId)
-    if (guild && typeof guild.channels?.fetch === 'function') return guild
+    if (guild && typeof guild.channels?.fetch === 'function' && guild.ownerId) return guild
 
-    // 2. Try discord.js guilds.fetch — creates a proper Guild with managers
+    // 2. Try discord.js guilds.fetch — force: true to bypass cache stubs from populateGuildCache
     try {
       guild = await discordClient.guilds.fetch({ guild: guildId, force: true })
-      if (guild && typeof guild.channels?.fetch === 'function') return guild
+      if (guild && typeof guild.channels?.fetch === 'function' && guild.ownerId) return guild
     } catch (err) {
       console.warn(`[resolveGuild] guilds.fetch failed for ${guildId}:`, err?.message)
     }
@@ -303,38 +298,15 @@ module.exports = function buildApi({ discordClient }) {
       const discordId = await resolveCanonicalUserId(req.user)
       if (!discordId) {
         console.warn(`[requireGuildOwner] No discordId resolved for user:`, req.user?.id)
-        return res.status(403).json({ error: 'forbidden_not_guild_owner' })
+        return res.status(403).json({ error: 'forbidden_not_guild_owner', message: 'Could not determine your Discord identity. Please log in again via Discord OAuth.' })
       }
       // Check ownership (resolveGuild provides ownerId from REST or cache)
-      if (discordId === guild.ownerId) {
+      if (guild.ownerId && discordId === guild.ownerId) {
         req.guild = guild
         req.userRole = 'owner'
         return next()
       }
-      // Fallback 1: verify via bot REST API (survives redeploys, no stored tokens needed)
-      try {
-        const restMember = await fetchMemberViaREST(guildId, discordId)
-        if (restMember) {
-          // Member found via REST — check roles for admin perms using guild role list
-          try {
-            const guildRoles = await discordBotAPI(`/guilds/${guildId}/roles`)
-            if (guildRoles) {
-              const memberRoleIds = new Set(restMember.roles || [])
-              for (const role of guildRoles) {
-                if (memberRoleIds.has(role.id)) {
-                  const rolePerms = BigInt(role.permissions || 0)
-                  if ((rolePerms & 0x8n) !== 0n || (rolePerms & 0x20n) !== 0n) {
-                    req.guild = guild
-                    req.userRole = 'admin'
-                    return next()
-                  }
-                }
-              }
-            }
-          } catch (___) {}
-        }
-      } catch (__) {}
-      // Fallback 2: check via OAuth token (with auto-refresh) — allow owners AND admins
+      // Fallback: check via OAuth token (with auto-refresh) — allow owners AND admins
       const userGuilds = await fetchUserGuildsViaOAuth(discordId)
       if (userGuilds) {
         const userGuild = userGuilds.find(g => g.id === guildId)
@@ -350,13 +322,32 @@ module.exports = function buildApi({ discordClient }) {
         }
         console.warn(`[requireGuildOwner] User ${discordId} lacks owner/admin perms for guild ${guildId}`)
       } else {
-        console.warn(`[requireGuildOwner] No OAuth guilds available for user ${discordId}`)
+        console.warn(`[requireGuildOwner] No OAuth guilds available for user ${discordId} — falling back to REST owner check`)
+        // Last-resort: if guild.ownerId was null (cache stub), re-check via direct REST
+        if (!guild.ownerId) {
+          const info = await getGuildInfoViaREST(guildId)
+          if (info && info.owner_id === discordId) {
+            req.guild = guild
+            req.userRole = 'owner'
+            console.log(`[requireGuildOwner] REST owner check confirmed user ${discordId} as owner of guild ${guildId}`)
+            return next()
+          }
+        }
       }
-      return res.status(403).json({ error: 'forbidden_not_guild_owner' })
+      console.warn(`[requireGuildOwner] DENIED: user=${discordId}, guild=${guildId}, guild.ownerId=${guild.ownerId}`)
+      return res.status(403).json({ error: 'forbidden_not_guild_owner', message: 'You must be the server owner or an administrator.' })
     } catch (err) {
       console.error(`[requireGuildOwner] Guild fetch failed:`, err?.message)
       return res.status(404).json({ error: 'guild_not_found' })
     }
+  }
+
+  // Owner-only guard — must run AFTER requireGuildOwner (which sets req.userRole)
+  function requireStrictOwner(req, res, next) {
+    if (req.userRole !== 'owner') {
+      return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can perform this action.' })
+    }
+    next()
   }
 
   // Like requireGuildOwner but allows any guild member (for read-only endpoints)
@@ -372,7 +363,7 @@ module.exports = function buildApi({ discordClient }) {
         return res.status(403).json({ error: 'forbidden_no_discord_id' })
       }
       // Owner always passes (resolveGuild provides ownerId)
-      if (discordId === guild.ownerId) {
+      if (guild.ownerId && discordId === guild.ownerId) {
         req.guild = guild
         req.userRole = 'owner'
         return next()
@@ -388,16 +379,7 @@ module.exports = function buildApi({ discordClient }) {
         }
         throw new Error('No members manager (REST-only fallback)')
       } catch (_) {
-        // Fallback 1: verify membership via bot REST API (survives redeploys)
-        try {
-          const restMember = await fetchMemberViaREST(guildId, discordId)
-          if (restMember) {
-            req.guild = guild
-            req.userRole = 'member'
-            return next()
-          }
-        } catch (__) {}
-        // Fallback 2: check via user's stored Discord OAuth token (with auto-refresh)
+        // Fallback: check via user's stored Discord OAuth token (with auto-refresh)
         const userGuilds = await fetchUserGuildsViaOAuth(discordId)
         if (userGuilds) {
           const userGuild = userGuilds.find(g => g.id === guildId)
@@ -408,6 +390,15 @@ module.exports = function buildApi({ discordClient }) {
             return next()
           }
         }
+        // Last-resort: if guild.ownerId was null (cache stub), re-check via direct REST
+        if (!guild.ownerId) {
+          const info = await getGuildInfoViaREST(guildId)
+          if (info && info.owner_id === discordId) {
+            req.guild = guild
+            req.userRole = 'owner'
+            return next()
+          }
+        }
         console.warn(`[requireGuildMember] User ${discordId} denied access to guild ${guildId} (owner: ${guild.ownerId})`)
         return res.status(403).json({ error: 'forbidden_not_guild_member' })
       }
@@ -415,39 +406,6 @@ module.exports = function buildApi({ discordClient }) {
       console.error(`[requireGuildMember] Guild fetch failed:`, err?.message)
       return res.status(404).json({ error: 'guild_not_found' })
     }
-  }
-
-  // Strict owner-only check — use after requireGuildOwner on financial endpoints
-  // (event creation, publishing, payments, wallet management)
-  function requireOwnerOnly(req, res, next) {
-    if (req.userRole !== 'owner') {
-      return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can perform this action' })
-    }
-    next()
-  }
-
-
-  // Normalize a raw Discord API message to have discord.js-compatible attachment Map
-  function _normalizeRESTMessage(msg) {
-    if (!msg) return msg
-    if (Array.isArray(msg.attachments)) {
-      const arr = msg.attachments.map(a => [a.id, {
-        ...a,
-        contentType: a.content_type || a.contentType,
-        proxyURL: a.proxy_url || a.proxyURL,
-        name: a.filename || a.name,
-      }])
-      const attMap = new Map(arr)
-      attMap.first = function() { return this.values().next().value }
-      msg.attachments = attMap
-    }
-    msg.author = msg.author || {}
-    if (!msg.author.tag && msg.author.username) {
-      msg.author.tag = msg.author.discriminator && msg.author.discriminator !== '0'
-        ? `${msg.author.username}#${msg.author.discriminator}` : msg.author.username
-    }
-    msg.createdAt = msg.timestamp ? new Date(msg.timestamp) : new Date()
-    return msg
   }
 
   // Fetch a text channel and return a wrapper with send/messages.fetch that works in REST-only mode
@@ -1031,10 +989,21 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           // Check if user has MANAGE_GUILD (0x20) or ADMINISTRATOR (0x8) permission
           const perms = BigInt(ug.permissions || 0)
           const isAdmin = (perms & 0x8n) !== 0n || (perms & 0x20n) !== 0n
+          let role = isOwner ? 'owner' : isAdmin ? 'admin' : 'member'
+          // Double-check: if not detected as owner via OAuth, verify via REST guild info
+          // (handles edge cases where Discord OAuth returns owner: false incorrectly)
+          if (role !== 'owner' && discordId) {
+            try {
+              const guildInfo = await getGuildInfoViaREST(ug.id)
+              if (guildInfo && guildInfo.owner_id === discordId) {
+                role = 'owner'
+              }
+            } catch (_) {}
+          }
           results.push({
             id: ug.id,
             name: ug.name,
-            role: isOwner ? 'owner' : isAdmin ? 'admin' : 'member'
+            role
           })
         }
       }
@@ -1049,8 +1018,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           } else if (discordId) {
             const member = await fetchMemberViaREST(g.id, discordId)
             if (member) {
-              // Check permissions from member roles (simplified — mark as member)
-              results.push({ id: g.id, name: guildInfo.name || g.name, role: 'member' })
+              // Check member permissions via their roles
+              const memberPerms = BigInt(member.permissions || 0)
+              const hasAdmin = (memberPerms & 0x8n) !== 0n || (memberPerms & 0x20n) !== 0n
+              results.push({ id: g.id, name: guildInfo.name || g.name, role: hasAdmin ? 'admin' : 'member' })
             }
           }
         } catch (_) {
@@ -1089,7 +1060,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, async (req, res) => {
     const { recipient_address, amount, description } = req.body || {}
     if (!recipient_address || amount == null) return res.status(400).json({ error: 'missing_fields' })
     const r = await db.run(
@@ -1105,7 +1076,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, async (req, res) => {
     const {
       channel_id,
       title,
@@ -1147,7 +1118,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(contest)
   })
 
-  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, async (req, res) => {
     const contestId = Number(req.params.contestId)
     const contest = await db.get('SELECT * FROM contests WHERE id = ?', [contestId])
     if (!contest || contest.guild_id !== req.guild.id) return res.status(404).json({ error: 'contest_not_found' })
@@ -1196,7 +1167,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, async (req, res) => {
     const { title, description, payout_amount, payout_currency, total_slots } = req.body || {}
     if (!title || payout_amount == null || !total_slots) return res.status(400).json({ error: 'missing_fields' })
     const r = await db.run(
@@ -1208,7 +1179,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(task)
   })
 
-  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, async (req, res) => {
     const taskId = Number(req.params.taskId)
     const task = await db.get('SELECT * FROM bulk_tasks WHERE id = ?', [taskId])
     if (!task || task.guild_id !== req.guild.id) return res.status(404).json({ error: 'bulk_task_not_found' })
@@ -1302,21 +1273,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         content: req.body.caption || '📸 Event image upload',
         files: [{ attachment: req.file.buffer, name: req.file.originalname || 'image.png' }],
       })
-      // Handle both discord.js Message (Collection with .first()) and raw REST JSON (plain array)
-      let att
-      if (msg.attachments && typeof msg.attachments.first === 'function') {
-        att = msg.attachments.first()
-      } else if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
-        att = msg.attachments[0]
-      } else {
-        console.error('[upload] No attachments in response:', JSON.stringify(msg).slice(0, 500))
-        return res.status(500).json({ error: 'no_attachment_in_response' })
-      }
+      const att = msg.attachments.first()
       res.json({
         id: att.id,
         url: att.url,
-        proxyURL: att.proxyURL || att.proxy_url,
-        name: att.name || att.filename,
+        proxyURL: att.proxyURL,
+        name: att.name,
         messageId: msg.id,
       })
     } catch (err) {
@@ -1454,7 +1416,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
     const {
       channel_id,
       title,
@@ -1524,7 +1486,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(event)
   })
 
-  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
@@ -1820,26 +1782,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // ---- Gambling Events ----
   app.get('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildMember, async (req, res) => {
-    try {
-      const rows = await db.all('SELECT * FROM gambling_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
-      res.json(rows || [])
-    } catch (err) {
-      console.error('[gambling-events] GET list error:', err?.message || err)
-      res.status(500).json({ error: 'list_failed', detail: err?.message })
-    }
+    const rows = await db.all('SELECT * FROM gambling_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
+    res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, async (req, res) => {
     const {
       channel_id, title, description, mode, prize_amount, currency,
       entry_fee, min_players, max_players, duration_minutes, slots,
       qualification_url,
     } = req.body || {}
 
-    console.log('[gambling-event] CREATE body:', JSON.stringify({ channel_id, title, mode, min_players, max_players, slotsLen: Array.isArray(slots) ? slots.length : typeof slots }))
-    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields', detail: `channel_id=${!!channel_id}, title=${!!title}` })
-    if (min_players == null || max_players == null) return res.status(400).json({ error: 'missing_player_limits', detail: `min=${min_players}, max=${max_players}` })
-    if (!Array.isArray(slots) || slots.length < 2) return res.status(400).json({ error: 'at_least_two_slots_required', detail: `slots=${JSON.stringify(slots)}` })
+    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
+    if (!min_players || !max_players) return res.status(400).json({ error: 'missing_player_limits' })
+    if (!Array.isArray(slots) || slots.length < 2) return res.status(400).json({ error: 'at_least_two_slots_required' })
 
     const endsAt = duration_minutes ? new Date(Date.now() + (Number(duration_minutes) * 60 * 1000)).toISOString() : null
     const numSlots = slots.length
@@ -1866,7 +1822,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(event)
   })
 
-  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       console.log(`[gambling-event] publish requested for event #${eventId}, guild=${req.guild.id}, clientUser=${!!discordClient.user}`)
@@ -2154,6 +2110,170 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ==================================================================
+  //  POKER EVENTS  (Admin CRUD + Publish)
+  // ==================================================================
+
+  /* ---- List poker events ---- */
+  app.get('/api/admin/guilds/:guildId/poker-events', requireAuth, requireGuildMember, async (req, res) => {
+    const rows = await db.all('SELECT * FROM poker_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
+    res.json(rows)
+  })
+
+  /* ---- Create poker event ---- */
+  app.post('/api/admin/guilds/:guildId/poker-events', requireAuth, requireGuildOwner, async (req, res) => {
+    const {
+      channel_id, title, description, mode, buy_in, currency,
+      small_blind, big_blind, starting_chips, max_players, turn_timer,
+    } = req.body || {}
+
+    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
+
+    const r = await db.run(
+      `INSERT INTO poker_events (guild_id, channel_id, title, description, mode, buy_in, currency, small_blind, big_blind, starting_chips, max_players, turn_timer, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.guild.id, String(channel_id), String(title), String(description || ''),
+       String(mode || 'pot'), Number(buy_in || 0), String(currency || 'SOL'),
+       Number(small_blind || 5), Number(big_blind || 10), Number(starting_chips || 1000),
+       Number(max_players || 6), Number(turn_timer || 30), req.user.id]
+    )
+
+    const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [r.lastID])
+    res.json(event)
+  })
+
+  /* ---- Publish poker event to Discord ---- */
+  app.post('/api/admin/guilds/:guildId/poker-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'poker_event_not_found' })
+
+      const channelId = req.body?.channel_id || event.channel_id
+      const channel = await fetchTextChannel(req.guild.id, channelId)
+
+      const isPotMode = event.mode === 'pot'
+      const buyIn = event.buy_in || 0
+      const hasBuyIn = isPotMode && buyIn > 0
+
+      let desc = event.description || 'Texas Hold\'em poker — sit down, play, and win!'
+      desc += '\n\n**🃏 How it works:**\n'
+      desc += '1️⃣ Click **Join Table** to take a seat\n'
+      if (hasBuyIn) {
+        desc += `2️⃣ Pay the buy-in: **${buyIn} ${event.currency}** from your wallet\n`
+        desc += '3️⃣ Play Texas Hold\'em — bet, bluff, and win chips!\n'
+        desc += '4️⃣ When the table closes, chip stacks convert to SOL payouts 💰\n'
+      } else {
+        desc += '2️⃣ Play Texas Hold\'em — bet, bluff, and win chips!\n'
+        desc += '3️⃣ Casual play — no real money involved\n'
+      }
+
+      if (hasBuyIn) {
+        desc += `\n**💰 Buy-in & Payouts:**\n`
+        desc += `• Buy-in: **${buyIn} ${event.currency}** per seat\n`
+        desc += `• Starting chips: **${event.starting_chips}**\n`
+        desc += `• 1 chip ≈ ${(buyIn / event.starting_chips).toFixed(6)} ${event.currency}\n`
+        desc += `• **90%** of total pot paid to winners proportional to final chips\n`
+        desc += `• **10%** retained by the house (server treasury)\n`
+        desc += `\n**🔄 Refund Policy:**\n`
+        desc += `• If event is cancelled before play, all buy-ins are refunded\n`
+        desc += `• Refunds sent to your connected wallet address\n`
+      }
+
+      desc += `\n**⚙️ Table Settings:**\n`
+      desc += `• Blinds: **${event.small_blind}/${event.big_blind}**\n`
+      desc += `• Players: **2–${event.max_players}**\n`
+      desc += `• Turn Time: **${event.turn_timer}s**\n`
+
+      desc += `\n**📜 Rules:**\n`
+      desc += `• Standard Texas Hold\'em rules\n`
+      desc += `• One seat per player\n`
+      if (hasBuyIn) {
+        desc += `• Must connect wallet first: \`/user-wallet connect\`\n`
+        desc += `• Must be 18+ to participate in wagering\n`
+      }
+
+      const mainEmbed = new EmbedBuilder()
+        .setColor('#1B5E20')
+        .setTitle(`🃏 DCB Poker: ${event.title}`)
+        .setDescription(desc)
+        .addFields(
+          { name: '🎲 Mode', value: hasBuyIn ? `🏦 Pot Split (${buyIn} ${event.currency} buy-in)` : '🎮 Casual (play money)', inline: true },
+          { name: '🪑 Seats', value: `0/${event.max_players}`, inline: true },
+          { name: '♠️♥️ Blinds', value: `${event.small_blind}/${event.big_blind}`, inline: true },
+          { name: '💰 Starting Chips', value: `${event.starting_chips}`, inline: true },
+          { name: '⏱️ Turn Timer', value: `${event.turn_timer}s`, inline: true },
+        )
+        .setFooter({ text: `DisCryptoBank • Poker #${eventId} • Texas Hold'em` })
+        .setTimestamp()
+
+      const components = []
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`poker_join_${eventId}`)
+          .setLabel('🪑 Join Table')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`poker_status_${eventId}`)
+          .setLabel('📊 Table Info')
+          .setStyle(ButtonStyle.Secondary),
+      )
+      components.push(row)
+
+      const msg = await channel.send({ embeds: [mainEmbed], components })
+      await db.run('UPDATE poker_events SET message_id = ?, channel_id = ? WHERE id = ?', [msg.id, String(channelId), eventId])
+
+      res.json({ ok: true, message_id: msg.id, channel_id: String(channelId) })
+    } catch (err) {
+      console.error('[poker-event] publish error:', err?.message || err)
+      res.status(500).json({ error: 'publish_failed', detail: err?.message })
+    }
+  })
+
+  /* ---- Delete poker event ---- */
+  app.delete('/api/admin/guilds/:guildId/poker-events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'not_found' })
+
+      if (event.message_id && event.channel_id) {
+        try {
+          await discordBotRequest('DELETE', `/channels/${event.channel_id}/messages/${event.message_id}`)
+        } catch (_) {}
+      }
+
+      await db.run('DELETE FROM poker_event_players WHERE poker_event_id = ?', [eventId])
+      await db.run('DELETE FROM poker_events WHERE id = ?', [eventId])
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[poker-event] delete error:', err?.message || err)
+      res.status(500).json({ error: 'delete_failed' })
+    }
+  })
+
+  /* ---- Cancel poker event ---- */
+  app.patch('/api/admin/guilds/:guildId/poker-events/:eventId/cancel', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const eventId = Number(req.params.eventId)
+      const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])
+      if (!event || event.guild_id !== req.guild.id) return res.status(404).json({ error: 'not_found' })
+
+      await db.run('UPDATE poker_events SET status = ? WHERE id = ?', ['cancelled', eventId])
+
+      if (event.message_id && event.channel_id) {
+        try {
+          await discordBotRequest('DELETE', `/channels/${event.channel_id}/messages/${event.message_id}`)
+        } catch (_) {}
+      }
+
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[poker-event] cancel error:', err?.message || err)
+      res.status(500).json({ error: 'cancel_failed' })
+    }
+  })
+
   // ---- Dashboard Stats ----
   app.get('/api/admin/guilds/:guildId/dashboard/stats', requireAuth, requireGuildMember, async (req, res) => {
     try {
@@ -2273,7 +2393,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const { wallet_address, label, network, wallet_secret } = req.body || {}
       if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
@@ -2309,7 +2429,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const updates = req.body || {}
       const fields = []; const params = []
@@ -2342,7 +2462,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       await db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       await db.run(
@@ -2355,7 +2475,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const { budget_total, budget_currency } = req.body || {}
       if (budget_total == null || Number(budget_total) < 0) return res.status(400).json({ error: 'invalid_budget' })
@@ -2367,7 +2487,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       await db.run('UPDATE guild_wallets SET budget_spent = 0, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?', [req.guild.id])
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
@@ -2451,7 +2571,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const { channel_id, title, description, event_type, prize_amount, currency, max_participants, starts_at, ends_at } = req.body || {}
       if (!title) return res.status(400).json({ error: 'missing_title' })
@@ -2669,7 +2789,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/workers', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const { discord_id, role } = req.body || {}
       if (!discord_id) return res.status(400).json({ error: 'missing_discord_id' })
@@ -2696,7 +2816,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const { role } = req.body || {}
       if (!['staff', 'admin'].includes(role)) return res.status(400).json({ error: 'invalid_role' })
@@ -2707,7 +2827,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.delete('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/workers/:discordId', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       await db.run('UPDATE dcb_workers SET removed_at = CURRENT_TIMESTAMP WHERE guild_id = ? AND discord_id = ? AND removed_at IS NULL', [req.guild.id, req.params.discordId])
       res.json({ ok: true })
@@ -2883,14 +3003,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
+  // Pay a worker — OWNER OR ADMIN. Sends SOL from guild treasury to worker's connected user-wallet.
   // Accepts amount in USD, converts to SOL at current market price.
-  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, requireOwnerOnly, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
     let step = 'init'
     try {
-      // Strict owner check — only the server owner can pay staff
-      if (req.userRole !== 'owner') {
-        return res.status(403).json({ error: 'owner_only', message: 'Only the server owner can pay staff.' })
+      // Owner or admin check — requireGuildOwner already verified the user is owner or admin
+      if (req.userRole !== 'owner' && req.userRole !== 'admin') {
+        return res.status(403).json({ error: 'owner_only', message: 'Only the server owner or an admin can pay staff.' })
       }
 
       step = 'parse_amount'
@@ -2983,20 +3103,6 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         const priceRes = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 })
         solPrice = priceRes.data?.solana?.usd || 0
       } catch (_) {}
-
-      if (!solPrice || solPrice <= 0) {
-        try {
-          const priceRes = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 5000 })
-          solPrice = parseFloat(priceRes.data?.data?.amount) || 0
-        } catch (_) {}
-      }
-
-      if (!solPrice || solPrice <= 0) {
-        try {
-          const priceRes = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 5000 })
-          solPrice = parseFloat(priceRes.data?.result?.SOLUSD?.c?.[0]) || 0
-        } catch (_) {}
-      }
 
       if (!solPrice || solPrice <= 0) {
         return res.status(503).json({ error: 'price_unavailable', message: 'Unable to fetch SOL price. Please try again in a moment.' })
@@ -3383,43 +3489,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-
-  // PUBLIC gambling event lookup - no auth needed
-  // This allows the bot to fetch events even when DCB_INTERNAL_SECRET is misconfigured
-  app.get('/api/public/gambling-event/:id', async (req, res) => {
-    try {
-      const eventId = Number(req.params.id)
-      if (!eventId || isNaN(eventId)) return res.status(400).json({ error: 'invalid_id' })
-      const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
-      if (!event) return res.status(404).json({ error: 'not_found' })
-      const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [eventId])
-      console.log(`[public] gambling event #${eventId} fetched`)
-      res.json({ event, slots })
-    } catch (err) {
-      console.error('[public] gambling-event fetch error:', err?.message || err)
-      res.status(500).json({ error: 'internal_error' })
-    }
-  })
-
-  // PUBLIC active gambling events list - no auth needed
-  app.get('/api/public/gambling-events/active', async (req, res) => {
-    try {
-      const events = await db.all(`SELECT * FROM gambling_events WHERE status = 'active' ORDER BY id DESC`)
-      const result = []
-      for (const event of (events || [])) {
-        const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [event.id])
-        result.push({ event, slots })
-      }
-      console.log(`[public] active gambling events: ${result.length} found`)
-      res.json({ events: result })
-    } catch (err) {
-      console.error('[public] gambling-events/active fetch error:', err?.message || err)
-      res.status(500).json({ error: 'internal_error' })
-    }
-  })
-
   // Bot fetches gambling-event data it doesn't have locally (created via web UI)
-  app.get('/api/internal/gambling-event/:id', async (req, res) => {
+  app.get('/api/internal/gambling-event/:id', requireInternal, async (req, res) => {
     try {
       const eventId = Number(req.params.id)
       const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
@@ -3428,22 +3499,6 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.json({ event, slots })
     } catch (err) {
       console.error('[internal] gambling-event fetch error:', err?.message || err)
-      res.status(500).json({ error: 'internal_error' })
-    }
-  })
-
-  // Bot pulls all active gambling events to pre-cache locally
-  app.get('/api/internal/gambling-events/active', async (req, res) => {
-    try {
-      const events = await db.all(`SELECT * FROM gambling_events WHERE status = 'active' ORDER BY id DESC`)
-      const result = []
-      for (const event of (events || [])) {
-        const slots = await db.all('SELECT * FROM gambling_event_slots WHERE gambling_event_id = ? ORDER BY slot_number ASC', [event.id])
-        result.push({ event, slots })
-      }
-      res.json({ events: result })
-    } catch (err) {
-      console.error('[internal] gambling-events/active fetch error:', err?.message || err)
       res.status(500).json({ error: 'internal_error' })
     }
   })
@@ -3601,10 +3656,6 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {
     try {
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.params.guildId])
-      // Wrap wallet_secret with E2E transport encryption before sending over the wire
-      if (wallet && wallet.wallet_secret) {
-        wallet.wallet_secret = encryptTransport(wallet.wallet_secret)
-      }
       res.json({ wallet: wallet || null })
     } catch (err) {
       console.error('[internal] guild-wallet GET error:', err?.message)
@@ -3615,11 +3666,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Bot pushes wallet connect/update to backend DB
   app.post('/api/internal/guild-wallet-sync', requireInternal, async (req, res) => {
     try {
-      let { guildId, action, wallet_address, label, network, configured_by, wallet_secret } = req.body || {}
-      // Strip E2E transport encryption layer (bot wraps secrets before sending over the wire)
-      if (wallet_secret && typeof wallet_secret === 'string' && wallet_secret.startsWith(E2E_TRANSPORT_PREFIX)) {
-        wallet_secret = decryptTransport(wallet_secret)
-      }
+      const { guildId, action, wallet_address, label, network, configured_by, wallet_secret } = req.body || {}
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' })
 
       if (action === 'disconnect') {
@@ -3629,6 +3676,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       }
 
       if (!wallet_address) return res.status(400).json({ error: 'missing_wallet_address' })
+
+      // Properly handle incoming secrets: strip transport layer, avoid double-encrypting
+      let secretToStore = wallet_secret || null
+      if (secretToStore) {
+        // Strip E2E transport layer if present (bot sends e2e-wrapped at-rest encrypted values)
+        if (isTransportEncrypted(secretToStore)) {
+          secretToStore = decryptTransport(secretToStore)
+        }
+        // If already at-rest encrypted (enc:...), store as-is; otherwise encrypt
+        if (secretToStore && !isEncryptedValue(secretToStore)) {
+          secretToStore = encryptSecret(secretToStore)
+        }
+      }
+
       await db.run(
         `INSERT INTO guild_wallets (guild_id, wallet_address, configured_by, label, network, wallet_secret, configured_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -3639,7 +3700,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
            network = excluded.network,
            wallet_secret = excluded.wallet_secret,
            updated_at = CURRENT_TIMESTAMP`,
-        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta', wallet_secret ? encryptSecret(wallet_secret) : null]
+        [guildId, wallet_address, configured_by || null, label || 'Treasury', network || 'mainnet-beta', secretToStore]
       )
       console.log(`[internal] wallet synced for guild ${guildId}: ${wallet_address.slice(0,8)}...`)
       res.json({ ok: true })
@@ -3735,20 +3796,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
             { timeout: 8000 }
           );
-          if (data?.solana?.usd) return data.solana.usd;
-        } catch (_) {}
-        
-        try {
-          const { data } = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 8000 });
-          if (data?.data?.amount) return parseFloat(data.data.amount);
-        } catch (_) {}
-        
-        try {
-          const { data } = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 8000 });
-          if (data?.result?.SOLUSD?.c?.[0]) return parseFloat(data.result.SOLUSD.c[0]);
-        } catch (_) {}
-        
-        return 0;
+          return data?.solana?.usd || 0;
+        } catch { return 0; }
       }
 
       // Fetch SOL price + wallet balances (best-effort)

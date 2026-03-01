@@ -63,6 +63,12 @@ const getKeypairFromSecret = (secret) => {
       return null;
     }
 
+    // Guard: detect still-encrypted values that decryption failed to resolve
+    if (typeof plainSecret === 'string' && (plainSecret.startsWith('enc:') || plainSecret.startsWith('e2e:'))) {
+      console.error(`[CRYPTO] wallet_secret is still encrypted (${plainSecret.slice(0, 4)}...) — decryption failed or ENCRYPTION_KEY is missing/wrong.`);
+      return null;
+    }
+
     // Support JSON byte array format: [1,2,3,...] (e.g. from Solana keypair file)
     if (typeof plainSecret === 'string' && plainSecret.trim().startsWith('[')) {
       const arr = JSON.parse(plainSecret);
@@ -189,27 +195,27 @@ const isValidSolanaAddress = (address) => {
   }
 };
 
-// Get Solana price in USD (from CoinGecko) with timeout
+// Get Solana price in USD with fallbacks and timeout
 const getSolanaPrice = async () => {
+  const axios = require('axios');
+  
   try {
-    const axios = require('axios');
-    
-    // Create a timeout promise that rejects after 5 seconds
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Price fetch timeout')), 5000)
-    );
-    
-    // Race the actual call against the timeout
-    const response = await Promise.race([
-      axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'),
-      timeoutPromise
-    ]);
-    
-    return response.data.solana.usd;
-  } catch (error) {
-    console.error('Error fetching SOL price:', error);
-    return null;
-  }
+    const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 });
+    if (data?.solana?.usd) return data.solana.usd;
+  } catch (_) {}
+  
+  try {
+    const { data } = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 5000 });
+    if (data?.data?.amount) return parseFloat(data.data.amount);
+  } catch (_) {}
+  
+  try {
+    const { data } = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 5000 });
+    if (data?.result?.SOLUSD?.c?.[0]) return parseFloat(data.result.SOLUSD.c[0]);
+  } catch (_) {}
+  
+  console.error('Error fetching SOL price: All APIs failed');
+  return null;
 };
 
 /**

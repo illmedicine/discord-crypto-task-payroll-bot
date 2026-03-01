@@ -14,12 +14,19 @@ import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDisco
 type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+  { id: 'dashboard', label: 'Home', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
+  { id: 'events', label: 'Events', icon: '🎯' },
   { id: 'workers', label: 'Workers', icon: '👥' },
-  { id: 'events', label: 'Event Manager', icon: '🎯' },
   { id: 'history', label: 'History', icon: '📜' },
 ]
+
+// Detect Capacitor / mobile environment
+const isMobileApp = typeof window !== 'undefined' && (
+  window.location.protocol === 'capacitor:' ||
+  window.location.protocol === 'file:' ||
+  (window as any).Capacitor !== undefined
+)
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
@@ -34,6 +41,7 @@ export default function App() {
   const [qualifyEventId, setQualifyEventId] = useState<number | null>(null)
   const [qualifyEventType, setQualifyEventType] = useState<'vote' | 'race'>('vote')
   const profileRef = useRef<HTMLDivElement>(null)
+  const [showGuildPicker, setShowGuildPicker] = useState(false)
 
   // Close profile menu on outside click
   useEffect(() => {
@@ -156,6 +164,32 @@ export default function App() {
   const userRole = guilds.find(g => g.id === guildId)?.role || 'member'
   const isOwner = userRole === 'owner' || userRole === 'admin'
 
+  // Detect Capacitor / mobile environment for token-paste fallback
+  const isCapacitorEnv = isMobileApp
+
+  const [showTokenInput, setShowTokenInput] = useState(false)
+  const [tokenInput, setTokenInput] = useState('')
+  const [tokenError, setTokenError] = useState('')
+
+  const handleTokenLogin = async () => {
+    const trimmed = tokenInput.trim()
+    if (!trimmed) { setTokenError('Please paste a token'); return }
+    setTokenError('')
+    window.localStorage.setItem('dcb_token', trimmed)
+    try {
+      const r = await api.get('/auth/me')
+      setUser(r.data.user)
+      const r2 = await api.get('/admin/guilds')
+      const gs = (r2.data || []) as { id: string; name: string; role?: string }[]
+      setGuilds(gs)
+      setGuildId(gs[0]?.id || '')
+      setPrefsLoaded(true)
+    } catch {
+      window.localStorage.removeItem('dcb_token')
+      setTokenError('Invalid or expired token. Get a fresh one from your browser.')
+    }
+  }
+
   // Not logged in - show login screen
   if (!user) {
     return (
@@ -188,6 +222,45 @@ export default function App() {
                   Sign in with Google to retain settings across sessions.<br />
                   Link Discord after for full guild access.
                 </p>
+
+                {/* Token paste fallback for mobile / emulator */}
+                <div style={{ marginTop: 8, borderTop: '1px solid var(--border-color, #333)', paddingTop: 12 }}>
+                  <button
+                    onClick={() => setShowTokenInput(v => !v)}
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--text-muted, #888)',
+                      fontSize: 12, cursor: 'pointer', textDecoration: 'underline', padding: 0,
+                      width: '100%', textAlign: 'center',
+                    }}
+                  >
+                    {showTokenInput ? 'Hide' : '🔑 Paste Token'}{isCapacitorEnv ? ' (Mobile)' : ''}
+                  </button>
+                  {showTokenInput && (
+                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <p style={{ fontSize: 11, color: 'var(--text-muted, #888)', lineHeight: 1.4, margin: 0 }}>
+                        On your desktop browser, log into the web app, click your profile → <strong>Copy Token for Mobile</strong>.<br />
+                        Then paste it below.
+                      </p>
+                      <input
+                        type="text"
+                        value={tokenInput}
+                        onChange={e => setTokenInput(e.target.value)}
+                        placeholder="Paste dcb_token here…"
+                        style={{
+                          padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-color, #333)',
+                          background: 'var(--bg-secondary, #1a1e2e)', color: 'var(--text-primary, #fff)',
+                          fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box',
+                        }}
+                      />
+                      <button className="btn btn-primary" onClick={handleTokenLogin} style={{ padding: '10px 0', fontSize: 14 }}>
+                        Login with Token
+                      </button>
+                      {tokenError && (
+                        <p style={{ fontSize: 11, color: '#ff6b6b', margin: 0, textAlign: 'center' }}>{tokenError}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </>
             ) : (
               <button className="btn btn-secondary" disabled>Login (backend required)</button>
@@ -198,6 +271,156 @@ export default function App() {
     )
   }
 
+  // Render layout based on mobile vs desktop
+  if (isMobileApp) {
+    // ====== MOBILE NATIVE LAYOUT ======
+    const currentGuild = guilds.find(g => g.id === guildId)
+    return (
+      <div className="mobile-app">
+        {/* Status bar spacer */}
+        <div className="mobile-statusbar-spacer" />
+
+        {/* Top header bar */}
+        <header className="mobile-header">
+          <div className="mobile-header-left">
+            <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" className="mobile-header-logo" />
+            <div className="mobile-header-title">
+              <span className="mobile-header-app-name">DCB Manager</span>
+              <button className="mobile-guild-btn" onClick={() => setShowGuildPicker(v => !v)}>
+                {currentGuild?.name || 'Select Server'} <span className="mobile-guild-caret">▾</span>
+              </button>
+            </div>
+          </div>
+          <button className="mobile-profile-btn" onClick={() => setProfileMenuOpen(v => !v)}>
+            {user.auth_provider !== 'google' && user.avatar ? (
+              <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`} alt="" />
+            ) : user.google_picture ? (
+              <img src={user.google_picture} alt="" />
+            ) : (
+              <span>{user.username.charAt(0).toUpperCase()}</span>
+            )}
+          </button>
+        </header>
+
+        {/* Guild picker dropdown */}
+        {showGuildPicker && (
+          <>
+            <div className="mobile-overlay" onClick={() => setShowGuildPicker(false)} />
+            <div className="mobile-guild-picker">
+              {guilds.map(g => (
+                <button
+                  key={g.id}
+                  className={`mobile-guild-option ${g.id === guildId ? 'active' : ''}`}
+                  onClick={() => { handleGuildChange(g.id); setShowGuildPicker(false) }}
+                >
+                  <span className="mobile-guild-option-name">{g.name}</span>
+                  {g.role && g.role !== 'owner' && <span className="mobile-guild-option-role">{g.role}</span>}
+                  {g.id === guildId && <span className="mobile-guild-check">✓</span>}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Profile menu overlay */}
+        {profileMenuOpen && (
+          <div className="mobile-overlay" onClick={() => setProfileMenuOpen(false)}>
+            <div className="mobile-profile-sheet" onClick={e => e.stopPropagation()}>
+              <div className="mobile-sheet-handle" />
+              <div className="mobile-profile-header">
+                <div className="mobile-profile-avatar">
+                  {user.auth_provider !== 'google' && user.avatar ? (
+                    <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=128`} alt="" />
+                  ) : user.google_picture ? (
+                    <img src={user.google_picture} alt="" />
+                  ) : (
+                    user.username.charAt(0).toUpperCase()
+                  )}
+                </div>
+                <div className="mobile-profile-info">
+                  <div className="mobile-profile-name">{user.username}</div>
+                  <div className="mobile-profile-provider">
+                    {user.auth_provider === 'google' ? 'Google' : 'Discord'}
+                    {accountInfo?.google_linked && accountInfo?.discord_linked && ' + linked'}
+                  </div>
+                  {user.google_email && <div className="mobile-profile-email">{user.google_email}</div>}
+                </div>
+              </div>
+
+              <div className="mobile-sheet-divider" />
+
+              {user.auth_provider === 'google' && !accountInfo?.discord_linked && (
+                <a className="mobile-sheet-item" href={getDiscordLinkUrl()} onClick={() => localStorage.removeItem('dcb_token')}>
+                  🔗 Link Discord
+                </a>
+              )}
+              {user.auth_provider !== 'google' && !accountInfo?.google_linked && authProviders.google && (
+                <a className="mobile-sheet-item" href={getGoogleLinkUrl()} onClick={() => localStorage.removeItem('dcb_token')}>
+                  🔗 Link Google
+                </a>
+              )}
+
+              <button
+                className="mobile-sheet-item"
+                onClick={async () => {
+                  const token = localStorage.getItem('dcb_token')
+                  if (!token) { alert('No token found.'); return }
+                  try {
+                    await navigator.clipboard.writeText(token)
+                    alert('Token copied!')
+                  } catch { window.prompt('Copy this token:', token) }
+                }}
+              >
+                📋 Copy Token
+              </button>
+
+              <div className="mobile-sheet-divider" />
+
+              <button
+                className="mobile-sheet-item danger"
+                onClick={async () => { localStorage.removeItem('dcb_token'); try { await api.post('/auth/logout') } catch(_) {}; location.reload() }}
+              >
+                🚪 Logout
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Scrollable content */}
+        <main className="mobile-content">
+          {guildId && <EventTicker guildId={guildId} />}
+          <PerformanceMonitor />
+          <ProfilerLogger id="App">
+            {page === 'dashboard' && <Dashboard guildId={guildId} onNavigate={navigate} />}
+            {page === 'qualify' && qualifyEventId && <QualifyPage eventId={qualifyEventId} eventType={qualifyEventType} />}
+            {page === 'events' && <EventManager guildId={guildId} isOwner={isOwner} />}
+            {page === 'history' && <History guildId={guildId} />}
+            {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
+            {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
+          </ProfilerLogger>
+        </main>
+
+        {/* Bottom tab bar */}
+        <nav className="mobile-tab-bar">
+          {NAV_ITEMS.map(item => (
+            <button
+              key={item.id}
+              className={`mobile-tab ${page === item.id ? 'active' : ''}`}
+              onClick={() => navigate(item.id)}
+            >
+              <span className="mobile-tab-icon">{item.icon}</span>
+              <span className="mobile-tab-label">{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        {/* Safe area bottom spacer */}
+        <div className="mobile-safe-bottom" />
+      </div>
+    )
+  }
+
+  // ====== DESKTOP LAYOUT ======
   return (
     <div className="app-layout">
       {/* Mobile overlay */}
@@ -281,6 +504,28 @@ export default function App() {
                   <span className="profile-menu-icon">🔗</span> Link Google
                 </a>
               )}
+
+              <div className="profile-menu-divider" />
+
+              <button
+                className="profile-menu-item"
+                onClick={async () => {
+                  const token = localStorage.getItem('dcb_token')
+                  if (!token) { alert('No token found. Try logging out and back in.'); return }
+                  try {
+                    await navigator.clipboard.writeText(token)
+                    const btn = document.activeElement as HTMLElement
+                    const orig = btn?.textContent || ''
+                    if (btn) btn.textContent = '✅ Copied!'
+                    setTimeout(() => { if (btn) btn.innerHTML = '<span class="profile-menu-icon">📋</span> Copy Token for Mobile' }, 2000)
+                  } catch {
+                    // Fallback: show token in a prompt for manual copy
+                    window.prompt('Copy this token and paste it in the mobile app:', token)
+                  }
+                }}
+              >
+                <span className="profile-menu-icon">📋</span> Copy Token for Mobile
+              </button>
 
               <div className="profile-menu-divider" />
 

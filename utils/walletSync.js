@@ -74,14 +74,24 @@ async function getGuildWalletWithFallback(guildId) {
   if (result.reachable) {
     if (result.wallet) {
       // Backend has wallet — sync to local DB if anything differs (address, secret, etc.)
-      // Strip E2E transport layer first, then decrypt at-rest encryption
+      // Peel all encryption layers: transport (e2e:) then at-rest (enc:), looping to handle
+      // historically triple-encrypted values (enc:(e2e:(enc:(secret)))) from a prior sync bug.
       let rawSecret = result.wallet.wallet_secret || null;
-      if (rawSecret && isTransportEncrypted(rawSecret)) {
-        rawSecret = decryptTransport(rawSecret);
+      const MAX_DECRYPT_LAYERS = 5; // safety limit
+      for (let i = 0; rawSecret && i < MAX_DECRYPT_LAYERS; i++) {
+        if (isTransportEncrypted(rawSecret)) {
+          rawSecret = decryptTransport(rawSecret);
+          if (!rawSecret) { console.error(`[WALLET] Transport decryption failed at layer ${i + 1}`); break; }
+          continue; // check for more layers
+        }
+        if (isEncrypted(rawSecret)) {
+          rawSecret = decryptSecret(rawSecret);
+          if (!rawSecret) { console.error(`[WALLET] At-rest decryption failed at layer ${i + 1} — ENCRYPTION_KEY may be wrong`); break; }
+          continue; // check for more layers
+        }
+        break; // plaintext reached
       }
-      const backendSecret = rawSecret
-        ? (isEncrypted(rawSecret) ? decryptSecret(rawSecret) : rawSecret)
-        : null;
+      const backendSecret = rawSecret || null;
 
       // Merge: prefer backend secret, fall back to local secret for same address
       // Note: localWallet.wallet_secret is already decrypted by getGuildWallet()

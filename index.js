@@ -619,6 +619,24 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
+    // Handle poker table buttons
+    if (interaction.customId.startsWith('poker_')) {
+      const pokerCommand = client.commands.get('poker');
+      if (pokerCommand && pokerCommand.handlePokerButton) {
+        try {
+          await pokerCommand.handlePokerButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling poker button:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred.', ephemeral: true });
+          } else {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
+          }
+        }
+      }
+      return;
+    }
+
     // Handle gambling event qualify button
     if (interaction.customId.startsWith('gamble_qualify_')) {
       const gamblingEventCommand = client.commands.get('gambling-event');

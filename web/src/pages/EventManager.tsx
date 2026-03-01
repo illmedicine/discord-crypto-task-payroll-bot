@@ -81,9 +81,30 @@ type GamblingEvent = {
 
 type SlotEntry = { label: string; color: string }
 
+/* --- Poker Event types --- */
+type PokerEvent = {
+  id: number
+  title: string
+  description: string
+  mode: string
+  buy_in: number
+  currency: string
+  small_blind: number
+  big_blind: number
+  starting_chips: number
+  max_players: number
+  turn_timer: number
+  current_players: number
+  status: string
+  channel_id: string
+  message_id: string | null
+  ended_at: string | null
+  created_at: string
+}
+
 /* --- Shared types --- */
 type Channel = { id: string; name: string }
-type EventTab = 'all' | 'vote' | 'race'
+type EventTab = 'all' | 'vote' | 'race' | 'poker'
 type Props = { guildId: string; isOwner?: boolean }
 
 /* ================================================================== */
@@ -119,7 +140,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
 
   /* ---- Tab state ---- */
   const [tab, setTab] = useState<EventTab>('all')
-  const [createType, setCreateType] = useState<'vote' | 'race'>('vote')
+  const [createType, setCreateType] = useState<'vote' | 'race' | 'poker'>('vote')
 
   /* ---- Shared data ---- */
   const [channels, setChannels] = useState<Channel[]>([])
@@ -190,24 +211,49 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [rReviewingId, setRReviewingId] = useState<number | null>(null)
 
   /* ==================================================================
+   *  POKER EVENT STATE
+   * ================================================================ */
+  const [pokerEvents, setPokerEvents] = useState<PokerEvent[]>([])
+
+  /* ---- poker create-form ---- */
+  const [pChannelId, setPChannelId] = useState('')
+  const [pTitle, setPTitle] = useState('')
+  const [pDescription, setPDescription] = useState('')
+  const [pMode, setPMode] = useState<'pot' | 'casual'>('pot')
+  const [pBuyIn, setPBuyIn] = useState('0.1')
+  const [pCurrency, setPCurrency] = useState('SOL')
+  const [pSmallBlind, setPSmallBlind] = useState('5')
+  const [pBigBlind, setPBigBlind] = useState('10')
+  const [pStartingChips, setPStartingChips] = useState('1000')
+  const [pMaxPlayers, setPMaxPlayers] = useState('6')
+  const [pTurnTimer, setPTurnTimer] = useState('30')
+
+  /* ---- poker publish ---- */
+  const [pPublishChannelId, setPPublishChannelId] = useState('')
+  const [pPublishing, setPPublishing] = useState<number | null>(null)
+
+  /* ==================================================================
    *  DATA LOADING
    * ================================================================ */
   const load = useCallback(async () => {
     if (!guildId) return
     setLoading(true)
     try {
-      const [veRes, geRes, chRes] = await Promise.all([
+      const [veRes, geRes, peRes, chRes] = await Promise.all([
         api.get(`/admin/guilds/${guildId}/vote-events`),
         api.get(`/admin/guilds/${guildId}/gambling-events`),
+        api.get(`/admin/guilds/${guildId}/poker-events`),
         api.get(`/admin/guilds/${guildId}/channels`),
       ])
       setVoteEvents(veRes.data || [])
       setRaceEvents(geRes.data || [])
+      setPokerEvents(peRes.data || [])
       setChannels(chRes.data || [])
       const ch = chRes.data || []
       if (ch.length) {
         if (!vChannelId) { setVChannelId(ch[0].id); setMediaChannelId(ch[0].id); setVPublishChannelId(ch[0].id) }
         if (!rChannelId) { setRChannelId(ch[0].id); setRPublishChannelId(ch[0].id) }
+        if (!pChannelId) { setPChannelId(ch[0].id); setPPublishChannelId(ch[0].id) }
       }
     } finally {
       setLoading(false)
@@ -215,9 +261,9 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   }, [guildId])
 
   useEffect(() => {
-    setVoteEvents([]); setRaceEvents([]); setChannels([])
-    setVChannelId(''); setRChannelId('')
-    setMediaChannelId(''); setVPublishChannelId(''); setRPublishChannelId('')
+    setVoteEvents([]); setRaceEvents([]); setPokerEvents([]); setChannels([])
+    setVChannelId(''); setRChannelId(''); setPChannelId('')
+    setMediaChannelId(''); setVPublishChannelId(''); setRPublishChannelId(''); setPPublishChannelId('')
     if (guildId) load()
   }, [guildId, load])
 
@@ -228,9 +274,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       Promise.all([
         api.get(`/admin/guilds/${guildId}/vote-events`),
         api.get(`/admin/guilds/${guildId}/gambling-events`),
-      ]).then(([ve, ge]) => {
+        api.get(`/admin/guilds/${guildId}/poker-events`),
+      ]).then(([ve, ge, pe]) => {
         setVoteEvents(ve.data || [])
         setRaceEvents(ge.data || [])
+        setPokerEvents(pe.data || [])
       }).catch(() => {})
     }, 15000)
     return () => clearInterval(id)
@@ -529,12 +577,82 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   }
 
   /* ==================================================================
+   *  POKER EVENT HANDLERS
+   * ================================================================ */
+
+  /* ---- Create poker event ---- */
+  const handleCreatePoker = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!guildId || !pTitle) {
+      alert('Title is required.')
+      return
+    }
+    await api.post(`/admin/guilds/${guildId}/poker-events`, {
+      channel_id: pChannelId,
+      title: pTitle,
+      description: pDescription,
+      mode: pMode,
+      buy_in: pMode === 'pot' ? (pBuyIn ? Number(pBuyIn) : 0) : 0,
+      currency: pCurrency,
+      small_blind: Number(pSmallBlind) || 5,
+      big_blind: Number(pBigBlind) || 10,
+      starting_chips: Number(pStartingChips) || 1000,
+      max_players: Number(pMaxPlayers) || 6,
+      turn_timer: Number(pTurnTimer) || 30,
+    })
+    setPTitle(''); setPDescription(''); setPBuyIn('0.1')
+    setPSmallBlind('5'); setPBigBlind('10'); setPStartingChips('1000')
+    setPMaxPlayers('6'); setPTurnTimer('30')
+    await load()
+  }
+
+  /* ---- Publish poker event ---- */
+  const handlePublishPoker = async (eventId: number) => {
+    if (!guildId) return
+    setPPublishing(eventId)
+    try {
+      await api.post(`/admin/guilds/${guildId}/poker-events/${eventId}/publish`, {
+        channel_id: pPublishChannelId || pChannelId,
+      })
+      await load()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || 'Unknown error'
+      alert(`Failed to publish: ${detail}`)
+    } finally {
+      setPPublishing(null)
+    }
+  }
+
+  /* ---- Delete poker event ---- */
+  const handleDeletePoker = async (eventId: number) => {
+    if (!confirm('Delete this poker event? This cannot be undone.')) return
+    try {
+      await api.delete(`/admin/guilds/${guildId}/poker-events/${eventId}`)
+      await load()
+    } catch {
+      alert('Failed to delete event.')
+    }
+  }
+
+  /* ---- Cancel poker event ---- */
+  const handleCancelPoker = async (eventId: number) => {
+    if (!confirm('Cancel this poker event?')) return
+    try {
+      await api.patch(`/admin/guilds/${guildId}/poker-events/${eventId}/cancel`)
+      await load()
+    } catch {
+      alert('Failed to cancel event.')
+    }
+  }
+
+  /* ==================================================================
    *  UNIFIED STATS
    * ================================================================ */
   const totalVoteActive = voteEvents.filter(e => e.status === 'active').length
   const totalRaceActive = raceEvents.filter(e => e.status === 'active').length
-  const totalEvents = voteEvents.length + raceEvents.length
-  const totalActive = totalVoteActive + totalRaceActive
+  const totalPokerActive = pokerEvents.filter(e => e.status === 'active').length
+  const totalEvents = voteEvents.length + raceEvents.length + pokerEvents.length
+  const totalActive = totalVoteActive + totalRaceActive + totalPokerActive
 
   /* ==================================================================
    *  RENDER: empty
@@ -564,7 +682,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       </div>
 
       <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
-        Create and manage all events — photo-voting challenges and horse race betting — from one place.
+        Create and manage all events — photo-voting challenges, horse race betting, and poker tables — from one place.
       </p>
 
       {/* ---- Summary bar ---- */}
@@ -585,6 +703,10 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           <span className="em-stat-value">{raceEvents.length}</span>
           <span className="em-stat-label">🏇 Race</span>
         </div>
+        <div className="em-stat">
+          <span className="em-stat-value">{pokerEvents.length}</span>
+          <span className="em-stat-label">🃏 Poker</span>
+        </div>
       </div>
 
       {/* ---- Filter tabs ---- */}
@@ -594,6 +716,9 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
         </button>
         <button className={`em-tab ${tab === 'vote' ? 'active' : ''}`} onClick={() => setTab('vote')}>
           🗳️ Vote Events ({voteEvents.length})
+        <button className={`em-tab ${tab === 'poker' ? 'active' : ''}`} onClick={() => setTab('poker')}>
+          🃏 Poker ({pokerEvents.length})
+        </button>
         </button>
         <button className={`em-tab ${tab === 'race' ? 'active' : ''}`} onClick={() => setTab('race')}>
           🏇 Horse Race ({raceEvents.length})
@@ -936,6 +1061,88 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       )}
 
       {/* ============================================================ */}
+      {/*  POKER EVENTS TABLE                                           */}
+      {/* ============================================================ */}
+      {(tab === 'all' || tab === 'poker') && (
+        <div className="card em-section" style={{ marginBottom: 24 }}>
+          <div className="card-header">
+            <div className="card-title">🃏 Poker Events ({pokerEvents.length})</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Publish to:</span>
+              <select className="form-select" style={{ width: 160, fontSize: 12 }} value={pPublishChannelId} onChange={e => setPPublishChannelId(e.target.value)}>
+                {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {pokerEvents.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">🃏</div>
+              <div className="empty-state-text">No poker events yet. Create one below.</div>
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Title</th>
+                  <th>Mode</th>
+                  <th>Buy-in</th>
+                  <th>Blinds</th>
+                  <th>Seats</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pokerEvents.map(ev => (
+                  <tr key={ev.id}>
+                    <td>#{ev.id}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ev.title}</td>
+                    <td><span style={{ fontSize: 11 }}>{ev.mode === 'pot' ? '🏦 Pot' : '🎮 Casual'}</span></td>
+                    <td>
+                      <span className="sol-badge">
+                        {ev.mode === 'pot' && ev.buy_in > 0 ? `${ev.buy_in} ${ev.currency}` : 'Free'}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 12 }}>{ev.small_blind}/{ev.big_blind}</td>
+                    <td>{ev.current_players}/{ev.max_players}</td>
+                    <td><span className={badgeClass(ev.status)}>{ev.status}</span></td>
+                    <td style={{ fontSize: 12 }}>{formatTimeAgo(ev.created_at)}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {isOwner && ev.status === 'active' && !ev.message_id && (
+                          <button className="btn btn-primary btn-sm"
+                                  disabled={pPublishing === ev.id}
+                                  onClick={() => handlePublishPoker(ev.id)}>
+                            {pPublishing === ev.id ? '...' : 'Publish'}
+                          </button>
+                        )}
+                        {ev.message_id && (
+                          <span style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '4px 6px' }}>✅ Published</span>
+                        )}
+                        {isOwner && ev.status === 'active' && (
+                          <button className="btn btn-secondary btn-sm" onClick={() => handleCancelPoker(ev.id)} style={{ color: '#f0ad4e' }}>
+                            Cancel
+                          </button>
+                        )}
+                        {isOwner && (
+                          <button className="btn btn-danger btn-sm" onClick={() => handleDeletePoker(ev.id)}>
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ============================================================ */}
       {/*  CREATE EVENT FORM (owner only)                               */}
       {/* ============================================================ */}
       {isOwner && (
@@ -950,6 +1157,10 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               <button className={`em-create-tab ${createType === 'race' ? 'active' : ''}`}
                       onClick={() => setCreateType('race')}>
                 🏇 Horse Race
+              </button>
+              <button className={`em-create-tab ${createType === 'poker' ? 'active' : ''}`}
+                      onClick={() => setCreateType('poker')}>
+                🃏 Poker
               </button>
             </div>
           </div>
@@ -1245,6 +1456,116 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               </div>
             </form>
           )}
+
+          {/* ======================================================== */}
+          {/*  Poker Create Form                                         */}
+          {/* ======================================================== */}
+          {createType === 'poker' && (
+            <form onSubmit={handleCreatePoker}>
+              {/* Row 1: Title + Channel */}
+              <div className="form-row">
+                <div className="form-group" style={{ flex: 2 }}>
+                  <label className="form-label">Title *</label>
+                  <input className="form-input" value={pTitle} onChange={e => setPTitle(e.target.value)}
+                         placeholder="e.g. Friday Night Poker" required />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Channel *</label>
+                  <select className="form-select" value={pChannelId} onChange={e => setPChannelId(e.target.value)}>
+                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <textarea className="form-textarea" value={pDescription} onChange={e => setPDescription(e.target.value)}
+                          placeholder="Describe the poker event..." rows={2} />
+              </div>
+
+              {/* Mode + Buy-in */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Mode</label>
+                  <select className="form-select" value={pMode} onChange={e => setPMode(e.target.value as 'pot' | 'casual')}>
+                    <option value="pot">🏦 Pot (real SOL buy-in)</option>
+                    <option value="casual">🎮 Casual (play money)</option>
+                  </select>
+                </div>
+                {pMode === 'pot' && (
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Buy-in Amount</label>
+                      <input className="form-input" type="number" step="any" min="0" value={pBuyIn}
+                             onChange={e => setPBuyIn(e.target.value)} placeholder="0.1" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Currency</label>
+                      <select className="form-select" value={pCurrency} onChange={e => setPCurrency(e.target.value)}>
+                        <option value="SOL">SOL</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Blinds + Chips */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Small Blind</label>
+                  <input className="form-input" type="number" min="1" value={pSmallBlind}
+                         onChange={e => setPSmallBlind(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Big Blind</label>
+                  <input className="form-input" type="number" min="2" value={pBigBlind}
+                         onChange={e => setPBigBlind(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Starting Chips</label>
+                  <input className="form-input" type="number" min="100" value={pStartingChips}
+                         onChange={e => setPStartingChips(e.target.value)} />
+                </div>
+              </div>
+
+              {/* Players + Timer */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Max Players</label>
+                  <input className="form-input" type="number" min="2" max="8" value={pMaxPlayers}
+                         onChange={e => setPMaxPlayers(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Turn Timer (sec)</label>
+                  <input className="form-input" type="number" min="10" max="120" value={pTurnTimer}
+                         onChange={e => setPTurnTimer(e.target.value)} />
+                </div>
+              </div>
+
+              {/* Chip value preview */}
+              {pMode === 'pot' && Number(pBuyIn) > 0 && Number(pStartingChips) > 0 && (
+                <div style={{
+                  background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 12px',
+                  border: '1px solid var(--border-color)', marginTop: 8, fontSize: 12,
+                  color: 'var(--text-secondary)',
+                }}>
+                  💡 Each chip = <strong>{(Number(pBuyIn) / Number(pStartingChips)).toFixed(6)} {pCurrency}</strong>
+                  {' • '}90% of total pot paid to winners • 10% house cut
+                </div>
+              )}
+
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button type="submit" className="btn btn-primary" disabled={!pTitle}>
+                  Create Poker Event
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {!pTitle ? 'Enter a title' : '✅ Ready'}
+                </span>
+              </div>
+            </form>
+          )}
         </div>
       )}
 
@@ -1256,7 +1577,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           <div className="card-title">How DCB Events Work</div>
         </div>
         <div style={{ padding: '4px 0', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24 }}>
             <div>
               <h4 style={{ color: 'var(--text-primary)', marginBottom: 8, fontSize: 14 }}>🗳️ Vote Events</h4>
               <p><strong>1. Create</strong> — Upload images, set a prize pool, and secretly nominate your winning image.</p>
@@ -1274,6 +1595,16 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               <p><strong>5. Instant Payouts</strong> — The winning horse crosses first and riders split the prize. 💰</p>
               <p style={{ marginTop: 8 }}>🏠 <strong>House-funded</strong> — Fixed prize from treasury.</p>
               <p>🏦 <strong>Pot Split</strong> — Entry fees pooled, winners split.</p>
+            </div>
+            <div>
+              <h4 style={{ color: 'var(--text-primary)', marginBottom: 8, fontSize: 14 }}>🃏 Poker</h4>
+              <p><strong>1. Create</strong> — Set blinds, buy-in, and table size. Choose pot or casual mode.</p>
+              <p><strong>2. Publish</strong> — An interactive Discord post is sent with a Join Table button.</p>
+              <p><strong>3. Join</strong> — Players click Join and pay the SOL buy-in (pot mode).</p>
+              <p><strong>4. Play</strong> — Full Texas Hold'em — bet, call, raise, bluff, and go all-in! 🃏</p>
+              <p><strong>5. Payouts</strong> — When the table closes, chips convert to SOL. 90% paid to winners. 💰</p>
+              <p style={{ marginTop: 8 }}>🏦 <strong>Pot mode</strong> — Real SOL buy-in, winner-takes-most.</p>
+              <p>🎮 <strong>Casual</strong> — Play money, just for fun.</p>
             </div>
           </div>
         </div>

@@ -8,10 +8,17 @@ function resolveApiBase(): string {
     const envBase = import.meta.env.VITE_API_BASE
     if (envBase) return envBase
   } catch (_) {}
-  // 2. Detect GitHub Pages at runtime
+  // 2. Detect GitHub Pages or Capacitor (mobile app) at runtime
   if (typeof window !== 'undefined') {
     const h = window.location.hostname || ''
     const p = window.location.pathname || ''
+    const proto = window.location.protocol || ''
+    // Capacitor Android serves from https://localhost, Capacitor iOS from capacitor://localhost
+    // Also detect file:// protocol for fallback
+    const isCapacitor = proto === 'capacitor:' || proto === 'file:' || (h === 'localhost' && !p.startsWith('/api'))
+    if (isCapacitor) {
+      return PROD_API_BASE
+    }
     if (h.endsWith('github.io') || p.startsWith('/discord-crypto-task-payroll-bot')) {
       return PROD_API_BASE
     }

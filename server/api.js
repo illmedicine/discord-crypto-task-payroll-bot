@@ -96,8 +96,14 @@ module.exports = (client) => {
       if (!guildId) return res.status(400).json({ error: 'missing_guild_id' });
       const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
       const ownerId = guild?.ownerId;
-      if (!ownerId) return res.status(403).json({ error: 'cannot_determine_owner' });
-      if (!req.user || req.user.id !== ownerId) return res.status(403).json({ error: 'forbidden_not_guild_owner' });
+      if (!ownerId) {
+        console.warn(`[requireGuildOwner-bot] Cannot determine owner for guild ${guildId}`);
+        return res.status(403).json({ error: 'cannot_determine_owner', message: 'Cannot determine guild owner. The bot may not have access to this server.' });
+      }
+      if (!req.user || req.user.id !== ownerId) {
+        console.warn(`[requireGuildOwner-bot] User ${req.user?.id} is not owner of guild ${guildId} (owner: ${ownerId})`);
+        return res.status(403).json({ error: 'forbidden_not_guild_owner', message: 'You must be the server owner to perform this action.' });
+      }
       req.guild = guild;
       return next();
     } catch (err) {
@@ -945,12 +951,7 @@ module.exports = (client) => {
 
       // 4. Fetch SOL price
       const crypto = require('../utils/crypto');
-      let solPrice;
-      try {
-        const priceRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
-        const priceData = await priceRes.json();
-        solPrice = priceData?.solana?.usd;
-      } catch (_) {}
+      const solPrice = await crypto.getSolanaPrice();
       if (!solPrice) {
         return res.status(502).json({ error: 'price_unavailable', message: 'Unable to fetch SOL price. Try again.' });
       }
@@ -1139,8 +1140,20 @@ module.exports = (client) => {
             'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
             { timeout: 8000 }
           );
-          return data?.solana?.usd || 0;
-        } catch { return 0; }
+          if (data?.solana?.usd) return data.solana.usd;
+        } catch (_) {}
+        
+        try {
+          const { data } = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 8000 });
+          if (data?.data?.amount) return parseFloat(data.data.amount);
+        } catch (_) {}
+        
+        try {
+          const { data } = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 8000 });
+          if (data?.result?.SOLUSD?.c?.[0]) return parseFloat(data.result.SOLUSD.c[0]);
+        } catch (_) {}
+        
+        return 0;
       }
 
       // Fetch SOL price + wallet balances (best-effort)
