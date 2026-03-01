@@ -518,6 +518,50 @@ db.serialize(() => {
 
   // Migration: add qualification_url to gambling_events
   db.run(`ALTER TABLE gambling_events ADD COLUMN qualification_url TEXT`, () => {})
+
+  // ---- Poker Events tables ----
+  db.run(
+    `CREATE TABLE IF NOT EXISTS poker_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      message_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      mode TEXT DEFAULT 'pot',
+      buy_in REAL DEFAULT 0,
+      currency TEXT DEFAULT 'SOL',
+      small_blind INTEGER DEFAULT 5,
+      big_blind INTEGER DEFAULT 10,
+      starting_chips INTEGER DEFAULT 1000,
+      max_players INTEGER DEFAULT 6,
+      turn_timer INTEGER DEFAULT 30,
+      current_players INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      created_by TEXT NOT NULL,
+      ended_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  )
+
+  db.run(
+    `CREATE TABLE IF NOT EXISTS poker_event_players (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      poker_event_id INTEGER NOT NULL,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      wallet_address TEXT,
+      buy_in_amount REAL DEFAULT 0,
+      final_chips INTEGER DEFAULT 0,
+      payout_amount REAL DEFAULT 0,
+      payment_status TEXT DEFAULT 'none',
+      entry_tx_signature TEXT,
+      payout_tx_signature TEXT,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(poker_event_id, user_id),
+      FOREIGN KEY(poker_event_id) REFERENCES poker_events(id)
+    )`
+  )
 })
 
 function run(sql, params = []) {

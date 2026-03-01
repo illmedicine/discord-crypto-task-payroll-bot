@@ -587,23 +587,28 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       alert('Title is required.')
       return
     }
-    await api.post(`/admin/guilds/${guildId}/poker-events`, {
-      channel_id: pChannelId,
-      title: pTitle,
-      description: pDescription,
-      mode: pMode,
-      buy_in: pMode === 'pot' ? (pBuyIn ? Number(pBuyIn) : 0) : 0,
-      currency: pCurrency,
-      small_blind: Number(pSmallBlind) || 5,
-      big_blind: Number(pBigBlind) || 10,
-      starting_chips: Number(pStartingChips) || 1000,
-      max_players: Number(pMaxPlayers) || 6,
-      turn_timer: Number(pTurnTimer) || 30,
-    })
-    setPTitle(''); setPDescription(''); setPBuyIn('0.1')
-    setPSmallBlind('5'); setPBigBlind('10'); setPStartingChips('1000')
-    setPMaxPlayers('6'); setPTurnTimer('30')
-    await load()
+    try {
+      await api.post(`/admin/guilds/${guildId}/poker-events`, {
+        channel_id: pChannelId,
+        title: pTitle,
+        description: pDescription,
+        mode: pMode,
+        buy_in: pMode === 'pot' ? (pBuyIn ? Number(pBuyIn) : 0) : 0,
+        currency: pCurrency,
+        small_blind: Number(pSmallBlind) || 5,
+        big_blind: Number(pBigBlind) || 10,
+        starting_chips: Number(pStartingChips) || 1000,
+        max_players: Number(pMaxPlayers) || 6,
+        turn_timer: Number(pTurnTimer) || 30,
+      })
+      setPTitle(''); setPDescription(''); setPBuyIn('0.1')
+      setPSmallBlind('5'); setPBigBlind('10'); setPStartingChips('1000')
+      setPMaxPlayers('6'); setPTurnTimer('30')
+      await load()
+    } catch (err: any) {
+      const detail = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Unknown error'
+      alert(`Failed to create poker event: ${detail}`)
+    }
   }
 
   /* ---- Publish poker event ---- */
