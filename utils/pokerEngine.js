@@ -372,22 +372,20 @@ function playerAnte(table, discordId) {
   if (table.phase !== 'ante') return { error: 'Not in ante phase.' };
   const seatIndex = table.seats.findIndex(s => s.discordId === discordId);
   if (seatIndex === -1) return { error: 'You are not at this table.' };
+  if (table.seats[seatIndex].folded) return { error: 'You have already folded.' };
   if (table.antedPlayers.has(discordId)) return { error: 'You have already anted up.' };
 
   table.antedPlayers.add(discordId);
   table.seats[seatIndex].lastAction = 'Ante Up ✅';
   table.lastActivity = Date.now();
 
-  // Check if all players have anted
-  if (isAnteComplete(table)) {
-    return completeAnte(table);
-  }
-
-  return { ok: true, phase: 'ante', allAnted: false };
+  // Return whether all non-folded players have anted (handler completes transition)
+  const allAnted = isAnteComplete(table);
+  return { ok: true, phase: 'ante', allAnted };
 }
 
 function isAnteComplete(table) {
-  return table.seats.every(s => table.antedPlayers.has(s.discordId));
+  return table.seats.filter(s => !s.folded).every(s => table.antedPlayers.has(s.discordId));
 }
 
 function completeAnte(table) {
@@ -800,6 +798,7 @@ module.exports = {
   playerAnte,
   isAnteComplete,
   completeAnte,
+  finishHand,
   playerAction,
   getValidActions,
   evaluateHand,

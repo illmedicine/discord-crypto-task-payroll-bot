@@ -14,7 +14,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   createTable, addPlayer, removePlayer, startHand,
-  playerAction, getValidActions, playerAnte, completeAnte,
+  playerAction, getValidActions, playerAnte, completeAnte, finishHand, isAnteComplete,
 } = require('../utils/pokerEngine');
 const {
   buildTableEmbed, buildTableComponents, buildHoleCardEmbed,
@@ -680,25 +680,26 @@ async function handlePokerButton(interaction) {
         if (!seat) {
           return interaction.reply({ content: '❌ You are not at this table.', ephemeral: true });
         }
+        if (seat.folded) {
+          return interaction.reply({ content: '❌ You have already folded.', ephemeral: true });
+        }
         seat.folded = true;
+        seat.lastAction = 'Fold';
         await interaction.reply({ content: `🚫 **${seat.displayName}** folded during ante.` });
         // Check if only one non-folded player remains
         const activePlayers = table.seats.filter(s => !s.folded);
         if (activePlayers.length < 2) {
           // Award pot to last standing player and finish hand
-          completeAnte(table);
+          finishHand(table, activePlayers);
           await updateTableMessage(table, interaction.channel);
+        } else if (isAnteComplete(table)) {
+          // All remaining non-folded players have already anted
+          completeAnte(table);
+          await sendHoleCards(table, interaction.channel);
+          await updateTableMessage(table, interaction.channel);
+          startTurnTimer(table, interaction.channel);
         } else {
-          // Check if all remaining non-folded players have anted
-          const allRemainingAnted = activePlayers.every(s => table.antedPlayers && table.antedPlayers.has(s.discordId));
-          if (allRemainingAnted) {
-            completeAnte(table);
-            await sendHoleCards(table, interaction.channel);
-            await updateTableMessage(table, interaction.channel);
-            startTurnTimer(table, interaction.channel);
-          } else {
-            await updateTableMessage(table, interaction.channel);
-          }
+          await updateTableMessage(table, interaction.channel);
         }
         break;
       }

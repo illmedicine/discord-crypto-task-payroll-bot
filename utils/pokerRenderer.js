@@ -19,7 +19,7 @@ function renderCards(cards, hidden = false) {
 
 function renderCommunityCards(cards) {
   const shown = cards.map(c => cardToEmoji(c));
-  while (shown.length < 5) shown.push('`??`');
+  while (shown.length < 5) shown.push(CARD_BACK);
   return shown.join('  ');
 }
 
@@ -162,7 +162,9 @@ function buildTableEmbed(table) {
   // Community cards
   let communityDisplay;
   if (table.phase === 'preflop') {
-    communityDisplay = '`??`  `??`  `??`  `??`  `??`';
+    communityDisplay = `${CARD_BACK}  ${CARD_BACK}  ${CARD_BACK}  ${CARD_BACK}  ${CARD_BACK}`;
+  } else if ((table.phase === 'finished' || table.phase === 'showdown') && table.communityCards.length === 0) {
+    communityDisplay = '*No community cards dealt*';
   } else {
     communityDisplay = renderCommunityCards(table.communityCards);
   }
