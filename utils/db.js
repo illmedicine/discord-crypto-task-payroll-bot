@@ -2718,6 +2718,101 @@ const migrateSecretsToEncrypted = () => {
   });
 };
 
+// ─── Poker Event DB Functions ──────────────────────────────────────────────
+const getPokerEvent = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.get(`SELECT * FROM poker_events WHERE id = ?`, [eventId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+const getPokerEventPlayer = (eventId, userId) => {
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM poker_event_players WHERE poker_event_id = ? AND user_id = ?`,
+      [eventId, userId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+};
+
+const updatePokerEventStatus = (eventId, status) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE poker_events SET status = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [status, eventId],
+      function (err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      }
+    );
+  });
+};
+
+const updatePokerEventMessageId = (eventId, messageId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE poker_events SET message_id = ? WHERE id = ?`,
+      [messageId, eventId],
+      function (err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      }
+    );
+  });
+};
+
+const updatePokerEventCurrentPlayers = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE poker_events SET current_players = (SELECT COUNT(*) FROM poker_event_players WHERE poker_event_id = ?) WHERE id = ?`,
+      [eventId, eventId],
+      function (err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      }
+    );
+  });
+};
+
+const upsertPokerEventPlayer = (eventId, guildId, userId, walletAddress, buyInAmount, paymentStatus, entryTxSig) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT OR REPLACE INTO poker_event_players (poker_event_id, guild_id, user_id, wallet_address, buy_in_amount, payment_status, entry_tx_signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [eventId, guildId, userId, walletAddress, buyInAmount, paymentStatus, entryTxSig],
+      function (err) {
+        if (err) reject(err);
+        else resolve({ lastID: this.lastID });
+      }
+    );
+  });
+};
+
+// Generic promisified helpers for ad-hoc queries
+const dbRun = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve({ changes: this.changes, lastID: this.lastID });
+    });
+  });
+};
+
+const dbGet = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
 module.exports = {
   db,
   initDb,
@@ -2849,4 +2944,13 @@ module.exports = {
   deleteGamblingEvent,
   addGamblingEventQualification,
   getGamblingEventQualification,
+  // Poker Event functions
+  getPokerEvent,
+  getPokerEventPlayer,
+  updatePokerEventStatus,
+  updatePokerEventMessageId,
+  updatePokerEventCurrentPlayers,
+  upsertPokerEventPlayer,
+  dbRun,
+  dbGet,
 };

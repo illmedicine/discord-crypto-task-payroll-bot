@@ -633,6 +633,11 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: '❌ An error occurred.', ephemeral: true });
           }
         }
+      } else {
+        console.error('❌ Poker command not loaded — cannot handle poker button:', interaction.customId);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '❌ Poker system is temporarily unavailable. Please try again later.', ephemeral: true });
+        }
       }
       return;
     }

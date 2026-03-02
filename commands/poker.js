@@ -99,10 +99,9 @@ async function processPokerPayouts(table, channel) {
 
       // Get player wallet
       const userData = db.getUser ? await db.getUser(seat.discordId) : null;
-      const playerRecord = await db.get?.(
-        'SELECT wallet_address FROM poker_event_players WHERE poker_event_id = ? AND user_id = ?',
-        [table.eventId, seat.discordId]
-      );
+      const playerRecord = db.getPokerEventPlayer
+        ? await db.getPokerEventPlayer(table.eventId, seat.discordId)
+        : null;
       const recipientAddr = playerRecord?.wallet_address || userData?.solana_address;
 
       if (!recipientAddr) {
@@ -121,16 +120,16 @@ async function processPokerPayouts(table, channel) {
       if (result && result.success) {
         payoutResults.push({ user: seat.displayName, amount: payoutSol, success: true, tx: result.signature });
         // Update DB record
-        if (db.run) {
-          await db.run(
+        if (db.dbRun) {
+          await db.dbRun(
             'UPDATE poker_event_players SET final_chips = ?, payout_amount = ?, payment_status = ?, payout_tx_signature = ? WHERE poker_event_id = ? AND user_id = ?',
             [seat.chips, payoutSol, 'paid', result.signature || null, table.eventId, seat.discordId]
           ).catch(() => {});
         }
       } else {
         payoutResults.push({ user: seat.displayName, success: false, reason: result?.error || 'Transfer failed' });
-        if (db.run) {
-          await db.run(
+        if (db.dbRun) {
+          await db.dbRun(
             'UPDATE poker_event_players SET final_chips = ?, payment_status = ? WHERE poker_event_id = ? AND user_id = ?',
             [seat.chips, 'payout_failed', table.eventId, seat.discordId]
           ).catch(() => {});
@@ -139,8 +138,8 @@ async function processPokerPayouts(table, channel) {
     }
 
     // Update event status
-    if (db.run) {
-      await db.run('UPDATE poker_events SET status = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ?', ['ended', table.eventId]).catch(() => {});
+    if (db.updatePokerEventStatus) {
+      await db.updatePokerEventStatus(table.eventId, 'ended').catch(() => {});
     }
 
     // Post payout summary
@@ -211,18 +210,15 @@ async function collectBuyIn(table, discordId) {
     }
 
     // Record in DB
-    if (db.run) {
-      await db.run(
-        `INSERT OR REPLACE INTO poker_event_players (poker_event_id, guild_id, user_id, wallet_address, buy_in_amount, payment_status, entry_tx_signature)
-         VALUES (?, ?, ?, ?, ?, 'committed', ?)`,
-        [table.eventId, table.guildId, discordId, userData.solana_address, table.buyIn, result.signature || null]
+    if (db.upsertPokerEventPlayer) {
+      await db.upsertPokerEventPlayer(
+        table.eventId, table.guildId, discordId, userData.solana_address, table.buyIn, 'committed', result.signature || null
       ).catch(() => {});
 
       // Update current_players count
-      await db.run(
-        'UPDATE poker_events SET current_players = (SELECT COUNT(*) FROM poker_event_players WHERE poker_event_id = ?) WHERE id = ?',
-        [table.eventId, table.eventId]
-      ).catch(() => {});
+      if (db.updatePokerEventCurrentPlayers) {
+        await db.updatePokerEventCurrentPlayers(table.eventId).catch(() => {});
+      }
     }
 
     return { success: true, txSignature: result.signature };
@@ -664,7 +660,7 @@ async function handleEventJoin(interaction, eventId) {
   await interaction.deferReply({ ephemeral: true });
 
   // Load event from DB
-  const event = await db.get?.('SELECT * FROM poker_events WHERE id = ?', [eventId]);
+  const event = db.getPokerEvent ? await db.getPokerEvent(eventId) : null;
   if (!event) {
     return interaction.editReply({ content: '❌ Poker event not found.' });
   }
