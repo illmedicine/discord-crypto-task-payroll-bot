@@ -5,12 +5,51 @@ const { processGamblingEvent, HORSE_PRESETS } = require('../utils/gamblingEventP
 const { getGuildWalletWithFallback } = require('../utils/walletSync');
 
 // Build identifier for deployment verification
-const GAMBLING_BUILD = '20260224a';
+const GAMBLING_BUILD = '20260224b';
 console.log(`[GamblingEvent] Module loaded (build: ${GAMBLING_BUILD})`);
 
-// ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
+// ---- Backend config (shared by all fallback functions) ----
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
 const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+
+// ---- Backend fallback: fetch user wallet from backend DB ----
+async function fetchUserWalletFromBackend(discordId) {
+  if (!DCB_BACKEND_URL) return null;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (DCB_INTERNAL_SECRET) headers['x-dcb-internal-secret'] = DCB_INTERNAL_SECRET;
+    const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-lookup/${discordId}`;
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.solana_address) {
+        console.log(`[GamblingEvent] Backend user-wallet fallback found address for ${discordId}: ${data.solana_address.slice(0, 8)}...`);
+        // Sync to local DB so future lookups work
+        try { await db.addUser(discordId, data.username || 'unknown', data.solana_address); } catch (_) {}
+        return { solana_address: data.solana_address, username: data.username, wallet_secret: null };
+      }
+    }
+  } catch (err) {
+    console.warn(`[GamblingEvent] Backend user-wallet fallback error for ${discordId}:`, err?.message);
+  }
+  return null;
+}
+
+async function getUserWithFallback(discordId) {
+  let userData = await db.getUser(discordId);
+  if (userData && userData.solana_address) return userData;
+  // Local DB missing wallet — try backend
+  const backendUser = await fetchUserWalletFromBackend(discordId);
+  if (backendUser) {
+    // Re-read from local DB after sync (to pick up any existing wallet_secret)
+    userData = await db.getUser(discordId);
+    if (userData && userData.solana_address) return userData;
+    return backendUser;
+  }
+  return userData; // null or missing address
+}
+
+// ---- Backend fallback: fetch gambling event from backend DB and cache locally ----
 
 async function fetchGamblingEventFromBackend(eventId, attempt = 1) {
   if (!DCB_BACKEND_URL) {
@@ -551,8 +590,8 @@ module.exports = {
       const chosenSlot = slots.find(s => s.slot_number === slotNumber);
       const horseName = chosenSlot?.label || `Horse #${slotNumber}`;
 
-      // Check user has a wallet with private key connected
-      const userData = await db.getUser(interaction.user.id);
+      // Check user has a wallet with private key connected (with backend fallback)
+      const userData = await getUserWithFallback(interaction.user.id);
       if (!userData || !userData.solana_address) {
         return interaction.editReply({
           content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\` to connect your wallet.\n\nYour address will be auto-derived from the key.`
@@ -683,8 +722,8 @@ module.exports = {
 
     const entryFee = event.entry_fee || 0;
 
-    // 1. Get user + wallet with private key
-    const userData = await db.getUser(interaction.user.id);
+    // 1. Get user + wallet with private key (with backend fallback)
+    const userData = await getUserWithFallback(interaction.user.id);
     if (!userData || !userData.wallet_secret) {
       return interaction.editReply({
         content: '❌ **Private Key Required!** Use `/user-wallet connect private-key:YOUR_KEY` to save your key, then try again.',

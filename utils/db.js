@@ -1132,7 +1132,10 @@ const deleteBulkTask = (bulkTaskId) => {
 const addUser = (discordId, username, solanaAddress) => {
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT OR REPLACE INTO users (discord_id, username, solana_address) VALUES (?, ?, ?)`,
+      `INSERT INTO users (discord_id, username, solana_address) VALUES (?, ?, ?)
+       ON CONFLICT(discord_id) DO UPDATE SET
+         username = excluded.username,
+         solana_address = excluded.solana_address`,
       [discordId, username, solanaAddress],
       (err) => {
         if (err) reject(err);

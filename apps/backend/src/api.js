@@ -3665,6 +3665,33 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot looks up user wallet from backend DB (fallback when bot DB missing user)
+  app.get('/api/internal/user-wallet-lookup/:discordId', requireInternal, async (req, res) => {
+    try {
+      const { discordId } = req.params
+      if (!discordId) return res.status(400).json({ error: 'missing_discord_id' })
+      const row = await db.get(
+        `SELECT discord_id, solana_address, username FROM user_wallets WHERE discord_id = ?`,
+        [discordId]
+      )
+      if (row?.solana_address) {
+        return res.json({ solana_address: row.solana_address, username: row.username })
+      }
+      // Also check users table as fallback
+      const userRow = await db.get(
+        `SELECT discord_id, solana_address, username FROM users WHERE discord_id = ? AND solana_address IS NOT NULL`,
+        [discordId]
+      ).catch(() => null)
+      if (userRow?.solana_address) {
+        return res.json({ solana_address: userRow.solana_address, username: userRow.username })
+      }
+      res.json({ solana_address: null })
+    } catch (err) {
+      console.error('[internal] user-wallet-lookup error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot pulls wallet from backend DB (authoritative when set via web UI)
   app.get('/api/internal/guild-wallet/:guildId', requireInternal, async (req, res) => {
     try {
