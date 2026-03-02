@@ -380,7 +380,10 @@ module.exports = {
       .setDescription('Leave the poker table'))
     .addSubcommand(sub => sub
       .setName('status')
-      .setDescription('Show the current table status')),
+      .setDescription('Show the current table status'))
+    .addSubcommand(sub => sub
+      .setName('close')
+      .setDescription('Close/destroy the poker table in this channel')),
 
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
@@ -390,6 +393,7 @@ module.exports = {
       case 'join': return handleJoin(interaction);
       case 'leave': return handleLeave(interaction);
       case 'status': return handleStatus(interaction);
+      case 'close': return handleClose(interaction);
     }
   },
 
@@ -410,11 +414,17 @@ module.exports = {
 async function handleCreate(interaction) {
   const channelId = interaction.channelId;
 
-  if (tables.has(channelId)) {
-    return interaction.reply({
-      content: '❌ There is already an active poker table in this channel. Use `/poker status` to see it.',
-      ephemeral: true,
-    });
+  const existingTable = tables.get(channelId);
+  if (existingTable) {
+    // Auto-destroy if the existing table is finished or has no players
+    if (existingTable.phase === 'finished' || existingTable.phase === 'showdown' || existingTable.seats.length === 0) {
+      destroyTable(existingTable);
+    } else {
+      return interaction.reply({
+        content: '❌ There is already an active poker table in this channel. Use `/poker close` to close it first.',
+        ephemeral: true,
+      });
+    }
   }
 
   const buyIn = interaction.options.getInteger('buy-in') || 1000;
@@ -502,6 +512,23 @@ async function handleStatus(interaction) {
 
   const embed = buildTableEmbed(table);
   await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleClose(interaction) {
+  const table = getTableByChannel(interaction.channelId);
+  if (!table) {
+    return interaction.reply({ content: '❌ No poker table in this channel.', ephemeral: true });
+  }
+
+  // Only the host or a server admin can close
+  const isHost = interaction.user.id === table.hostId;
+  const isAdmin = interaction.memberPermissions?.has('Administrator');
+  if (!isHost && !isAdmin) {
+    return interaction.reply({ content: '❌ Only the table host or a server admin can close the table.', ephemeral: true });
+  }
+
+  destroyTable(table);
+  await interaction.reply({ content: '🔒 **Poker table closed.** You can now create a new one with `/poker create`.' });
 }
 
 // ─── Button Interaction Handler ─────────────────────────────────────────────
@@ -763,8 +790,14 @@ async function handleEventJoin(interaction, eventId) {
   }
 
   // Check if table already exists for this channel
-  if (tables.has(interaction.channelId)) {
-    return interaction.editReply({ content: '❌ There is already a poker table in this channel.' });
+  const existingTable = tables.get(interaction.channelId);
+  if (existingTable) {
+    // Auto-destroy if finished/stale
+    if (existingTable.phase === 'finished' || existingTable.phase === 'showdown' || existingTable.seats.length === 0) {
+      destroyTable(existingTable);
+    } else {
+      return interaction.editReply({ content: '❌ There is already an active poker table in this channel. Close it first or join the existing one.' });
+    }
   }
 
   const isCrypto = event.mode === 'pot' && event.buy_in > 0;
