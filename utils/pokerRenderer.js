@@ -4,7 +4,7 @@
  * player positions, community cards, and pot display.
  */
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { cardToEmoji, getValidActions, HAND_NAMES } = require('./pokerEngine');
+const { cardToEmoji, getValidActions, isAnteComplete, HAND_NAMES } = require('./pokerEngine');
 
 // ─── Card Display ───────────────────────────────────────────────────────────
 
@@ -60,6 +60,7 @@ function buildTableEmbed(table) {
   // Title & color based on phase
   const phaseNames = {
     waiting: '⏳ Waiting for Players',
+    ante: '💰 Place Your Wagers',
     preflop: '🃏 Pre-Flop',
     flop: '🃏 The Flop',
     turn: '🃏 The Turn',
@@ -70,6 +71,7 @@ function buildTableEmbed(table) {
 
   const phaseColors = {
     waiting: 0x3498db,
+    ante: 0x9b59b6,
     preflop: 0x2ecc71,
     flop: 0x2ecc71,
     turn: 0xf39c12,
@@ -120,6 +122,38 @@ function buildTableEmbed(table) {
     embed.addFields({ name: '⚙️ Table Settings', value: settings, inline: false });
 
     embed.setFooter({ text: `${table.seats.length >= 2 ? '✅ Ready to start! Host can click Start Game.' : `Need ${2 - table.seats.length} more player(s) to start.`}` });
+    return embed;
+  }
+
+  // ── Ante phase (wager before seeing cards) ──
+  if (table.phase === 'ante') {
+    let desc = '```\n';
+    desc += '╔══════════════════════════════════╗\n';
+    desc += '║        🃏  ANTE UP  🃏          ║\n';
+    desc += '║  Place your wager to see      ║\n';
+    desc += '║  your cards!                   ║\n';
+    desc += '╚══════════════════════════════════╝\n';
+    desc += '```\n';
+    desc += `**Cards Dealt:** ${CARD_BACK} ${CARD_BACK}  —  *face down*\n\n`;
+    desc += `**Pot:** 💰 **$${table.pot.toLocaleString()}**\n`;
+
+    embed.setDescription(desc);
+
+    // Show who has anted and who hasn't
+    const antedSet = table.antedPlayers || new Set();
+    const playerLines = table.seats.map((seat, i) => {
+      const hasAnted = antedSet.has(seat.discordId);
+      const icon = hasAnted ? '✅' : '⏳';
+      const status = hasAnted ? '*Wager placed!*' : '*Waiting...*';
+      const posTag = getPositionTag(table, i);
+      return `${icon} **${seat.displayName}**${posTag} — $${seat.chips.toLocaleString()} — ${status}`;
+    }).join('\n');
+
+    const antedCount = antedSet.size;
+    const totalPlayers = table.seats.length;
+    embed.addFields({ name: `🎨 Players (${antedCount}/${totalPlayers} ready)`, value: playerLines, inline: false });
+
+    embed.setFooter({ text: 'Click "Ante Up" to place your wager and see your cards!' });
     return embed;
   }
 
@@ -222,6 +256,27 @@ function buildWaitingButtons(table) {
       .setCustomId(`poker_close_${table.id}`)
       .setLabel('🔒 Close Table')
       .setStyle(ButtonStyle.Danger),
+  );
+  rows.push(row1);
+  return rows;
+}
+
+function buildAnteButtons(table) {
+  const rows = [];
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`poker_ante_${table.id}`)
+      .setLabel('💰 Ante Up!')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`poker_fold_${table.id}`)
+      .setLabel('🚫 Fold')
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`poker_leave_${table.id}`)
+      .setLabel('🚪 Leave Table')
+      .setStyle(ButtonStyle.Secondary),
   );
   rows.push(row1);
   return rows;
@@ -355,6 +410,7 @@ function buildGameButtons(table) {
 
 function buildTableComponents(table) {
   if (table.phase === 'waiting') return buildWaitingButtons(table);
+  if (table.phase === 'ante') return buildAnteButtons(table);
   return buildGameButtons(table);
 }
 

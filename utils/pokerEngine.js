@@ -171,7 +171,7 @@ function getCombinations(arr, k) {
 
 // ─── Game State ─────────────────────────────────────────────────────────────
 
-const PHASES = ['waiting', 'preflop', 'flop', 'turn', 'river', 'showdown', 'finished'];
+const PHASES = ['waiting', 'ante', 'preflop', 'flop', 'turn', 'river', 'showdown', 'finished'];
 
 /**
  * Create a new poker table.
@@ -294,8 +294,9 @@ function startHand(table) {
   table.seats = table.seats.filter(s => s.chips > 0);
 
   table.handNumber++;
-  table.phase = 'preflop';
+  table.phase = 'ante'; // Players must ante up before seeing cards
   table.deck = shuffleDeck(createDeck());
+  table.antedPlayers = new Set(); // Track who has anted
   table.communityCards = [];
   table.pot = 0;
   table.sidePots = [];
@@ -345,13 +346,9 @@ function startHand(table) {
     }
   }
 
-  // First to act preflop: left of BB
-  if (numPlayers === 2) {
-    table.currentPlayerIndex = sbIdx; // heads up: SB acts first preflop
-  } else {
-    table.currentPlayerIndex = (bbIdx + 1) % numPlayers;
-  }
-  table.lastRaiserIndex = bbIdx; // BB is the "last raiser" initially
+  // In ante phase, no one acts yet — waiting for all to click Ante Up
+  table.currentPlayerIndex = -1;
+  table.lastRaiserIndex = bbIdx;
 
   table.lastActivity = Date.now();
   return { ok: true };
@@ -369,13 +366,57 @@ function postBlind(table, seatIndex, amount) {
 }
 
 /**
+ * Player confirms ante — once all players ante, phase moves to preflop.
+ */
+function playerAnte(table, discordId) {
+  if (table.phase !== 'ante') return { error: 'Not in ante phase.' };
+  const seatIndex = table.seats.findIndex(s => s.discordId === discordId);
+  if (seatIndex === -1) return { error: 'You are not at this table.' };
+  if (table.antedPlayers.has(discordId)) return { error: 'You have already anted up.' };
+
+  table.antedPlayers.add(discordId);
+  table.seats[seatIndex].lastAction = 'Ante Up ✅';
+  table.lastActivity = Date.now();
+
+  // Check if all players have anted
+  if (isAnteComplete(table)) {
+    return completeAnte(table);
+  }
+
+  return { ok: true, phase: 'ante', allAnted: false };
+}
+
+function isAnteComplete(table) {
+  return table.seats.every(s => table.antedPlayers.has(s.discordId));
+}
+
+function completeAnte(table) {
+  // Transition from ante to preflop
+  table.phase = 'preflop';
+
+  const numPlayers = table.seats.length;
+  const sbIdx = numPlayers === 2 ? table.dealerIndex : (table.dealerIndex + 1) % numPlayers;
+  const bbIdx = numPlayers === 2 ? (table.dealerIndex + 1) % numPlayers : (table.dealerIndex + 2) % numPlayers;
+
+  // First to act preflop: left of BB
+  if (numPlayers === 2) {
+    table.currentPlayerIndex = sbIdx; // heads up: SB acts first preflop
+  } else {
+    table.currentPlayerIndex = (bbIdx + 1) % numPlayers;
+  }
+  table.lastRaiserIndex = bbIdx; // BB is the "last raiser" initially
+
+  return { ok: true, phase: 'preflop', allAnted: true };
+}
+
+/**
  * Player action: fold, check, call, bet, raise, allin
  */
 function playerAction(table, discordId, action, amount = 0) {
   const seatIndex = table.seats.findIndex(s => s.discordId === discordId);
   if (seatIndex === -1) return { error: 'You are not at this table.' };
   if (table.currentPlayerIndex !== seatIndex) return { error: 'It is not your turn.' };
-  if (table.phase === 'waiting' || table.phase === 'showdown' || table.phase === 'finished') {
+  if (table.phase === 'waiting' || table.phase === 'ante' || table.phase === 'showdown' || table.phase === 'finished') {
     return { error: 'No active betting round.' };
   }
 
@@ -756,6 +797,9 @@ module.exports = {
   addPlayer,
   removePlayer,
   startHand,
+  playerAnte,
+  isAnteComplete,
+  completeAnte,
   playerAction,
   getValidActions,
   evaluateHand,

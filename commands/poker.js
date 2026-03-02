@@ -14,7 +14,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   createTable, addPlayer, removePlayer, startHand,
-  playerAction, getValidActions,
+  playerAction, getValidActions, playerAnte, completeAnte,
 } = require('../utils/pokerEngine');
 const {
   buildTableEmbed, buildTableComponents, buildHoleCardEmbed,
@@ -617,12 +617,8 @@ async function handlePokerButton(interaction) {
       if (result.error) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
       }
-      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Dealing cards...` });
-
-      // Send hole cards to each player via DM or ephemeral follow up
-      await sendHoleCards(table, interaction.channel);
+      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Place your wagers! Cards will be revealed once everyone antes up.` });
       await updateTableMessage(table, interaction.channel);
-      startTurnTimer(table, interaction.channel);
       break;
     }
 
@@ -634,14 +630,15 @@ async function handlePokerButton(interaction) {
       if (result.error) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
       }
-      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Dealing cards...` });
-      await sendHoleCards(table, interaction.channel);
+      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Place your wagers! Cards will be revealed once everyone antes up.` });
       await updateTableMessage(table, interaction.channel);
-      startTurnTimer(table, interaction.channel);
       break;
     }
 
     case 'viewcards': {
+      if (table.phase === 'ante') {
+        return interaction.reply({ content: '🂠 Cards are face-down! Ante up first to see your cards.', ephemeral: true });
+      }
       const seat = table.seats.find(s => s.discordId === userId);
       if (!seat || !seat.holeCards.length) {
         return interaction.reply({ content: '❌ You don\'t have cards. Join the table first.', ephemeral: true });
@@ -651,7 +648,64 @@ async function handlePokerButton(interaction) {
       break;
     }
 
-    case 'fold':
+    case 'ante': {
+      const seat = table.seats.find(s => s.discordId === userId);
+      if (!seat) {
+        return interaction.reply({ content: '❌ You are not at this table.', ephemeral: true });
+      }
+      if (table.phase !== 'ante') {
+        return interaction.reply({ content: '❌ Not in the ante phase.', ephemeral: true });
+      }
+      const anteResult = playerAnte(table, userId);
+      if (anteResult.error) {
+        return interaction.reply({ content: `❌ ${anteResult.error}`, ephemeral: true });
+      }
+      await interaction.reply({ content: `💰 **${seat.displayName}** anted up!` });
+      if (anteResult.allAnted) {
+        // All players anted — reveal cards and start betting
+        completeAnte(table);
+        await sendHoleCards(table, interaction.channel);
+        await updateTableMessage(table, interaction.channel);
+        startTurnTimer(table, interaction.channel);
+      } else {
+        await updateTableMessage(table, interaction.channel);
+      }
+      break;
+    }
+
+    case 'fold': {
+      // Handle fold during ante phase differently
+      if (table.phase === 'ante') {
+        const seat = table.seats.find(s => s.discordId === userId);
+        if (!seat) {
+          return interaction.reply({ content: '❌ You are not at this table.', ephemeral: true });
+        }
+        seat.folded = true;
+        await interaction.reply({ content: `🚫 **${seat.displayName}** folded during ante.` });
+        // Check if only one non-folded player remains
+        const activePlayers = table.seats.filter(s => !s.folded);
+        if (activePlayers.length < 2) {
+          // Award pot to last standing player and finish hand
+          completeAnte(table);
+          await updateTableMessage(table, interaction.channel);
+        } else {
+          // Check if all remaining non-folded players have anted
+          const allRemainingAnted = activePlayers.every(s => table.antedPlayers && table.antedPlayers.has(s.discordId));
+          if (allRemainingAnted) {
+            completeAnte(table);
+            await sendHoleCards(table, interaction.channel);
+            await updateTableMessage(table, interaction.channel);
+            startTurnTimer(table, interaction.channel);
+          } else {
+            await updateTableMessage(table, interaction.channel);
+          }
+        }
+        break;
+      }
+      // Fall through to normal betting action for non-ante phases
+      return handleBettingAction(interaction, table, userId, action);
+    }
+
     case 'check':
     case 'call':
     case 'allin': {
