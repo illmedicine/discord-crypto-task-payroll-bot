@@ -231,6 +231,12 @@ function buildTableEmbed(table) {
     embed.setFooter({ text: `Turn Timer: ${table.turnTimer}s  •  Blinds: $${table.smallBlind}/$${table.bigBlind}` });
   }
 
+  // Action log — shows recent activity so table card is self-contained
+  if (table.actionLog && table.actionLog.length > 0) {
+    const logText = table.actionLog.slice(-6).join('\n');
+    embed.addFields({ name: '📋 Recent Activity', value: logText, inline: false });
+  }
+
   return embed;
 }
 

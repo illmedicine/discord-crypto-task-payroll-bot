@@ -14,7 +14,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   createTable, addPlayer, removePlayer, startHand,
-  playerAction, getValidActions, playerAnte, completeAnte, finishHand, isAnteComplete,
+  playerAction, getValidActions, playerAnte, completeAnte, finishHand, isAnteComplete, logAction,
 } = require('../utils/pokerEngine');
 const {
   buildTableEmbed, buildTableComponents, buildHoleCardEmbed,
@@ -268,14 +268,12 @@ async function updateTableMessage(table, channel) {
   const components = buildTableComponents(table);
 
   try {
+    // Delete old message and repost so the table card is always the latest message
     if (table.messageId) {
       try {
-        const msg = await channel.messages.fetch(table.messageId);
-        await msg.edit({ embeds: [embed], components });
-        return msg;
-      } catch {
-        // Message was deleted, send new one
-      }
+        const oldMsg = await channel.messages.fetch(table.messageId).catch(() => null);
+        if (oldMsg) oldMsg.delete().catch(() => {});
+      } catch {}
     }
     const msg = await channel.send({ embeds: [embed], components });
     table.messageId = msg.id;
@@ -479,7 +477,8 @@ async function handleJoin(interaction) {
     return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
   }
 
-  await interaction.reply({ content: `✅ **${interaction.user.displayName || interaction.user.username}** joined the table!`, ephemeral: false });
+  await interaction.reply({ content: `✅ **${interaction.user.displayName || interaction.user.username}** joined the table!`, ephemeral: true });
+  logAction(table, `🪑 **${interaction.user.displayName || interaction.user.username}** joined`);
   await updateTableMessage(table, interaction.channel);
 }
 
@@ -494,7 +493,8 @@ async function handleLeave(interaction) {
     return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
   }
 
-  await interaction.reply({ content: `👋 **${interaction.user.displayName || interaction.user.username}** left the table.`, ephemeral: false });
+  logAction(table, `👋 **${interaction.user.displayName || interaction.user.username}** left`);
+  await interaction.reply({ content: `👋 **${interaction.user.displayName || interaction.user.username}** left the table.`, ephemeral: true });
 
   if (table.seats.length === 0) {
     destroyTable(table);
@@ -609,10 +609,12 @@ async function handlePokerButton(interaction) {
         ? `🪑 **${interaction.user.displayName || interaction.user.username}** joined the table! (${table.buyIn} ${table.currency} buy-in confirmed ✅)`
         : `🪑 **${interaction.user.displayName || interaction.user.username}** joined the table!`;
 
+      logAction(table, `🪑 **${interaction.user.displayName || interaction.user.username}** joined`);
+
       if (interaction.deferred) {
         await interaction.editReply({ content: joinMsg });
       } else {
-        await interaction.reply({ content: joinMsg });
+        await interaction.reply({ content: joinMsg, ephemeral: true });
       }
       await updateTableMessage(table, interaction.channel);
       break;
@@ -623,7 +625,8 @@ async function handlePokerButton(interaction) {
       if (result.error) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
       }
-      await interaction.reply({ content: `👋 **${interaction.user.displayName || interaction.user.username}** left the table.` });
+      logAction(table, `👋 **${interaction.user.displayName || interaction.user.username}** left`);
+      await interaction.reply({ content: `👋 **${interaction.user.displayName || interaction.user.username}** left the table.`, ephemeral: true });
       if (table.seats.length === 0) {
         // Process payouts if crypto mode before destroying
         if (table.mode === 'crypto') {
@@ -644,7 +647,8 @@ async function handlePokerButton(interaction) {
       if (result.error) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
       }
-      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Place your wagers! Cards will be revealed once everyone antes up.` });
+      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Place your wagers! Cards will be revealed once everyone antes up.`, ephemeral: true });
+      logAction(table, `🃏 **Hand #${table.handNumber}** started — ante up!`);
       await updateTableMessage(table, interaction.channel);
       break;
     }
@@ -657,7 +661,8 @@ async function handlePokerButton(interaction) {
       if (result.error) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
       }
-      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Place your wagers! Cards will be revealed once everyone antes up.` });
+      await interaction.reply({ content: `🃏 **Hand #${table.handNumber}** — Place your wagers! Cards will be revealed once everyone antes up.`, ephemeral: true });
+      logAction(table, `🃏 **Hand #${table.handNumber}** started — ante up!`);
       await updateTableMessage(table, interaction.channel);
       break;
     }
@@ -687,7 +692,7 @@ async function handlePokerButton(interaction) {
       if (anteResult.error) {
         return interaction.reply({ content: `❌ ${anteResult.error}`, ephemeral: true });
       }
-      await interaction.reply({ content: `💰 **${seat.displayName}** anted up!` });
+      await interaction.reply({ content: `💰 **${seat.displayName}** anted up!`, ephemeral: true });
       if (anteResult.allAnted) {
         // All players anted — reveal cards and start betting
         completeAnte(table);
@@ -712,7 +717,8 @@ async function handlePokerButton(interaction) {
         }
         seat.folded = true;
         seat.lastAction = 'Fold';
-        await interaction.reply({ content: `🚫 **${seat.displayName}** folded during ante.` });
+        logAction(table, `🚫 **${seat.displayName}** folded during ante`);
+        await interaction.reply({ content: `🚫 **${seat.displayName}** folded during ante.`, ephemeral: true });
         // Check if only one non-folded player remains
         const activePlayers = table.seats.filter(s => !s.folded);
         if (activePlayers.length < 2) {
@@ -876,6 +882,7 @@ async function handleBettingAction(interaction, table, userId, action, amount = 
   const seat = table.seats[seatIndex];
   await interaction.reply({
     content: `${seat.displayName}: **${seat.lastAction}**`,
+    ephemeral: true,
   });
 
   await updateTableMessage(table, interaction.channel);

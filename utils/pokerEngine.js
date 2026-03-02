@@ -222,6 +222,7 @@ function createTable(options = {}) {
     // History
     handNumber: 0,
     lastResult: null, // { winners, handDescription }
+    actionLog: [], // Recent action log for display
 
     // Timestamps
     createdAt: Date.now(),
@@ -256,6 +257,13 @@ function addPlayer(table, discordId, username, displayName, avatar) {
   table.seats.push(seat);
   table.lastActivity = Date.now();
   return { ok: true, seat };
+}
+
+function logAction(table, text) {
+  if (!table.actionLog) table.actionLog = [];
+  table.actionLog.push(text);
+  // Keep only the last 8 entries
+  if (table.actionLog.length > 8) table.actionLog.shift();
 }
 
 function removePlayer(table, discordId) {
@@ -305,6 +313,7 @@ function startHand(table) {
   table.lastResult = null;
   table.lastRaiserIndex = -1;
   table.playersActedThisRound = new Set();
+  table.actionLog = []; // Reset action log each hand
 
   // Reset player states
   for (const seat of table.seats) {
@@ -377,6 +386,7 @@ function playerAnte(table, discordId) {
 
   table.antedPlayers.add(discordId);
   table.seats[seatIndex].lastAction = 'Ante Up ✅';
+  logAction(table, `💰 **${table.seats[seatIndex].displayName}** anted up`);
   table.lastActivity = Date.now();
 
   // Return whether all non-folded players have anted (handler completes transition)
@@ -391,6 +401,7 @@ function isAnteComplete(table) {
 function completeAnte(table) {
   // Transition from ante to preflop
   table.phase = 'preflop';
+  logAction(table, '🃏 All players anted — cards revealed!');
 
   const numPlayers = table.seats.length;
   const sbIdx = numPlayers === 2 ? table.dealerIndex : (table.dealerIndex + 1) % numPlayers;
@@ -427,11 +438,13 @@ function playerAction(table, discordId, action, amount = 0) {
     case 'fold': {
       seat.folded = true;
       seat.lastAction = 'Fold';
+      logAction(table, `🚫 **${seat.displayName}** folded`);
       break;
     }
     case 'check': {
       if (toCall > 0) return { error: 'You must call, raise, or fold.' };
       seat.lastAction = 'Check';
+      logAction(table, `✋ **${seat.displayName}** checked`);
       break;
     }
     case 'call': {
@@ -443,6 +456,7 @@ function playerAction(table, discordId, action, amount = 0) {
       table.pot += actual;
       if (seat.chips === 0) seat.allIn = true;
       seat.lastAction = seat.allIn ? 'All-In (Call)' : `Call $${actual}`;
+      logAction(table, seat.allIn ? `🔥 **${seat.displayName}** called all-in $${actual}` : `📞 **${seat.displayName}** called $${actual}`);
       break;
     }
     case 'bet': {
@@ -459,6 +473,7 @@ function playerAction(table, discordId, action, amount = 0) {
       table.playersActedThisRound = new Set([seatIndex]);
       if (seat.chips === 0) seat.allIn = true;
       seat.lastAction = seat.allIn ? `All-In $${betAmt}` : `Bet $${betAmt}`;
+      logAction(table, seat.allIn ? `🔥 **${seat.displayName}** bet all-in $${betAmt}` : `💰 **${seat.displayName}** bet $${betAmt}`);
       break;
     }
     case 'raise': {
@@ -481,6 +496,7 @@ function playerAction(table, discordId, action, amount = 0) {
           table.playersActedThisRound = new Set([seatIndex]);
         }
         seat.lastAction = `All-In $${allInPay}`;
+        logAction(table, `🔥 **${seat.displayName}** raised all-in $${allInPay}`);
       } else {
         seat.chips -= toPay;
         seat.bet += toPay;
@@ -492,6 +508,7 @@ function playerAction(table, discordId, action, amount = 0) {
         table.playersActedThisRound = new Set([seatIndex]);
         if (seat.chips === 0) seat.allIn = true;
         seat.lastAction = seat.allIn ? `All-In (Raise)` : `Raise to $${seat.bet}`;
+        logAction(table, seat.allIn ? `🔥 **${seat.displayName}** raised all-in` : `⬆️ **${seat.displayName}** raised to $${seat.bet}`);
       }
       break;
     }
@@ -510,6 +527,7 @@ function playerAction(table, discordId, action, amount = 0) {
         table.playersActedThisRound = new Set([seatIndex]);
       }
       seat.lastAction = `All-In $${allInAmt}`;
+      logAction(table, `🔥 **${seat.displayName}** went all-in $${allInAmt}`);
       break;
     }
     default:
@@ -585,19 +603,23 @@ function advancePhase(table) {
       table.phase = 'flop';
       table.deck.pop(); // burn
       table.communityCards.push(table.deck.pop(), table.deck.pop(), table.deck.pop());
+      logAction(table, '🃏 **Flop** dealt');
       break;
     case 'flop':
       table.phase = 'turn';
       table.deck.pop(); // burn
       table.communityCards.push(table.deck.pop());
+      logAction(table, '🃏 **Turn** dealt');
       break;
     case 'turn':
       table.phase = 'river';
       table.deck.pop(); // burn
       table.communityCards.push(table.deck.pop());
+      logAction(table, '🃏 **River** dealt');
       break;
     case 'river':
       table.phase = 'showdown';
+      logAction(table, '🏆 **Showdown!**');
       return resolveShowdown(table);
   }
 
@@ -745,6 +767,7 @@ function resolveShowdown(table) {
 function finishHand(table, activePlayers) {
   const winner = activePlayers[0];
   winner.chips += table.pot;
+  logAction(table, `🏆 **${winner.displayName}** wins **$${table.pot}** (everyone folded)`);
 
   table.lastResult = {
     winners: [{
@@ -799,6 +822,7 @@ module.exports = {
   isAnteComplete,
   completeAnte,
   finishHand,
+  logAction,
   playerAction,
   getValidActions,
   evaluateHand,
