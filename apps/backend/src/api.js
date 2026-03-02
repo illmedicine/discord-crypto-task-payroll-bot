@@ -3542,6 +3542,19 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot fetches poker-event data it doesn't have locally (created via web UI)
+  app.get('/api/internal/poker-event/:id', requireInternal, async (req, res) => {
+    try {
+      const eventId = Number(req.params.id)
+      const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])
+      if (!event) return res.status(404).json({ error: 'not_found' })
+      res.json({ event })
+    } catch (err) {
+      console.error('[internal] poker-event fetch error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot fetches vote-event data it doesn't have locally (created via web UI)
   app.get('/api/internal/vote-event/:id', requireInternal, async (req, res) => {
     try {

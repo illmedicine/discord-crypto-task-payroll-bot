@@ -26,6 +26,41 @@ try { crypto = require('../utils/crypto'); } catch (_) {}
 try { walletSync = require('../utils/walletSync'); } catch (_) {}
 try { db = require('../utils/db'); } catch (_) {}
 
+// ─── Backend fallback: fetch poker event from backend DB ─────────────────────
+const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+
+async function fetchPokerEventFromBackend(eventId) {
+  if (!DCB_BACKEND_URL) {
+    console.warn(`[Poker] Backend fallback SKIPPED for #${eventId} — DCB_BACKEND_URL not set`);
+    return null;
+  }
+  const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/poker-event/${eventId}`;
+  try {
+    console.log(`[Poker] Fetching event #${eventId} from backend: ${url}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const headers = {};
+    if (DCB_INTERNAL_SECRET) headers['x-dcb-internal-secret'] = DCB_INTERNAL_SECRET;
+    const res = await fetch(url, { headers, signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      console.warn(`[Poker] Backend returned ${res.status} for event #${eventId}`);
+      return null;
+    }
+    const data = await res.json();
+    if (!data?.event) {
+      console.warn(`[Poker] Backend returned OK but no event data for #${eventId}`);
+      return null;
+    }
+    console.log(`[Poker] ✅ Got event #${eventId} from backend: title="${data.event.title}", status=${data.event.status}`);
+    return data.event;
+  } catch (err) {
+    console.error(`[Poker] Backend fetch error for #${eventId}:`, err.message);
+    return null;
+  }
+}
+
 // ─── In-memory table store ──────────────────────────────────────────────────
 // Key: channelId → table (one table per channel)
 const tables = new Map();
@@ -659,8 +694,12 @@ async function handleEventJoin(interaction, eventId) {
 
   await interaction.deferReply({ ephemeral: true });
 
-  // Load event from DB
-  const event = db.getPokerEvent ? await db.getPokerEvent(eventId) : null;
+  // Load event from DB (try local first, then backend fallback)
+  let event = db.getPokerEvent ? await db.getPokerEvent(eventId) : null;
+  if (!event) {
+    console.log(`[Poker] Event #${eventId} not in local DB, trying backend...`);
+    event = await fetchPokerEventFromBackend(eventId);
+  }
   if (!event) {
     return interaction.editReply({ content: '❌ Poker event not found.' });
   }
