@@ -3924,6 +3924,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         `SELECT discord_id, solana_address, username, wallet_secret FROM user_wallets WHERE discord_id = ?`,
         [discordId]
       )
+      console.log(`[internal] user-wallet-lookup for ${discordId}: found=${!!row}, hasAddr=${!!row?.solana_address}, hasKey=${!!row?.wallet_secret}`)
       if (row?.solana_address) {
         // Return wallet_secret still encrypted (enc: prefix) — bot shares the same ENCRYPTION_KEY
         return res.json({ solana_address: row.solana_address, username: row.username, wallet_secret: row.wallet_secret || null })
@@ -3934,7 +3935,18 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         [discordId]
       ).catch(() => null)
       if (userRow?.solana_address) {
+        console.log(`[internal] user-wallet-lookup: found in users table for ${discordId} (no key)`)
         return res.json({ solana_address: userRow.solana_address, username: userRow.username, wallet_secret: null })
+      }
+      // Try to find by solana_address match — maybe stored under a different discord_id (e.g. google: prefix)
+      const byAddr = await db.get(
+        `SELECT discord_id, solana_address, username, wallet_secret FROM user_wallets WHERE solana_address = (SELECT solana_address FROM user_wallets WHERE discord_id = ? LIMIT 1)`,
+        [discordId]
+      ).catch(() => null)
+      if (!byAddr) {
+        // Last resort: look up ALL user_wallets entries for debugging
+        const allEntries = await db.all('SELECT discord_id, solana_address, wallet_secret IS NOT NULL as has_key FROM user_wallets').catch(() => [])
+        console.log(`[internal] user-wallet-lookup: no match for ${discordId}. All entries:`, JSON.stringify(allEntries?.map(e => ({ id: e.discord_id?.slice(0,12), addr: e.solana_address?.slice(0,8), key: e.has_key }))))
       }
       res.json({ solana_address: null })
     } catch (err) {
