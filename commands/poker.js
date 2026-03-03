@@ -72,10 +72,14 @@ async function fetchUserWalletFromBackend(discordId) {
     if (res.ok) {
       const data = await res.json();
       if (data?.solana_address) {
-        console.log(`[Poker] Backend user-wallet fallback found address for ${discordId}: ${data.solana_address.slice(0, 8)}...`);
+        console.log(`[Poker] Backend user-wallet fallback found address for ${discordId}: ${data.solana_address.slice(0, 8)}... hasKey=${!!data.wallet_secret}`);
         // Sync to local DB so future lookups work
         try { if (db?.addUser) await db.addUser(discordId, data.username || 'unknown', data.solana_address); } catch (_) {}
-        return { solana_address: data.solana_address, username: data.username, wallet_secret: null };
+        // Sync wallet_secret from backend if present (already encrypted with shared ENCRYPTION_KEY)
+        if (data.wallet_secret && db?.setUserWalletSecret) {
+          try { await db.setUserWalletSecret(discordId, data.wallet_secret); } catch (_) {}
+        }
+        return { solana_address: data.solana_address, username: data.username, wallet_secret: data.wallet_secret || null };
       }
     }
   } catch (err) {

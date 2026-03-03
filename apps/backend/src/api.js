@@ -3897,17 +3897,36 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot pushes encrypted private key to backend DB (from /user-wallet connect command)
+  app.post('/api/internal/user-wallet-key-sync', requireInternal, async (req, res) => {
+    try {
+      const { discordId, encryptedKey } = req.body || {}
+      if (!discordId || !encryptedKey) return res.status(400).json({ error: 'missing_fields' })
+
+      await db.run(
+        `UPDATE user_wallets SET wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE discord_id = ?`,
+        [encryptedKey, discordId]
+      )
+      console.log(`[internal] user-wallet-key synced for ${discordId} — key never logged`)
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] user-wallet-key-sync error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot looks up user wallet from backend DB (fallback when bot DB missing user)
   app.get('/api/internal/user-wallet-lookup/:discordId', requireInternal, async (req, res) => {
     try {
       const { discordId } = req.params
       if (!discordId) return res.status(400).json({ error: 'missing_discord_id' })
       const row = await db.get(
-        `SELECT discord_id, solana_address, username FROM user_wallets WHERE discord_id = ?`,
+        `SELECT discord_id, solana_address, username, wallet_secret FROM user_wallets WHERE discord_id = ?`,
         [discordId]
       )
       if (row?.solana_address) {
-        return res.json({ solana_address: row.solana_address, username: row.username })
+        // Return wallet_secret still encrypted (enc: prefix) — bot shares the same ENCRYPTION_KEY
+        return res.json({ solana_address: row.solana_address, username: row.username, wallet_secret: row.wallet_secret || null })
       }
       // Also check users table as fallback
       const userRow = await db.get(
@@ -3915,7 +3934,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         [discordId]
       ).catch(() => null)
       if (userRow?.solana_address) {
-        return res.json({ solana_address: userRow.solana_address, username: userRow.username })
+        return res.json({ solana_address: userRow.solana_address, username: userRow.username, wallet_secret: null })
       }
       res.json({ solana_address: null })
     } catch (err) {

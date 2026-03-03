@@ -1,6 +1,25 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const crypto = require('../utils/crypto');
 const db = require('../utils/db');
+const { encryptSecret } = require('../utils/encryption');
+
+// Helper: sync encrypted private key to backend DB
+async function syncKeyToBackend(discordId, plainKey) {
+  try {
+    const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
+    const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
+    if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) return;
+    const encryptedKey = encryptSecret(plainKey);
+    await fetch(`${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-key-sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+      body: JSON.stringify({ discordId, encryptedKey })
+    });
+    console.log(`[user-wallet] Backend key sync OK for ${discordId}`);
+  } catch (err) {
+    console.error('[user-wallet] Backend key sync error:', err?.message);
+  }
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -106,7 +125,9 @@ module.exports = {
           // If they already have the same address, just save the key if new
           if (existingUser.solana_address === address && privateKey && !existingUser.wallet_secret) {
             await db.setUserWalletSecret(userId, privateKey);
-            // Sync to backend
+            // Sync key to backend DB
+            await syncKeyToBackend(userId, privateKey);
+            // Sync address to backend
             try {
               const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
               const DCB_INTERNAL_SECRET = process.env.DCB_INTERNAL_SECRET || '';
@@ -182,6 +203,7 @@ module.exports = {
         // Save private key if provided
         if (privateKey) {
           await db.setUserWalletSecret(userId, privateKey);
+          await syncKeyToBackend(userId, privateKey);
         }
 
         // Sync wallet to backend for payroll feature
@@ -353,6 +375,7 @@ module.exports = {
         // Save private key if provided
         if (privateKey) {
           await db.setUserWalletSecret(userId, privateKey);
+          await syncKeyToBackend(userId, privateKey);
         }
 
         // Sync updated wallet to backend for payroll feature
