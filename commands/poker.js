@@ -262,7 +262,16 @@ async function collectBuyIn(table, discordId) {
     if (!userData || !userData.solana_address) {
       return { success: false, error: 'You need to connect a wallet first.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`' };
     }
-    if (!userData.wallet_secret) {
+
+    // Resolve the player's private key:
+    // 1. From users.wallet_secret (personal key)
+    // 2. Fallback: if user's address matches the guild treasury wallet, use the treasury key
+    let playerSecret = userData.wallet_secret || null;
+    if (!playerSecret && userData.solana_address === guildWallet.wallet_address && guildWallet.wallet_secret) {
+      console.log(`[Poker] User ${discordId} address matches treasury — using guild wallet key for buy-in`);
+      playerSecret = guildWallet.wallet_secret;
+    }
+    if (!playerSecret) {
       return { success: false, error: `🔑 Private key required for pot-split poker.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_KEY\`\n\nYour wallet address: \`${userData.solana_address}\`` };
     }
 
@@ -276,7 +285,7 @@ async function collectBuyIn(table, discordId) {
     }
 
     // Transfer from player to treasury
-    const keypair = crypto.getKeypairFromSecret(userData.wallet_secret);
+    const keypair = crypto.getKeypairFromSecret(playerSecret);
     if (!keypair) return { success: false, error: 'Invalid wallet key. Re-connect your wallet.' };
 
     const result = await crypto.sendSolFrom(keypair, guildWallet.wallet_address, table.buyIn);

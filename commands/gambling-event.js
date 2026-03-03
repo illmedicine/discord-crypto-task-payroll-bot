@@ -602,8 +602,14 @@ module.exports = {
         });
       }
 
-      // Require private key for pot mode
-      if (!userData.wallet_secret) {
+      // Resolve private key: check users table first, then fall back to guild wallet if addresses match
+      const earlyGuildWallet = await getGuildWalletWithFallback(interaction.guildId);
+      let playerSecret = userData.wallet_secret || null;
+      if (!playerSecret && earlyGuildWallet?.wallet_secret && userData.solana_address === earlyGuildWallet.wallet_address) {
+        console.log(`[GamblingEvent] User ${interaction.user.id} address matches treasury — using guild wallet key`);
+        playerSecret = earlyGuildWallet.wallet_secret;
+      }
+      if (!playerSecret) {
         return interaction.editReply({
           content: `❌ **Private Key Required!**\n\nPot-mode horse races require your Solana private key to pay the entry fee.\n\n` +
             `🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n` +
@@ -729,18 +735,25 @@ module.exports = {
 
     // 1. Get user + wallet with private key (with backend fallback)
     const userData = await getUserWithFallback(interaction.user.id);
-    if (!userData || !userData.wallet_secret) {
-      return interaction.editReply({
-        content: '❌ **Private Key Required!**\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`',
-        embeds: [], components: []
-      });
-    }
 
     // 2. Verify guild treasury wallet exists
     const guildWallet = await getGuildWalletWithFallback(interaction.guildId);
     if (!guildWallet || !guildWallet.wallet_address) {
       return interaction.editReply({
         content: '❌ Server treasury wallet not configured. Admin must set up a wallet first.',
+        embeds: [], components: []
+      });
+    }
+
+    // Resolve private key: users table first, then guild wallet fallback if addresses match
+    let playerSecret = userData?.wallet_secret || null;
+    if (!playerSecret && userData?.solana_address && guildWallet.wallet_secret && userData.solana_address === guildWallet.wallet_address) {
+      console.log(`[GamblingConfirm] User ${interaction.user.id} address matches treasury — using guild wallet key`);
+      playerSecret = guildWallet.wallet_secret;
+    }
+    if (!userData || !playerSecret) {
+      return interaction.editReply({
+        content: '❌ **Private Key Required!**\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`',
         embeds: [], components: []
       });
     }
@@ -782,7 +795,7 @@ module.exports = {
     console.log(`[GamblingConfirm] Transferring ${solAmount.toFixed(6)} SOL from ${userData.solana_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
 
     const transferResult = await crypto.sendSolFrom(
-      userData.wallet_secret,
+      playerSecret,
       guildWallet.wallet_address,
       solAmount
     );
