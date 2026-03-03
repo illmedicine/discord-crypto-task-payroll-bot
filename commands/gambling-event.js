@@ -594,7 +594,7 @@ module.exports = {
       const userData = await getUserWithFallback(interaction.user.id);
       if (!userData || !userData.solana_address) {
         return interaction.editReply({
-          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n➡️ Use \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\` to connect your wallet.\n\nYour address will be auto-derived from the key.`
+          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\``
         });
       }
 
@@ -602,7 +602,8 @@ module.exports = {
       if (!userData.wallet_secret) {
         return interaction.editReply({
           content: `❌ **Private Key Required!**\n\nPot-mode horse races require your Solana private key to pay the entry fee.\n\n` +
-            `🔑 Use \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\` to save your key.\n\n` +
+            `🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n` +
+            `🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\`\n\n` +
             `Your wallet address: \`${userData.solana_address}\``
         });
       }
@@ -726,7 +727,7 @@ module.exports = {
     const userData = await getUserWithFallback(interaction.user.id);
     if (!userData || !userData.wallet_secret) {
       return interaction.editReply({
-        content: '❌ **Private Key Required!** Use `/user-wallet connect private-key:YOUR_KEY` to save your key, then try again.',
+        content: '❌ **Private Key Required!**\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`',
         embeds: [], components: []
       });
     }

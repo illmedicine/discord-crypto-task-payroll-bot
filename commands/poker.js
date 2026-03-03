@@ -256,10 +256,10 @@ async function collectBuyIn(table, discordId) {
     // Get user wallet (with backend fallback)
     const userData = await getUserWithFallback(discordId);
     if (!userData || !userData.solana_address) {
-      return { success: false, error: 'You need to connect a wallet first. Use `/user-wallet connect private-key:YOUR_KEY`' };
+      return { success: false, error: 'You need to connect a wallet first.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`' };
     }
     if (!userData.wallet_secret) {
-      return { success: false, error: `Private key required for pot-split poker. Use \`/user-wallet connect private-key:YOUR_KEY\` to save your key.\n\nYour wallet address: \`${userData.solana_address}\`` };
+      return { success: false, error: `🔑 Private key required for pot-split poker.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_KEY\`\n\nYour wallet address: \`${userData.solana_address}\`` };
     }
 
     // Check balance
