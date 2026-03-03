@@ -3920,34 +3920,67 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const { discordId } = req.params
       if (!discordId) return res.status(400).json({ error: 'missing_discord_id' })
+
+      // 1. Direct lookup in user_wallets by discord_id
       const row = await db.get(
         `SELECT discord_id, solana_address, username, wallet_secret FROM user_wallets WHERE discord_id = ?`,
         [discordId]
       )
       console.log(`[internal] user-wallet-lookup for ${discordId}: found=${!!row}, hasAddr=${!!row?.solana_address}, hasKey=${!!row?.wallet_secret}`)
-      if (row?.solana_address) {
-        // Return wallet_secret still encrypted (enc: prefix) — bot shares the same ENCRYPTION_KEY
-        return res.json({ solana_address: row.solana_address, username: row.username, wallet_secret: row.wallet_secret || null })
+
+      if (row?.solana_address && row.wallet_secret) {
+        // Have both address and key — return immediately
+        return res.json({ solana_address: row.solana_address, username: row.username, wallet_secret: row.wallet_secret })
       }
-      // Also check users table as fallback
-      const userRow = await db.get(
-        `SELECT discord_id, solana_address, username FROM users WHERE discord_id = ? AND solana_address IS NOT NULL`,
-        [discordId]
-      ).catch(() => null)
-      if (userRow?.solana_address) {
-        console.log(`[internal] user-wallet-lookup: found in users table for ${discordId} (no key)`)
-        return res.json({ solana_address: userRow.solana_address, username: userRow.username, wallet_secret: null })
+
+      // Determine the user's solana address from whatever source we can find
+      let knownAddress = row?.solana_address || null
+      let knownUsername = row?.username || null
+
+      // 2. Check users table as fallback for address
+      if (!knownAddress) {
+        const userRow = await db.get(
+          `SELECT solana_address, username FROM users WHERE discord_id = ? AND solana_address IS NOT NULL`,
+          [discordId]
+        ).catch(() => null)
+        if (userRow?.solana_address) {
+          knownAddress = userRow.solana_address
+          knownUsername = knownUsername || userRow.username
+        }
       }
-      // Try to find by solana_address match — maybe stored under a different discord_id (e.g. google: prefix)
-      const byAddr = await db.get(
-        `SELECT discord_id, solana_address, username, wallet_secret FROM user_wallets WHERE solana_address = (SELECT solana_address FROM user_wallets WHERE discord_id = ? LIMIT 1)`,
-        [discordId]
-      ).catch(() => null)
-      if (!byAddr) {
-        // Last resort: look up ALL user_wallets entries for debugging
+
+      // 3. Cross-reference: find any user_wallets row with the SAME solana_address that HAS a key
+      //    This handles the case where the key was stored under a different discord_id
+      //    (e.g. google:xxx vs Discord snowflake, or canonical ID resolution differences)
+      if (knownAddress) {
+        const crossRef = await db.get(
+          `SELECT discord_id, solana_address, username, wallet_secret FROM user_wallets WHERE solana_address = ? AND wallet_secret IS NOT NULL LIMIT 1`,
+          [knownAddress]
+        ).catch(() => null)
+        if (crossRef?.wallet_secret) {
+          console.log(`[internal] user-wallet-lookup: cross-ref found key for addr ${knownAddress.slice(0,8)}... (stored under ${crossRef.discord_id?.slice(0,12)}, requested ${discordId})`)
+          return res.json({ solana_address: knownAddress, username: knownUsername || crossRef.username, wallet_secret: crossRef.wallet_secret })
+        }
+
+        // 4. Also check guild_wallets — if user's address matches a treasury wallet, return that key
+        const guildWallet = await db.get(
+          `SELECT wallet_address, wallet_secret FROM guild_wallets WHERE wallet_address = ? AND wallet_secret IS NOT NULL LIMIT 1`,
+          [knownAddress]
+        ).catch(() => null)
+        if (guildWallet?.wallet_secret) {
+          console.log(`[internal] user-wallet-lookup: found key in guild_wallets for addr ${knownAddress.slice(0,8)}...`)
+          return res.json({ solana_address: knownAddress, username: knownUsername, wallet_secret: guildWallet.wallet_secret })
+        }
+      }
+
+      // 5. Return whatever we have (address with no key, or nothing at all)
+      if (knownAddress) {
+        // Debug: log all user_wallets entries to find Discord ID mismatch
         const allEntries = await db.all('SELECT discord_id, solana_address, wallet_secret IS NOT NULL as has_key FROM user_wallets').catch(() => [])
-        console.log(`[internal] user-wallet-lookup: no match for ${discordId}. All entries:`, JSON.stringify(allEntries?.map(e => ({ id: e.discord_id?.slice(0,12), addr: e.solana_address?.slice(0,8), key: e.has_key }))))
+        console.log(`[internal] user-wallet-lookup: addr ${knownAddress.slice(0,8)} with no key for ${discordId}. All entries:`, JSON.stringify(allEntries?.map(e => ({ id: e.discord_id?.slice(0,12), addr: e.solana_address?.slice(0,8), key: e.has_key }))))
+        return res.json({ solana_address: knownAddress, username: knownUsername, wallet_secret: null })
       }
+
       res.json({ solana_address: null })
     } catch (err) {
       console.error('[internal] user-wallet-lookup error:', err?.message)
