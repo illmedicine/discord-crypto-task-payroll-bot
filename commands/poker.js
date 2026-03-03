@@ -280,12 +280,25 @@ async function collectBuyIn(table, discordId) {
     }
     console.log(`[PokerBuyIn] ✅ Key resolved for ${discordId}, proceeding with buy-in`);
 
-    // Check balance
+    // Convert buy-in to SOL if currency is USD
+    let solAmount = table.buyIn;
+    let solPrice = null;
+    if (table.currency === 'USD') {
+      solPrice = await crypto.getSolanaPrice();
+      if (!solPrice) {
+        return { success: false, error: 'Unable to fetch SOL price for USD conversion. Try again in a moment.' };
+      }
+      solAmount = table.buyIn / solPrice;
+      console.log(`[PokerBuyIn] USD→SOL conversion: ${table.buyIn} USD / $${solPrice.toFixed(2)} = ${solAmount.toFixed(6)} SOL`);
+    }
+
+    // Check balance (need solAmount + small buffer for tx fee)
+    const txFeeBuffer = 0.000015;
     const balance = await crypto.getBalance(userData.solana_address);
-    if (balance < table.buyIn) {
+    if (balance < solAmount + txFeeBuffer) {
       return {
         success: false,
-        error: `Insufficient balance: **${balance.toFixed(4)} SOL** available, need **${table.buyIn} SOL**.`
+        error: `Insufficient balance: **${balance.toFixed(4)} SOL** available, need **${solAmount.toFixed(6)} SOL**${solPrice ? ` (${table.buyIn} USD @ $${solPrice.toFixed(2)}/SOL)` : ''}.`
       };
     }
 
@@ -293,15 +306,15 @@ async function collectBuyIn(table, discordId) {
     const keypair = crypto.getKeypairFromSecret(playerSecret);
     if (!keypair) return { success: false, error: 'Invalid wallet key. Re-connect your wallet.' };
 
-    const result = await crypto.sendSolFrom(keypair, guildWallet.wallet_address, table.buyIn);
+    const result = await crypto.sendSolFrom(keypair, guildWallet.wallet_address, solAmount);
     if (!result || !result.success) {
       return { success: false, error: result?.error || 'SOL transfer failed.' };
     }
 
-    // Record in DB
+    // Record in DB (store SOL amount actually transferred)
     if (db.upsertPokerEventPlayer) {
       await db.upsertPokerEventPlayer(
-        table.eventId, table.guildId, discordId, userData.solana_address, table.buyIn, 'committed', result.signature || null
+        table.eventId, table.guildId, discordId, userData.solana_address, solAmount, 'committed', result.signature || null
       ).catch(() => {});
 
       // Update current_players count
