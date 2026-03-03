@@ -90,12 +90,14 @@ async function fetchUserWalletFromBackend(discordId) {
 
 async function getUserWithFallback(discordId) {
   let userData = db?.getUser ? await db.getUser(discordId) : null;
-  if (userData && userData.solana_address) return userData;
+  // If local user has address AND wallet_secret, no need to check backend
+  if (userData && userData.solana_address && userData.wallet_secret) return userData;
+  // Local user missing entirely, or missing wallet_secret — try backend
   const backendUser = await fetchUserWalletFromBackend(discordId);
   if (backendUser) {
-    // Re-read from local DB after sync (to pick up any existing wallet_secret)
-    userData = db?.getUser ? await db.getUser(discordId) : null;
-    if (userData && userData.solana_address) return userData;
+    // Re-read from local DB after sync (to pick up any synced wallet_secret)
+    const refreshed = db?.getUser ? await db.getUser(discordId) : null;
+    if (refreshed && refreshed.solana_address) return refreshed;
     return backendUser;
   }
   return userData;
@@ -257,23 +259,26 @@ async function collectBuyIn(table, discordId) {
       return { success: false, error: 'No treasury wallet configured for this server.' };
     }
 
-    // Get user wallet (with backend fallback)
+    // Get user wallet (with backend fallback — also fetches wallet_secret from backend if missing locally)
     const userData = await getUserWithFallback(discordId);
+    console.log(`[PokerBuyIn] User ${discordId}: hasAddr=${!!userData?.solana_address}, hasKey=${!!userData?.wallet_secret}, addr=${userData?.solana_address?.slice(0,8) || 'none'}...`);
     if (!userData || !userData.solana_address) {
       return { success: false, error: 'You need to connect a wallet first.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`' };
     }
 
     // Resolve the player's private key:
-    // 1. From users.wallet_secret (personal key)
+    // 1. From users.wallet_secret (personal key — local or synced from backend)
     // 2. Fallback: if user's address matches the guild treasury wallet, use the treasury key
     let playerSecret = userData.wallet_secret || null;
     if (!playerSecret && userData.solana_address === guildWallet.wallet_address && guildWallet.wallet_secret) {
-      console.log(`[Poker] User ${discordId} address matches treasury — using guild wallet key for buy-in`);
+      console.log(`[PokerBuyIn] User ${discordId} address matches treasury — using guild wallet key`);
       playerSecret = guildWallet.wallet_secret;
     }
     if (!playerSecret) {
+      console.log(`[PokerBuyIn] ❌ No key found for ${discordId}. Treasury addr=${guildWallet.wallet_address?.slice(0,8)}..., user addr=${userData.solana_address?.slice(0,8)}..., match=${userData.solana_address === guildWallet.wallet_address}`);
       return { success: false, error: `🔑 Private key required for pot-split poker.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_KEY\`\n\nYour wallet address: \`${userData.solana_address}\`` };
     }
+    console.log(`[PokerBuyIn] ✅ Key resolved for ${discordId}, proceeding with buy-in`);
 
     // Check balance
     const balance = await crypto.getBalance(userData.solana_address);

@@ -41,13 +41,14 @@ async function fetchUserWalletFromBackend(discordId) {
 
 async function getUserWithFallback(discordId) {
   let userData = await db.getUser(discordId);
-  if (userData && userData.solana_address) return userData;
-  // Local DB missing wallet — try backend
+  // If local user has address AND wallet_secret, no need to check backend
+  if (userData && userData.solana_address && userData.wallet_secret) return userData;
+  // Local DB missing wallet or missing key — try backend
   const backendUser = await fetchUserWalletFromBackend(discordId);
   if (backendUser) {
-    // Re-read from local DB after sync (to pick up any existing wallet_secret)
-    userData = await db.getUser(discordId);
-    if (userData && userData.solana_address) return userData;
+    // Re-read from local DB after sync (to pick up any synced wallet_secret)
+    const refreshed = await db.getUser(discordId);
+    if (refreshed && refreshed.solana_address) return refreshed;
     return backendUser;
   }
   return userData; // null or missing address
