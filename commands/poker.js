@@ -157,7 +157,25 @@ async function processPokerPayouts(table, channel) {
       return;
     }
 
-    const totalBuyIns = table.seats.length * table.buyIn;
+    // Use actual SOL amounts collected (tracked during buy-in) instead of raw buyIn value
+    // This handles USD→SOL conversion correctly
+    let totalBuyIns = 0;
+    if (table.solBuyIns && table.solBuyIns.size > 0) {
+      for (const amt of table.solBuyIns.values()) totalBuyIns += amt;
+    } else {
+      // Fallback: try to read from DB records, or convert now
+      if (table.currency === 'USD' && crypto.getSolanaPrice) {
+        const solPrice = await crypto.getSolanaPrice();
+        if (solPrice) {
+          totalBuyIns = table.seats.length * (table.buyIn / solPrice);
+        } else {
+          totalBuyIns = table.seats.length * table.buyIn; // last resort
+        }
+      } else {
+        totalBuyIns = table.seats.length * table.buyIn;
+      }
+    }
+    console.log(`[Poker] Payout pool calculation: totalBuyIns=${totalBuyIns.toFixed(6)} SOL, seats=${table.seats.length}, currency=${table.currency}`);
     const houseCut = totalBuyIns * 0.10;
     const payoutPool = totalBuyIns - houseCut;
 
@@ -323,7 +341,7 @@ async function collectBuyIn(table, discordId) {
       }
     }
 
-    return { success: true, txSignature: result.signature };
+    return { success: true, txSignature: result.signature, solAmount };
   } catch (err) {
     console.error('[Poker] Buy-in error:', err);
     return { success: false, error: 'Payment error: ' + (err.message || 'Unknown') };
@@ -657,6 +675,11 @@ async function handlePokerButton(interaction) {
         if (!buyInResult.success) {
           return interaction.editReply({ content: `❌ ${buyInResult.error}` });
         }
+        // Track the actual SOL amount paid (important for USD→SOL conversion)
+        if (buyInResult.solAmount) {
+          if (!table.solBuyIns) table.solBuyIns = new Map();
+          table.solBuyIns.set(userId, buyInResult.solAmount);
+        }
       }
 
       const result = addPlayer(
@@ -897,6 +920,11 @@ async function handleEventJoin(interaction, eventId) {
     const buyInResult = await collectBuyIn(table, interaction.user.id);
     if (!buyInResult.success) {
       return interaction.editReply({ content: `❌ ${buyInResult.error}` });
+    }
+    // Track the actual SOL amount paid (important for USD→SOL conversion)
+    if (buyInResult.solAmount) {
+      if (!table.solBuyIns) table.solBuyIns = new Map();
+      table.solBuyIns.set(interaction.user.id, buyInResult.solAmount);
     }
   }
 
