@@ -61,6 +61,42 @@ async function fetchPokerEventFromBackend(eventId) {
   }
 }
 
+// ─── Backend fallback: fetch user wallet from backend DB ─────────────────────
+async function fetchUserWalletFromBackend(discordId) {
+  if (!DCB_BACKEND_URL) return null;
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (DCB_INTERNAL_SECRET) headers['x-dcb-internal-secret'] = DCB_INTERNAL_SECRET;
+    const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/user-wallet-lookup/${discordId}`;
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.solana_address) {
+        console.log(`[Poker] Backend user-wallet fallback found address for ${discordId}: ${data.solana_address.slice(0, 8)}...`);
+        // Sync to local DB so future lookups work
+        try { if (db?.addUser) await db.addUser(discordId, data.username || 'unknown', data.solana_address); } catch (_) {}
+        return { solana_address: data.solana_address, username: data.username, wallet_secret: null };
+      }
+    }
+  } catch (err) {
+    console.warn(`[Poker] Backend user-wallet fallback error for ${discordId}:`, err?.message);
+  }
+  return null;
+}
+
+async function getUserWithFallback(discordId) {
+  let userData = db?.getUser ? await db.getUser(discordId) : null;
+  if (userData && userData.solana_address) return userData;
+  const backendUser = await fetchUserWalletFromBackend(discordId);
+  if (backendUser) {
+    // Re-read from local DB after sync (to pick up any existing wallet_secret)
+    userData = db?.getUser ? await db.getUser(discordId) : null;
+    if (userData && userData.solana_address) return userData;
+    return backendUser;
+  }
+  return userData;
+}
+
 // ─── In-memory table store ──────────────────────────────────────────────────
 // Key: channelId → table (one table per channel)
 const tables = new Map();
@@ -132,8 +168,8 @@ async function processPokerPayouts(table, channel) {
       const payoutSol = chipShare * payoutPool;
       if (payoutSol < 0.000001) continue; // skip dust
 
-      // Get player wallet
-      const userData = db.getUser ? await db.getUser(seat.discordId) : null;
+      // Get player wallet (with backend fallback)
+      const userData = await getUserWithFallback(seat.discordId);
       const playerRecord = db.getPokerEventPlayer
         ? await db.getPokerEventPlayer(table.eventId, seat.discordId)
         : null;
@@ -217,13 +253,13 @@ async function collectBuyIn(table, discordId) {
       return { success: false, error: 'No treasury wallet configured for this server.' };
     }
 
-    // Get user wallet
-    const userData = db.getUser ? await db.getUser(discordId) : null;
-    if (!userData || !userData.wallet_secret) {
-      return { success: false, error: 'You need to connect a wallet first. Use `/user-wallet connect`' };
+    // Get user wallet (with backend fallback)
+    const userData = await getUserWithFallback(discordId);
+    if (!userData || !userData.solana_address) {
+      return { success: false, error: 'You need to connect a wallet first. Use `/user-wallet connect private-key:YOUR_KEY`' };
     }
-    if (!userData.solana_address) {
-      return { success: false, error: 'No wallet address found. Use `/user-wallet connect`' };
+    if (!userData.wallet_secret) {
+      return { success: false, error: `Private key required for pot-split poker. Use \`/user-wallet connect private-key:YOUR_KEY\` to save your key.\n\nYour wallet address: \`${userData.solana_address}\`` };
     }
 
     // Check balance
