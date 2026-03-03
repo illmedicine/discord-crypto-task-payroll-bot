@@ -156,7 +156,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [vTitle, setVTitle] = useState('')
   const [vDescription, setVDescription] = useState('')
   const [vPrizeAmount, setVPrizeAmount] = useState('')
-  const [vCurrency, setVCurrency] = useState('SOL')
+  const [vCurrency, setVCurrency] = useState('USD')
   const [vMinParticipants, setVMinParticipants] = useState('1')
   const [vMaxParticipants, setVMaxParticipants] = useState('10')
   const [vDurationMinutes, setVDurationMinutes] = useState('')
@@ -193,7 +193,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [rDescription, setRDescription] = useState('')
   const [rMode, setRMode] = useState<'house' | 'pot'>('house')
   const [rPrizeAmount, setRPrizeAmount] = useState('')
-  const [rCurrency, setRCurrency] = useState('SOL')
+  const [rCurrency, setRCurrency] = useState('USD')
   const [rEntryFee, setREntryFee] = useState('')
   const [rMinPlayers, setRMinPlayers] = useState('1')
   const [rMaxPlayers, setRMaxPlayers] = useState('10')
@@ -221,7 +221,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [pDescription, setPDescription] = useState('')
   const [pMode, setPMode] = useState<'pot' | 'casual'>('pot')
   const [pBuyIn, setPBuyIn] = useState('0.1')
-  const [pCurrency, setPCurrency] = useState('SOL')
+  const [pCurrency, setPCurrency] = useState('USD')
   const [pSmallBlind, setPSmallBlind] = useState('5')
   const [pBigBlind, setPBigBlind] = useState('10')
   const [pStartingChips, setPStartingChips] = useState('1000')
@@ -262,6 +262,16 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
         if (!rChannelId) { setRChannelId(ch[0].id); setRPublishChannelId(ch[0].id) }
         if (!pChannelId) { setPChannelId(ch[0].id); setPPublishChannelId(ch[0].id) }
       }
+      // Auto-populate default titles & descriptions based on existing event count
+      const veCount = (veRes.data || []).length
+      const geCount = (geRes.data || []).length
+      const peCount = (peRes.data || []).length
+      setVTitle(`Guess my favorite picture #${veCount + 1}`)
+      setVDescription(prev => prev || 'Vote for your favorite picture to win!')
+      setRTitle(`Illy-Kentucky Derby #${geCount + 1}`)
+      setRDescription(prev => prev || 'Pick your horse and place your bets!')
+      setPTitle(`Illy-Poker #${peCount + 1}`)
+      setPDescription(prev => prev || 'Pot-split Texas Hold\'em poker night')
     } finally {
       setLoading(false)
     }

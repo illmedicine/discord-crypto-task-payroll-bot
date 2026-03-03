@@ -29,7 +29,7 @@ export default function VoteEvents({ guildId }: Props) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [prizeAmount, setPrizeAmount] = useState('')
-  const [currency, setCurrency] = useState('SOL')
+  const [currency, setCurrency] = useState('USD')
   const [minParticipants, setMinParticipants] = useState('')
   const [maxParticipants, setMaxParticipants] = useState('')
   const [durationMinutes, setDurationMinutes] = useState('')
@@ -54,6 +54,10 @@ export default function VoteEvents({ guildId }: Props) {
       setEvents(evRes.data || [])
       setChannels(chRes.data || [])
       if (!channelId && (chRes.data || []).length) setChannelId(chRes.data[0].id)
+      // Auto-populate title & description
+      const count = (evRes.data || []).length
+      setTitle(`Guess my favorite picture #${count + 1}`)
+      setDescription(prev => prev || 'Vote for your favorite picture to win!')
     } finally {
       setLoading(false)
     }

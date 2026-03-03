@@ -1663,9 +1663,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       qualification_url,
     } = req.body || {}
 
-    if (!channel_id || !title || !description) return res.status(400).json({ error: 'missing_fields' })
+    if (!channel_id) return res.status(400).json({ error: 'missing_fields' })
     if (!min_participants || !max_participants) return res.status(400).json({ error: 'missing_participant_limits' })
     if (!Array.isArray(images) || images.length < 2) return res.status(400).json({ error: 'at_least_two_images_required' })
+
+    // Auto-generate title and description if not provided
+    let finalTitle = title
+    if (!finalTitle) {
+      const countRow = await db.get('SELECT COUNT(*) as c FROM vote_events WHERE guild_id = ?', [req.guild.id])
+      finalTitle = `Guess my favorite picture #${(countRow?.c || 0) + 1}`
+    }
+    const finalDescription = description || 'Vote for your favorite picture to win!'
 
     const endsAt = duration_minutes ? new Date(Date.now() + (Number(duration_minutes) * 60 * 1000)).toISOString() : null
 
@@ -1675,8 +1683,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       [
         req.guild.id,
         String(channel_id),
-        String(title),
-        String(description),
+        String(finalTitle),
+        String(finalDescription),
         Number(prize_amount || 0),
         String(currency || 'USD'),
         Number(min_participants),
@@ -1707,7 +1715,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (worker) {
         const today = new Date().toISOString().slice(0, 10)
         await db.run('INSERT INTO worker_activity (guild_id, discord_id, action_type, detail, channel_id) VALUES (?, ?, ?, ?, ?)',
-          [req.guild.id, canonicalId, 'event_created', `Created vote event: ${title}`, String(channel_id)]).catch(() => {})
+          [req.guild.id, canonicalId, 'event_created', `Created vote event: ${finalTitle}`, String(channel_id)]).catch(() => {})
         await db.run(
           `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, events_created) VALUES (?, ?, ?, 1)
            ON CONFLICT(guild_id, discord_id, stat_date) DO UPDATE SET events_created = events_created + 1`,
@@ -2025,9 +2033,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       qualification_url,
     } = req.body || {}
 
-    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
+    if (!channel_id) return res.status(400).json({ error: 'missing_fields' })
     if (!min_players || !max_players) return res.status(400).json({ error: 'missing_player_limits' })
     if (!Array.isArray(slots) || slots.length < 2) return res.status(400).json({ error: 'at_least_two_slots_required' })
+
+    // Auto-generate title if not provided
+    let finalTitle = title
+    if (!finalTitle) {
+      const countRow = await db.get('SELECT COUNT(*) as c FROM gambling_events WHERE guild_id = ?', [req.guild.id])
+      finalTitle = `Illy-Kentucky Derby #${(countRow?.c || 0) + 1}`
+    }
 
     const endsAt = duration_minutes ? new Date(Date.now() + (Number(duration_minutes) * 60 * 1000)).toISOString() : null
     const numSlots = slots.length
@@ -2035,8 +2050,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     const r = await db.run(
       `INSERT INTO gambling_events (guild_id, channel_id, title, description, mode, prize_amount, currency, entry_fee, min_players, max_players, duration_minutes, num_slots, created_by, ends_at, qualification_url)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.guild.id, String(channel_id), String(title), String(description || ''),
-       String(mode || 'house'), Number(prize_amount || 0), String(currency || 'SOL'),
+      [req.guild.id, String(channel_id), String(finalTitle), String(description || ''),
+       String(mode || 'house'), Number(prize_amount || 0), String(currency || 'USD'),
        Number(entry_fee || 0), Number(min_players), Number(max_players),
        duration_minutes == null ? null : Number(duration_minutes), numSlots, req.user.id, endsAt,
        qualification_url || null]
@@ -2359,13 +2374,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       small_blind, big_blind, starting_chips, max_players, turn_timer,
     } = req.body || {}
 
-    if (!channel_id || !title) return res.status(400).json({ error: 'missing_fields' })
+    if (!channel_id) return res.status(400).json({ error: 'missing_fields' })
+
+    // Auto-generate title if not provided
+    let finalTitle = title
+    if (!finalTitle) {
+      const countRow = await db.get('SELECT COUNT(*) as c FROM poker_events WHERE guild_id = ?', [req.guild.id])
+      finalTitle = `Illy-Poker #${(countRow?.c || 0) + 1}`
+    }
 
     const r = await db.run(
       `INSERT INTO poker_events (guild_id, channel_id, title, description, mode, buy_in, currency, small_blind, big_blind, starting_chips, max_players, turn_timer, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.guild.id, String(channel_id), String(title), String(description || ''),
-       String(mode || 'pot'), Number(buy_in || 0), String(currency || 'SOL'),
+      [req.guild.id, String(channel_id), String(finalTitle), String(description || ''),
+       String(mode || 'pot'), Number(buy_in || 0), String(currency || 'USD'),
        Number(small_blind || 5), Number(big_blind || 10), Number(starting_chips || 1000),
        Number(max_players || 6), Number(turn_timer || 30), req.user.id]
     )

@@ -68,7 +68,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
   const [description, setDescription] = useState('')
   const [mode, setMode] = useState<'house' | 'pot'>('house')
   const [prizeAmount, setPrizeAmount] = useState('')
-  const [currency, setCurrency] = useState('SOL')
+  const [currency, setCurrency] = useState('USD')
   const [entryFee, setEntryFee] = useState('')
   const [minPlayers, setMinPlayers] = useState('1')
   const [maxPlayers, setMaxPlayers] = useState('10')
@@ -100,6 +100,10 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
         setChannelId(chRes.data[0].id)
         setPublishChannelId(chRes.data[0].id)
       }
+      // Auto-populate title & description
+      const count = (evRes.data || []).length
+      setTitle(`Illy-Kentucky Derby #${count + 1}`)
+      setDescription(prev => prev || 'Pick your horse and place your bets!')
     } finally {
       setLoading(false)
     }

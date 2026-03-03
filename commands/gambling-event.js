@@ -369,7 +369,7 @@ module.exports = {
     .addSubcommand(sub =>
       sub.setName('create')
         .setDescription('Create a new horse race event')
-        .addStringOption(opt => opt.setName('title').setDescription('Event title').setRequired(true))
+        .addStringOption(opt => opt.setName('title').setDescription('Event title (auto-generated if empty)').setRequired(false))
         .addStringOption(opt => opt.setName('description').setDescription('Event description').setRequired(false))
         .addStringOption(opt =>
           opt.setName('mode').setDescription('Prize mode')
@@ -412,17 +412,24 @@ module.exports = {
     const sub = interaction.options.getSubcommand();
 
     if (sub === 'create') {
-      const title = interaction.options.getString('title');
-      const description = interaction.options.getString('description') || '';
+      let title = interaction.options.getString('title');
+      const description = interaction.options.getString('description') || 'Pick your horse and place your bets!';
       const mode = interaction.options.getString('mode') || 'house';
       const prizeAmount = interaction.options.getNumber('prize_amount') || 0;
-      const currency = interaction.options.getString('currency') || 'SOL';
+      const currency = interaction.options.getString('currency') || 'USD';
       const entryFee = interaction.options.getNumber('entry_fee') || 0;
       const minPlayers = interaction.options.getInteger('min_players') || 1;
       const maxPlayers = interaction.options.getInteger('max_players');
       const durationMinutes = interaction.options.getInteger('duration_minutes') || null;
       const numSlots = Math.min(Math.max(interaction.options.getInteger('num_slots') || 6, 2), 6);
       const qualificationUrl = interaction.options.getString('qualification_url') || null;
+
+      // Auto-generate title if not provided
+      if (!title) {
+        const countRow = await db.dbGet('SELECT COUNT(*) as c FROM gambling_events WHERE guild_id = ?', [interaction.guildId]);
+        const count = countRow?.c || 0;
+        title = `Illy-Kentucky Derby #${count + 1}`;
+      }
 
       const eventId = await db.createGamblingEvent(
         interaction.guildId, interaction.channelId,

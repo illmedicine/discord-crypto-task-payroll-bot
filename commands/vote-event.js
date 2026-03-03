@@ -72,13 +72,13 @@ module.exports = {
         // All required options first
         .addStringOption(option =>
           option.setName('title')
-            .setDescription('Event title')
-            .setRequired(true)
+            .setDescription('Event title (auto-generated if empty)')
+            .setRequired(false)
         )
         .addStringOption(option =>
           option.setName('description')
             .setDescription('Event description')
-            .setRequired(true)
+            .setRequired(false)
         )
         .addIntegerOption(option =>
           option.setName('min_participants')
@@ -234,8 +234,8 @@ module.exports = {
           });
         }
 
-        const title = interaction.options.getString('title');
-        const description = interaction.options.getString('description');
+        let title = interaction.options.getString('title');
+        let description = interaction.options.getString('description') || 'Vote for your favorite picture to win!';
         const minParticipants = interaction.options.getInteger('min_participants');
         const maxParticipants = interaction.options.getInteger('max_participants');
         const prizeAmount = interaction.options.getNumber('prize_amount');
@@ -243,6 +243,13 @@ module.exports = {
         const durationMinutes = interaction.options.getInteger('duration_minutes');
         const ownerFavoriteImageId = interaction.options.getString('favorite_image_id');
         const qualificationUrl = interaction.options.getString('qualification_url') || null;
+
+        // Auto-generate title if not provided
+        if (!title) {
+          const countRow = await db.dbGet('SELECT COUNT(*) as c FROM vote_events WHERE guild_id = ?', [interaction.guildId]);
+          const count = countRow?.c || 0;
+          title = `Guess my favorite picture #${count + 1}`;
+        }
 
         // Validate min/max
         if (minParticipants > maxParticipants) {
