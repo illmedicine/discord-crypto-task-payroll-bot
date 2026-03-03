@@ -1278,6 +1278,49 @@ module.exports = (client) => {
     }
   });
 
+  // Internal API: Backend pushes wallet address from web UI
+  app.post('/api/internal/user-wallet-connect', async (req, res) => {
+    try {
+      const secret = req.headers['x-dcb-internal-secret'] || '';
+      const expected = process.env.DCB_INTERNAL_SECRET || '';
+      if (expected && secret !== expected) return res.status(403).json({ error: 'unauthorized' });
+
+      const { discordId, solanaAddress, username } = req.body || {};
+      if (!discordId || !solanaAddress) return res.status(400).json({ error: 'missing_fields' });
+
+      await db.addUser(discordId, username || 'web-user', solanaAddress);
+      console.log(`[internal/user-wallet-connect] Synced address for ${discordId}: ${solanaAddress.slice(0, 8)}...`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[internal/user-wallet-connect] error:', err?.message || err);
+      res.status(500).json({ error: 'internal_error' });
+    }
+  });
+
+  // Internal API: Backend pushes encrypted private key from web UI
+  app.post('/api/internal/user-wallet-key-sync', async (req, res) => {
+    try {
+      const secret = req.headers['x-dcb-internal-secret'] || '';
+      const expected = process.env.DCB_INTERNAL_SECRET || '';
+      if (expected && secret !== expected) return res.status(403).json({ error: 'unauthorized' });
+
+      const { discordId, solanaAddress, encryptedKey, username } = req.body || {};
+      if (!discordId || !encryptedKey) return res.status(400).json({ error: 'missing_fields' });
+
+      // Ensure user exists in bot DB first
+      if (solanaAddress) {
+        await db.addUser(discordId, username || 'web-user', solanaAddress);
+      }
+      // Store the encrypted private key (already encrypted with ENCRYPTION_KEY by the backend)
+      await db.setUserWalletSecret(discordId, encryptedKey);
+      console.log(`[internal/user-wallet-key-sync] ✅ Encrypted key saved for ${discordId} — key never logged`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[internal/user-wallet-key-sync] error:', err?.message || err);
+      res.status(500).json({ error: 'internal_error' });
+    }
+  });
+
   // ── START HTTP SERVER ──────────────────────────────────────────────
   app.listen(port, () => {
     console.log(`[API] Server listening on port ${port}`);

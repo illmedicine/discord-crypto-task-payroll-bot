@@ -232,6 +232,13 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [pPublishChannelId, setPPublishChannelId] = useState('')
   const [pPublishing, setPPublishing] = useState<number | null>(null)
 
+  /* ---- filter & collapse state ---- */
+  const [hideCompleted, setHideCompleted] = useState(true)
+  const [vShowAll, setVShowAll] = useState(false)
+  const [rShowAll, setRShowAll] = useState(false)
+  const [pShowAll, setPShowAll] = useState(false)
+  const [showHowItWorks, setShowHowItWorks] = useState(false)
+
   /* ==================================================================
    *  DATA LOADING
    * ================================================================ */
@@ -658,6 +665,16 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const totalPokerActive = pokerEvents.filter(e => e.status === 'active').length
   const totalEvents = voteEvents.length + raceEvents.length + pokerEvents.length
   const totalActive = totalVoteActive + totalRaceActive + totalPokerActive
+  const totalCompleted = totalEvents - totalActive
+
+  /* ---- Filtered & sliced event lists ---- */
+  const VISIBLE_LIMIT = 5
+  const vFiltered = hideCompleted ? voteEvents.filter(e => e.status === 'active') : voteEvents
+  const rFiltered = hideCompleted ? raceEvents.filter(e => e.status === 'active') : raceEvents
+  const pFiltered = hideCompleted ? pokerEvents.filter(e => e.status === 'active') : pokerEvents
+  const vVisible = vShowAll ? vFiltered : vFiltered.slice(0, VISIBLE_LIMIT)
+  const rVisible = rShowAll ? rFiltered : rFiltered.slice(0, VISIBLE_LIMIT)
+  const pVisible = pShowAll ? pFiltered : pFiltered.slice(0, VISIBLE_LIMIT)
 
   /* ==================================================================
    *  RENDER: empty
@@ -686,9 +703,16 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
         </button>
       </div>
 
-      <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 16 }}>
-        Create and manage all events — photo-voting challenges, horse race betting, and poker tables — from one place.
-      </p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
+          Create and manage all events — photo-voting challenges, horse race betting, and poker tables — from one place.
+        </p>
+        <label className="em-toggle">
+          <input type="checkbox" checked={hideCompleted} onChange={e => setHideCompleted(e.target.checked)} />
+          <span className="em-toggle-slider" />
+          <span className="em-toggle-label">Hide completed ({totalCompleted})</span>
+        </label>
+      </div>
 
       {/* ---- Summary bar ---- */}
       <div className="em-summary-bar">
@@ -716,17 +740,31 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
 
       {/* ---- Filter tabs ---- */}
       <div className="em-tabs">
-        <button className={`em-tab ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>
-          All Events ({totalEvents})
+        <button className={`em-tab em-tab-all ${tab === 'all' ? 'active' : ''}`} onClick={() => setTab('all')}>
+          <span className="em-tab-icon">🎯</span>
+          <span className="em-tab-label">All Events</span>
+          <span className="em-tab-count">{totalEvents}</span>
         </button>
-        <button className={`em-tab ${tab === 'vote' ? 'active' : ''}`} onClick={() => setTab('vote')}>
-          🗳️ Vote Events ({voteEvents.length})
-        <button className={`em-tab ${tab === 'poker' ? 'active' : ''}`} onClick={() => setTab('poker')}>
-          🃏 Poker ({pokerEvents.length})
+        <button className={`em-tab em-tab-vote ${tab === 'vote' ? 'active' : ''}`} onClick={() => setTab('vote')}>
+          <span className="em-tab-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="4" height="9" rx="1" fill="currentColor" opacity="0.5"/><rect x="10" y="6" width="4" height="14" rx="1" fill="currentColor" opacity="0.75"/><rect x="17" y="3" width="4" height="17" rx="1" fill="currentColor"/><path d="M5 9l5-4 4 2 5-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" opacity="0.6"/></svg>
+          </span>
+          <span className="em-tab-label">Vote Events</span>
+          <span className="em-tab-count">{voteEvents.length}</span>
         </button>
+        <button className={`em-tab em-tab-poker ${tab === 'poker' ? 'active' : ''}`} onClick={() => setTab('poker')}>
+          <span className="em-tab-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3C12 3 8 8 8 12c0 2.2 1.8 4 4 4s4-1.8 4-4c0-4-4-9-4-9z" fill="currentColor" opacity="0.3"/><rect x="4" y="2" width="7" height="10" rx="1.5" transform="rotate(-10 4 2)" stroke="currentColor" strokeWidth="1.3" fill="none"/><rect x="13" y="2" width="7" height="10" rx="1.5" transform="rotate(10 20 2)" stroke="currentColor" strokeWidth="1.3" fill="none"/><circle cx="7.5" cy="6" r="1" fill="currentColor"/><circle cx="16.5" cy="6" r="1" fill="currentColor"/><path d="M7 18h10M9 21h6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0.5"/></svg>
+          </span>
+          <span className="em-tab-label">Poker</span>
+          <span className="em-tab-count">{pokerEvents.length}</span>
         </button>
-        <button className={`em-tab ${tab === 'race' ? 'active' : ''}`} onClick={() => setTab('race')}>
-          🏇 Horse Race ({raceEvents.length})
+        <button className={`em-tab em-tab-race ${tab === 'race' ? 'active' : ''}`} onClick={() => setTab('race')}>
+          <span className="em-tab-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 20L8 10l4 6 4-8 4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.5"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.3" fill="currentColor" opacity="0.3"/><path d="M15 4l1.5 3H13.5L15 4z" fill="currentColor" opacity="0.6"/><path d="M3 20h18" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0.3"/></svg>
+          </span>
+          <span className="em-tab-label">Horse Race</span>
+          <span className="em-tab-count">{raceEvents.length}</span>
         </button>
       </div>
 
@@ -736,7 +774,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       {(tab === 'all' || tab === 'vote') && (
         <div className="card em-section" style={{ marginBottom: 24 }}>
           <div className="card-header">
-            <div className="card-title">🗳️ Vote Events ({voteEvents.length})</div>
+            <div className="card-title">🗳️ Vote Events
+              <span className="em-section-counts">
+                <span className="em-count-active">{totalVoteActive} active</span>
+                {voteEvents.length - totalVoteActive > 0 && <span className="em-count-past">{voteEvents.length - totalVoteActive} past</span>}
+              </span>
+            </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Publish to:</span>
               <select className="form-select" style={{ width: 160, fontSize: 12 }} value={vPublishChannelId} onChange={e => setVPublishChannelId(e.target.value)}>
@@ -745,10 +788,10 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
             </div>
           </div>
 
-          {voteEvents.length === 0 ? (
+          {vFiltered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">🗳️</div>
-              <div className="empty-state-text">No vote events yet. Create one below.</div>
+              <div className="empty-state-text">{hideCompleted && voteEvents.length > 0 ? `${voteEvents.length} completed event${voteEvents.length > 1 ? 's' : ''} hidden` : 'No vote events yet. Create one below.'}</div>
             </div>
           ) : (
             <table className="data-table">
@@ -765,7 +808,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {voteEvents.map(ev => (
+                {vVisible.map(ev => (
                   <React.Fragment key={ev.id}>
                     <tr>
                       <td>#{ev.id}</td>
@@ -888,6 +931,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               </tbody>
             </table>
           )}
+          {vFiltered.length > VISIBLE_LIMIT && (
+            <button className="em-show-more" onClick={() => setVShowAll(!vShowAll)}>
+              {vShowAll ? '▴ Show less' : `▾ Show all ${vFiltered.length} vote events`}
+            </button>
+          )}
         </div>
       )}
 
@@ -897,7 +945,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       {(tab === 'all' || tab === 'race') && (
         <div className="card em-section" style={{ marginBottom: 24 }}>
           <div className="card-header">
-            <div className="card-title">🏇 Horse Race Events ({raceEvents.length})</div>
+            <div className="card-title">🏇 Horse Race Events
+              <span className="em-section-counts">
+                <span className="em-count-active">{totalRaceActive} active</span>
+                {raceEvents.length - totalRaceActive > 0 && <span className="em-count-past">{raceEvents.length - totalRaceActive} past</span>}
+              </span>
+            </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Publish to:</span>
               <select className="form-select" style={{ width: 160, fontSize: 12 }} value={rPublishChannelId} onChange={e => setRPublishChannelId(e.target.value)}>
@@ -906,10 +959,10 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
             </div>
           </div>
 
-          {raceEvents.length === 0 ? (
+          {rFiltered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">🏇</div>
-              <div className="empty-state-text">No horse race events yet. Create one below.</div>
+              <div className="empty-state-text">{hideCompleted && raceEvents.length > 0 ? `${raceEvents.length} completed event${raceEvents.length > 1 ? 's' : ''} hidden` : 'No horse race events yet. Create one below.'}</div>
             </div>
           ) : (
             <table className="data-table">
@@ -927,7 +980,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {raceEvents.map(ev => (
+                {rVisible.map(ev => (
                   <React.Fragment key={ev.id}>
                     <tr>
                       <td>#{ev.id}</td>
@@ -1062,6 +1115,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               </tbody>
             </table>
           )}
+          {rFiltered.length > VISIBLE_LIMIT && (
+            <button className="em-show-more" onClick={() => setRShowAll(!rShowAll)}>
+              {rShowAll ? '▴ Show less' : `▾ Show all ${rFiltered.length} race events`}
+            </button>
+          )}
         </div>
       )}
 
@@ -1071,7 +1129,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       {(tab === 'all' || tab === 'poker') && (
         <div className="card em-section" style={{ marginBottom: 24 }}>
           <div className="card-header">
-            <div className="card-title">🃏 Poker Events ({pokerEvents.length})</div>
+            <div className="card-title">🃏 Poker Events
+              <span className="em-section-counts">
+                <span className="em-count-active">{totalPokerActive} active</span>
+                {pokerEvents.length - totalPokerActive > 0 && <span className="em-count-past">{pokerEvents.length - totalPokerActive} past</span>}
+              </span>
+            </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Publish to:</span>
               <select className="form-select" style={{ width: 160, fontSize: 12 }} value={pPublishChannelId} onChange={e => setPPublishChannelId(e.target.value)}>
@@ -1080,10 +1143,10 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
             </div>
           </div>
 
-          {pokerEvents.length === 0 ? (
+          {pFiltered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">🃏</div>
-              <div className="empty-state-text">No poker events yet. Create one below.</div>
+              <div className="empty-state-text">{hideCompleted && pokerEvents.length > 0 ? `${pokerEvents.length} completed event${pokerEvents.length > 1 ? 's' : ''} hidden` : 'No poker events yet. Create one below.'}</div>
             </div>
           ) : (
             <table className="data-table">
@@ -1101,7 +1164,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {pokerEvents.map(ev => (
+                {pVisible.map(ev => (
                   <tr key={ev.id}>
                     <td>#{ev.id}</td>
                     <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ev.title}</td>
@@ -1143,6 +1206,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                 ))}
               </tbody>
             </table>
+          )}
+          {pFiltered.length > VISIBLE_LIMIT && (
+            <button className="em-show-more" onClick={() => setPShowAll(!pShowAll)}>
+              {pShowAll ? '▴ Show less' : `▾ Show all ${pFiltered.length} poker events`}
+            </button>
           )}
         </div>
       )}
@@ -1575,13 +1643,17 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       )}
 
       {/* ============================================================ */}
-      {/*  How Events Work                                              */}
+      {/*  How Events Work (collapsible)                                */}
       {/* ============================================================ */}
       <div className="card" style={{ marginTop: 24 }}>
-        <div className="card-header">
-          <div className="card-title">How DCB Events Work</div>
+        <div className="card-header em-collapsible-header" onClick={() => setShowHowItWorks(!showHowItWorks)} style={{ cursor: 'pointer' }}>
+          <div className="card-title">
+            <span className="em-collapse-arrow">{showHowItWorks ? '▾' : '▸'}</span>
+            How DCB Events Work
+          </div>
+          {!showHowItWorks && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Click to expand</span>}
         </div>
-        <div style={{ padding: '4px 0', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+        {showHowItWorks && <div style={{ padding: '4px 0', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24 }}>
             <div>
               <h4 style={{ color: 'var(--text-primary)', marginBottom: 8, fontSize: 14 }}>🗳️ Vote Events</h4>
@@ -1612,7 +1684,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               <p>🎮 <strong>Casual</strong> — Play money, just for fun.</p>
             </div>
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   )

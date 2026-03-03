@@ -98,6 +98,9 @@ export default function Workers({ guildId, userRole }: Props) {
   const [manualWalletInput, setManualWalletInput] = useState('')
   const [savingWallet, setSavingWallet] = useState(false)
 
+  // Auto-pay wallet status per worker
+  const [walletStatuses, setWalletStatuses] = useState<Record<string, { has_wallet: boolean; has_key: boolean; auto_pay_capable: boolean }>>({})
+
   const isOwner = userRole === 'owner' || userRole === 'admin'
   const isServerOwner = userRole === 'owner'
 
@@ -119,6 +122,24 @@ export default function Workers({ guildId, userRole }: Props) {
     fetchWorkers(ac.signal)
     return () => ac.abort()
   }, [fetchWorkers])
+
+  // Fetch wallet/auto-pay status for all workers
+  useEffect(() => {
+    if (!workers.length) return
+    const ac = new AbortController()
+    Promise.all(
+      workers.map(w =>
+        api.get(`/user/wallet/status/${w.discord_id}`, { signal: ac.signal })
+          .then(r => ({ id: w.discord_id, ...r.data }))
+          .catch(() => ({ id: w.discord_id, has_wallet: false, has_key: false, auto_pay_capable: false }))
+      )
+    ).then(results => {
+      const map: typeof walletStatuses = {}
+      for (const r of results) map[r.id] = r
+      setWalletStatuses(map)
+    })
+    return () => ac.abort()
+  }, [workers])
 
   const openDetail = async (discordId: string) => {
     setDetailLoading(true)
@@ -286,7 +307,7 @@ export default function Workers({ guildId, userRole }: Props) {
               <>
                 <div className="workers-section-label"><span className="role-dot role-dot-admin" /> DCB Admins ({admins.length})</div>
                 {admins.map(w => (
-                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} />
+                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} walletStatus={walletStatuses[w.discord_id]} />
                 ))}
               </>
             )}
@@ -294,7 +315,7 @@ export default function Workers({ guildId, userRole }: Props) {
               <>
                 <div className="workers-section-label"><span className="role-dot role-dot-staff" /> DCB Staff ({staff.length})</div>
                 {staff.map(w => (
-                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} />
+                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} walletStatus={walletStatuses[w.discord_id]} />
                 ))}
               </>
             )}
@@ -518,7 +539,7 @@ export default function Workers({ guildId, userRole }: Props) {
 
 // ---- Sub-components ----
 
-function WorkerCard({ worker, onSelect, selected }: { worker: Worker; onSelect: (id: string) => void; selected: boolean }) {
+function WorkerCard({ worker, onSelect, selected, walletStatus }: { worker: Worker; onSelect: (id: string) => void; selected: boolean; walletStatus?: { has_wallet: boolean; has_key: boolean; auto_pay_capable: boolean } }) {
   return (
     <div className={`worker-card ${selected ? 'worker-card-selected' : ''}`} onClick={() => onSelect(worker.discord_id)}>
       <div className="worker-card-left">
@@ -534,6 +555,9 @@ function WorkerCard({ worker, onSelect, selected }: { worker: Worker; onSelect: 
           <div className="worker-card-name">
             {worker.display_name || worker.username}
             <span className={`worker-role-badge worker-role-badge-${worker.role}`}>{worker.role === 'admin' ? '🔴 Admin' : '🔵 Staff'}</span>
+            {walletStatus?.auto_pay_capable && (
+              <span className="worker-autopay-badge">⚡ Auto-Pay</span>
+            )}
           </div>
           <div className="worker-card-meta">
             Last active: {timeAgo(worker.last_active)} · {worker.total_commands} cmds · {worker.total_payouts_issued} payouts

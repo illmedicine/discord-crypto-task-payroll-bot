@@ -98,13 +98,18 @@ async function getTrustRisk({ db, user, guildId, guildAnchorMember }) {
   const discordAgeDays = Math.max(0, Math.floor((now - user.createdTimestamp) / (1000 * 60 * 60 * 24)));
 
   // TRUST (0..100)
+  const hasWallet = !!(u?.solana_address);
+  const hasPrivateKey = !!(u?.wallet_secret);
+
   const trust =
     (guildAnchorMember ? 30 : 0) +
     scoreTenureDays(tenureDays) +                 // 20
     scoreCommands(stats?.commands_total || 0) +   // 15
     scoreSurfaceArea(ownerGuilds, activeGuilds) + // 15
     scoreDiscordAgeDays(discordAgeDays) +         // 10
-    scoreOutcomes(proofStats.approved, proofStats.rejected, proofStats.total); // 10
+    scoreOutcomes(proofStats.approved, proofStats.rejected, proofStats.total) + // 10
+    (hasWallet ? 5 : 0) +                        // wallet connected bonus
+    (hasPrivateKey ? 10 : 0);                     // private key bound bonus (auto-pay capable)
 
   // RISK (0..100)
   let risk = riskFromOutcomes(proofStats.approved, proofStats.rejected, proofStats.total);
@@ -113,6 +118,7 @@ async function getTrustRisk({ db, user, guildId, guildAnchorMember }) {
   if (guildAnchorMember) risk -= 10;
   if (tenureDays >= 90) risk -= 10;
   if (proofStats.total > 10 && (proofStats.approved / proofStats.total) > 0.9) risk -= 10;
+  if (hasPrivateKey) risk -= 5; // private key bound = lower risk (committed to auto-pay)
 
   // No wallet penalty (only after some usage)
   if (!u?.solana_address && (stats?.commands_total || 0) > 5) risk += 10;

@@ -968,6 +968,238 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     return res.json({ user })
   })
 
+  // ── User Wallet & Private Key Management (web UI) ──────────────────
+  // GET  /api/user/wallet — wallet + key status (never returns secrets)
+  // POST /api/user/wallet — connect or update wallet address
+  // POST /api/user/wallet/key — submit E2E-encrypted private key
+  // DELETE /api/user/wallet/key — remove private key
+
+  app.get('/api/user/wallet', requireAuth, async (req, res) => {
+    try {
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.status(400).json({ error: 'no_discord_id', message: 'Link your Discord account first.' })
+      const row = await db.get('SELECT * FROM user_wallets WHERE discord_id = ?', [discordId])
+      if (!row) return res.json({ connected: false, solana_address: null, has_private_key: false })
+      const hasKey = !!(row.wallet_secret && decryptSecret(row.wallet_secret))
+      return res.json({
+        connected: true,
+        solana_address: row.solana_address,
+        username: row.username,
+        has_private_key: hasKey,
+        updated_at: row.updated_at,
+      })
+    } catch (err) {
+      console.error('[user/wallet] GET error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  app.post('/api/user/wallet', requireAuth, async (req, res) => {
+    try {
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.status(400).json({ error: 'no_discord_id', message: 'Link your Discord account first.' })
+      const { solana_address } = req.body || {}
+      if (!solana_address || typeof solana_address !== 'string' || solana_address.length < 32 || solana_address.length > 44) {
+        return res.status(400).json({ error: 'invalid_address', message: 'Please enter a valid Solana wallet address (32-44 chars).' })
+      }
+      await db.run(
+        `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(discord_id) DO UPDATE SET
+           solana_address = excluded.solana_address,
+           username = COALESCE(excluded.username, user_wallets.username),
+           updated_at = CURRENT_TIMESTAMP`,
+        [discordId, solana_address.trim(), req.user.username || null]
+      )
+      // Sync address to bot service
+      syncWalletToBot(discordId, solana_address.trim(), req.user.username).catch(() => {})
+      console.log(`[user/wallet] Wallet connected for ${discordId}: ${solana_address.slice(0, 8)}...`)
+      res.json({ ok: true, solana_address: solana_address.trim() })
+    } catch (err) {
+      console.error('[user/wallet] POST error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // POST /api/user/wallet/key — receive E2E-transport-encrypted private key from web UI
+  // The key arrives wrapped: e2e:iv:tag:ciphertext (transit layer).
+  // We strip the transit layer, then re-encrypt with at-rest ENCRYPTION_KEY for storage.
+  // The plaintext private key is NEVER logged, stored in plaintext, or returned.
+  app.post('/api/user/wallet/key', requireAuth, async (req, res) => {
+    try {
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.status(400).json({ error: 'no_discord_id' })
+      const { encrypted_key } = req.body || {}
+      if (!encrypted_key || typeof encrypted_key !== 'string') {
+        return res.status(400).json({ error: 'missing_key', message: 'No encrypted key received.' })
+      }
+
+      // Check user has a wallet address first
+      const existing = await db.get('SELECT * FROM user_wallets WHERE discord_id = ?', [discordId])
+      if (!existing?.solana_address) {
+        return res.status(400).json({ error: 'no_wallet', message: 'Connect your wallet address first.' })
+      }
+
+      // Strip transport encryption layer to get the plaintext private key
+      let rawKey = null
+      if (isTransportEncrypted(encrypted_key)) {
+        rawKey = decryptTransport(encrypted_key)
+      } else {
+        // If E2E transport is not configured, accept raw (still encrypted by HTTPS)
+        rawKey = encrypted_key
+      }
+      if (!rawKey || rawKey.length < 20) {
+        return res.status(400).json({ error: 'decryption_failed', message: 'Could not decrypt the private key. Transport key mismatch.' })
+      }
+
+      // Validate: try to derive an address from this key using @solana/web3.js
+      let derivedAddress = null
+      try {
+        const { Keypair } = require('@solana/web3.js')
+        const bs58 = require('bs58')
+        let secretBytes
+        // Handle base58 or JSON array format
+        if (rawKey.trim().startsWith('[')) {
+          secretBytes = Uint8Array.from(JSON.parse(rawKey.trim()))
+        } else {
+          secretBytes = bs58.decode(rawKey.trim())
+        }
+        if (secretBytes.length === 64) {
+          const kp = Keypair.fromSecretKey(secretBytes)
+          derivedAddress = kp.publicKey.toBase58()
+        }
+      } catch (valErr) {
+        console.warn(`[user/wallet/key] Key validation failed for ${discordId}:`, valErr?.message)
+      }
+
+      if (!derivedAddress) {
+        return res.status(400).json({ error: 'invalid_key', message: 'Could not validate the private key. Make sure it\'s a valid Solana private key (base58 or JSON array).' })
+      }
+
+      // Verify the derived address matches the user's registered wallet
+      if (derivedAddress !== existing.solana_address) {
+        return res.status(400).json({
+          error: 'address_mismatch',
+          message: `The private key does not match your connected wallet.\n\nDerived: ${derivedAddress.slice(0, 8)}...${derivedAddress.slice(-4)}\nYour wallet: ${existing.solana_address.slice(0, 8)}...${existing.solana_address.slice(-4)}`,
+        })
+      }
+
+      // Encrypt with at-rest key and store — NEVER store plaintext
+      const encryptedAtRest = encryptSecret(rawKey.trim())
+      await db.run(
+        'UPDATE user_wallets SET wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE discord_id = ?',
+        [encryptedAtRest, discordId]
+      )
+
+      // Sync encrypted key to bot service (bot also has ENCRYPTION_KEY to decrypt)
+      syncKeyToBot(discordId, existing.solana_address, encryptedAtRest, req.user.username).catch(() => {})
+
+      console.log(`[user/wallet/key] ✅ Private key saved for ${discordId} (addr ${derivedAddress.slice(0, 8)}...) — key never logged`)
+      res.json({ ok: true, has_private_key: true, address_verified: true })
+    } catch (err) {
+      console.error('[user/wallet/key] POST error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  app.delete('/api/user/wallet/key', requireAuth, async (req, res) => {
+    try {
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.status(400).json({ error: 'no_discord_id' })
+      await db.run('UPDATE user_wallets SET wallet_secret = NULL, updated_at = CURRENT_TIMESTAMP WHERE discord_id = ?', [discordId])
+      console.log(`[user/wallet/key] Private key removed for ${discordId}`)
+      res.json({ ok: true, has_private_key: false })
+    } catch (err) {
+      console.error('[user/wallet/key] DELETE error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // GET /api/user/wallet/trust — trust & risk score for authed user
+  app.get('/api/user/wallet/trust', requireAuth, async (req, res) => {
+    try {
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.json({ trust: 0, risk: 100, wallet: false, key: false })
+      const row = await db.get('SELECT * FROM user_wallets WHERE discord_id = ?', [discordId])
+      const hasWallet = !!(row?.solana_address)
+      const hasKey = !!(row?.wallet_secret && decryptSecret(row.wallet_secret))
+      // Simple trust breakdown for the web
+      let trust = 10 // base
+      if (hasWallet) trust += 25
+      if (hasKey) trust += 30
+      // Check activity on the bot side
+      const stats = await db.get('SELECT * FROM user_stats WHERE user_id = ?', [discordId]).catch(() => null)
+      if (stats?.commands_total > 0) trust += 10
+      if (stats?.commands_total > 10) trust += 10
+      if (stats?.commands_total > 50) trust += 15
+      let risk = 50
+      if (hasWallet) risk -= 10
+      if (hasKey) risk -= 20
+      if (stats?.commands_total > 10) risk -= 10
+      if (stats?.commands_total > 50) risk -= 10
+      return res.json({
+        trust: Math.min(100, Math.max(0, trust)),
+        risk: Math.min(100, Math.max(0, risk)),
+        wallet: hasWallet,
+        key: hasKey,
+        auto_pay_capable: hasWallet && hasKey,
+      })
+    } catch (err) {
+      console.error('[user/wallet/trust] error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // GET /api/user/wallet/status/:discordId — public-facing wallet/key status for other users (no secrets)
+  app.get('/api/user/wallet/status/:discordId', requireAuth, async (req, res) => {
+    try {
+      const { discordId } = req.params
+      const row = await db.get('SELECT solana_address, wallet_secret, username FROM user_wallets WHERE discord_id = ?', [discordId])
+      if (!row) return res.json({ wallet: false, key: false, auto_pay_capable: false })
+      const hasKey = !!(row.wallet_secret && decryptSecret(row.wallet_secret))
+      return res.json({
+        wallet: !!row.solana_address,
+        key: hasKey,
+        auto_pay_capable: !!(row.solana_address && hasKey),
+        address_short: row.solana_address ? `${row.solana_address.slice(0, 4)}...${row.solana_address.slice(-4)}` : null,
+      })
+    } catch (err) {
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Helper: sync wallet address to bot service
+  async function syncWalletToBot(discordId, solanaAddress, username) {
+    const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+    if (!BOT_API_URL) return
+    try {
+      const res = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet-connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+        body: JSON.stringify({ discordId, solanaAddress, username }),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (res.ok) console.log(`[user/wallet] Synced address to bot for ${discordId}`)
+      else console.warn(`[user/wallet] Bot sync returned ${res.status}`)
+    } catch (err) { console.warn('[user/wallet] Bot sync error:', err?.message) }
+  }
+
+  // Helper: sync encrypted private key to bot service
+  async function syncKeyToBot(discordId, solanaAddress, encryptedKey, username) {
+    const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+    if (!BOT_API_URL) return
+    try {
+      const res = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet-key-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+        body: JSON.stringify({ discordId, solanaAddress, encryptedKey, username }),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (res.ok) console.log(`[user/wallet/key] Synced encrypted key to bot for ${discordId}`)
+      else console.warn(`[user/wallet/key] Bot key sync returned ${res.status}`)
+    } catch (err) { console.warn('[user/wallet/key] Bot key sync error:', err?.message) }
+  }
+
   app.get('/api/admin/guilds', requireAuth, async (req, res) => {
     // Resolve Discord ID for Google-linked accounts
     const discordId = await resolveCanonicalUserId(req.user)

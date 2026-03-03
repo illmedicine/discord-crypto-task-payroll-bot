@@ -323,6 +323,9 @@ db.serialize(() => {
     )`
   )
 
+  // Migration: add wallet_secret column to user_wallets (encrypted private key)
+  db.run(`ALTER TABLE user_wallets ADD COLUMN wallet_secret TEXT`, () => {})
+
   // Worker payouts – tracks every SOL payment made to a worker via the web dashboard
   db.run(
     `CREATE TABLE IF NOT EXISTS worker_payouts (

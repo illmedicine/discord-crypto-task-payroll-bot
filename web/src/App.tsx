@@ -9,9 +9,10 @@ import QualifyPage from './pages/QualifyPage'
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
 import EventTicker from './components/EventTicker'
+import WalletSettings from './components/WalletSettings'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify'
+type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify' | 'wallet'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Home', icon: '📊' },
@@ -349,6 +350,13 @@ export default function App() {
 
               <div className="mobile-sheet-divider" />
 
+              <button
+                className="mobile-sheet-item"
+                onClick={() => { setProfileMenuOpen(false); navigate('wallet' as Page) }}
+              >
+                🔐 Wallet & Security
+              </button>
+
               {user.auth_provider === 'google' && !accountInfo?.discord_linked && (
                 <a className="mobile-sheet-item" href={getDiscordLinkUrl()} onClick={() => localStorage.removeItem('dcb_token')}>
                   🔗 Link Discord
@@ -397,6 +405,7 @@ export default function App() {
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
+            {page === 'wallet' && <WalletSettings />}
           </ProfilerLogger>
         </main>
 
@@ -494,6 +503,13 @@ export default function App() {
 
               <div className="profile-menu-divider" />
 
+              <button
+                className="profile-menu-item"
+                onClick={() => { setProfileMenuOpen(false); navigate('wallet' as Page) }}
+              >
+                <span className="profile-menu-icon">🔐</span> Wallet & Security
+              </button>
+
               {user.auth_provider === 'google' && !accountInfo?.discord_linked && (
                 <a className="profile-menu-item" href={getDiscordLinkUrl()} onClick={() => localStorage.removeItem('dcb_token')}>
                   <span className="profile-menu-icon">🔗</span> Link Discord
@@ -574,6 +590,7 @@ export default function App() {
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
+            {page === 'wallet' && <WalletSettings />}
           </ProfilerLogger>
         </main>
 
