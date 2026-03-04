@@ -1967,11 +1967,15 @@ const getExpiredGamblingEvents = () => {
   });
 };
 
-const updateGamblingEventStatus = (eventId, status) => {
+const updateGamblingEventStatus = (eventId, status, expectedStatus) => {
   return new Promise((resolve, reject) => {
-    db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId], (err) => {
+    const sql = expectedStatus
+      ? `UPDATE gambling_events SET status = ? WHERE id = ? AND status = ?`
+      : `UPDATE gambling_events SET status = ? WHERE id = ?`;
+    const params = expectedStatus ? [status, eventId, expectedStatus] : [status, eventId];
+    db.run(sql, params, function (err) {
       if (err) reject(err);
-      else resolve();
+      else resolve({ changes: this.changes });
     });
   });
 };
