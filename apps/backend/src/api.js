@@ -2649,7 +2649,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const { wallet_address, label, network, wallet_secret } = req.body || {}
       if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.length < 32 || wallet_address.length > 44) {
@@ -2685,7 +2685,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const updates = req.body || {}
       const fields = []; const params = []
@@ -2718,7 +2718,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/wallet', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       await db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
       await db.run(
@@ -2731,7 +2731,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet/budget', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const { budget_total, budget_currency } = req.body || {}
       if (budget_total == null || Number(budget_total) < 0) return res.status(400).json({ error: 'invalid_budget' })
@@ -2743,7 +2743,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/wallet/budget/reset', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       await db.run('UPDATE guild_wallets SET budget_spent = 0, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?', [req.guild.id])
       const wallet = await db.get('SELECT * FROM guild_wallets WHERE guild_id = ?', [req.guild.id])
@@ -3221,7 +3221,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   // Manually set a worker's wallet address — OWNER ONLY.
   // This lets owners enter a wallet when the bot is down or the worker hasn't run /user-wallet connect yet.
-  app.put('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildOwner, async (req, res) => {
+  app.put('/api/admin/guilds/:guildId/workers/:discordId/wallet', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const { wallet_address } = req.body || {}
       if (!wallet_address || typeof wallet_address !== 'string' || wallet_address.trim().length < 32 || wallet_address.trim().length > 48) {
@@ -3259,15 +3259,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // Pay a worker — OWNER OR ADMIN. Sends SOL from guild treasury to worker's connected user-wallet.
+  // Pay a worker — OWNER ONLY. Sends SOL from guild treasury to worker's connected user-wallet.
   // Accepts amount in USD, converts to SOL at current market price.
-  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/workers/:discordId/pay', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     let step = 'init'
     try {
-      // Owner or admin check — requireGuildOwner already verified the user is owner or admin
-      if (req.userRole !== 'owner' && req.userRole !== 'admin') {
-        return res.status(403).json({ error: 'owner_only', message: 'Only the server owner or an admin can pay staff.' })
-      }
 
       step = 'parse_amount'
       const { amount_usd, memo } = req.body || {}

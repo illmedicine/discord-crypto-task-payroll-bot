@@ -69,6 +69,24 @@ module.exports = {
     const guildId = interaction.guildId;
     const guild = interaction.guild;
 
+    // ── Server Owner check for mutating subcommands ──
+    const mutatingCommands = ['assign', 'remove', 'promote', 'demote'];
+    if (mutatingCommands.includes(sub)) {
+      let g = guild;
+      if (!g) { try { g = await interaction.client.guilds.fetch(guildId); } catch {} }
+      if (!g || g.ownerId !== interaction.user.id) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xef4444)
+              .setTitle('🔒 Server Owner Only')
+              .setDescription('Only the **server owner** can add, remove, promote, or demote DCB staff.')
+          ],
+          ephemeral: true
+        });
+      }
+    }
+
     // ==================== SETUP ====================
     if (sub === 'setup') {
       await interaction.deferReply({ ephemeral: true });

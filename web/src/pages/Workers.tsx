@@ -101,7 +101,7 @@ export default function Workers({ guildId, userRole }: Props) {
   // Auto-pay wallet status per worker
   const [walletStatuses, setWalletStatuses] = useState<Record<string, { has_wallet: boolean; has_key: boolean; auto_pay_capable: boolean }>>({})
 
-  const isOwner = userRole === 'owner' || userRole === 'admin'
+  const isOwner = userRole === 'owner'
   const isServerOwner = userRole === 'owner'
 
   const fetchWorkers = useCallback((signal?: AbortSignal) => {
@@ -330,7 +330,7 @@ export default function Workers({ guildId, userRole }: Props) {
                 worker={selectedWorker}
                 onRoleChange={isServerOwner ? handleRoleChange : undefined}
                 onRemove={isServerOwner ? handleRemove : undefined}
-                onPay={isOwner ? openPayModal : undefined}
+                onPay={isServerOwner ? openPayModal : undefined}
               />
             ) : (
               <div className="workers-detail-placeholder">

@@ -163,7 +163,7 @@ export default function App() {
   }
 
   const userRole = guilds.find(g => g.id === guildId)?.role || 'member'
-  const isOwner = userRole === 'owner' || userRole === 'admin'
+  const isOwner = userRole === 'owner'
 
   // Detect Capacitor / mobile environment for token-paste fallback
   const isCapacitorEnv = isMobileApp
