@@ -73,8 +73,10 @@ module.exports = function buildApi({ discordClient }) {
     if (uiBase) {
       try { origins.push(new URL(uiBase).origin) } catch (_) { origins.push(uiBase) }
     }
-    // Always allow GitHub Pages origin
+    // Always allow GitHub Pages origin and custom domain
     origins.push('https://illmedicine.github.io')
+    origins.push('https://dcb-gm.com')
+    origins.push('http://dcb-gm.com')
     return origins
   })()
 
