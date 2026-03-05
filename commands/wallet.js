@@ -24,6 +24,16 @@ module.exports = {
     )
     .addSubcommand(subcommand =>
       subcommand
+        .setName('set-key')
+        .setDescription('Add or update the treasury wallet private key (Server Owner only)')
+        .addStringOption(option =>
+          option.setName('secret')
+            .setDescription('Base58 private key for auto-payouts (AES-256-GCM encrypted at rest, never shown)')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
         .setName('balance')
         .setDescription('Check treasury wallet balance')
     )
@@ -77,7 +87,8 @@ module.exports = {
               { name: 'Configured Wallet', value: `\`${existingWallet.wallet_address}\`` },
               { name: 'Status', value: '🔒 Locked via Discord' },
               { name: 'Configured On', value: new Date(existingWallet.configured_at).toLocaleString() },
-              { name: 'Need to change?', value: 'Server owners can disconnect and reconnect the wallet from **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)**.' }
+              { name: 'Add Private Key?', value: 'Use `/wallet set-key` to add or update the private key for auto-payouts.' },
+              { name: 'Need to change wallet?', value: 'Server owners can disconnect and reconnect the wallet from **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)**.' }
             )
             .setTimestamp();
 
@@ -152,6 +163,85 @@ module.exports = {
         return interaction.editReply({
           content: `❌ Error: ${error.message}`
         });
+      }
+    }
+
+    if (subcommand === 'set-key') {
+      await interaction.deferReply({ ephemeral: true });
+      try {
+        // Check if user is the server owner
+        let guild = interaction.guild;
+        if (!guild) {
+          try {
+            guild = await interaction.client.guilds.fetch(guildId);
+          } catch (e) {
+            console.error(`[WALLET] Could not fetch guild ${guildId}:`, e.message);
+            return interaction.editReply({ content: '❌ Could not verify server ownership.' });
+          }
+        }
+        if (interaction.user.id !== guild.ownerId) {
+          return interaction.editReply({ content: '❌ Only the **Server Owner** can update the treasury wallet private key.' });
+        }
+
+        // Check if wallet exists
+        const existingWallet = await getGuildWalletWithFallback(guildId);
+        if (!existingWallet) {
+          return interaction.editReply({ content: '❌ No treasury wallet configured. Use `/wallet connect` first.' });
+        }
+
+        const secretKey = interaction.options.getString('secret');
+
+        // Validate the private key
+        let keypair;
+        try {
+          keypair = crypto.getKeypairFromSecret(secretKey);
+        } catch (err) {
+          return interaction.editReply({ content: '❌ Invalid private key format. Must be a base58-encoded Solana secret key.' });
+        }
+        if (!keypair) {
+          return interaction.editReply({ content: '❌ Invalid private key format. Must be a base58-encoded Solana secret key.' });
+        }
+
+        // Verify the key matches the connected wallet address
+        if (keypair.publicKey.toString() !== existingWallet.wallet_address) {
+          return interaction.editReply({
+            content: `❌ Private key does not match the treasury wallet address.\n\n` +
+              `**Treasury address:** \`${existingWallet.wallet_address}\`\n` +
+              `**Key derives:** \`${keypair.publicKey.toString()}\`\n\n` +
+              `Please provide the correct private key for the treasury wallet.`
+          });
+        }
+
+        // Save the key
+        await db.setGuildWalletSecret(guildId, secretKey);
+        console.log(`[WALLET] set-key: Private key updated for guild ${guildId} by ${interaction.user.id}`);
+
+        // Sync to backend
+        syncWalletToBackend({
+          guildId,
+          action: 'update-key',
+          wallet_address: existingWallet.wallet_address,
+          wallet_secret: secretKey,
+          label: existingWallet.label || 'Treasury',
+          network: existingWallet.network || process.env.CLUSTER || 'mainnet-beta',
+          configured_by: interaction.user.id
+        });
+
+        const embed = new EmbedBuilder()
+          .setColor('#14F195')
+          .setTitle('\u2705 Treasury Private Key Updated')
+          .setDescription('The private key for the treasury wallet has been saved and synced.')
+          .addFields(
+            { name: 'Treasury Address', value: `\`${existingWallet.wallet_address}\`` },
+            { name: 'Auto-Payouts', value: '\u2705 Enabled — payments will be sent from this wallet automatically' },
+            { name: 'Security', value: '\uD83D\uDD12 AES-256-GCM encrypted at rest, never displayed' }
+          )
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+      } catch (error) {
+        console.error('Wallet set-key error:', error);
+        return interaction.editReply({ content: `❌ Error: ${error.message}` });
       }
     }
 

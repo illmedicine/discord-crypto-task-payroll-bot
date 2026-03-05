@@ -705,6 +705,20 @@ const updateGuildWallet = (guildId, updates) => {
   });
 };
 
+const setGuildWalletSecret = (guildId, walletSecret) => {
+  const encryptedSecret = walletSecret ? encryptSecret(walletSecret) : null;
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE guild_wallets SET wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE guild_id = ?`,
+      [encryptedSecret, guildId],
+      function(err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      }
+    );
+  });
+};
+
 const deleteGuildWallet = (guildId) => {
   return new Promise((resolve, reject) => {
     db.run('DELETE FROM guild_wallets WHERE guild_id = ?', [guildId], function(err) {
@@ -2827,6 +2841,7 @@ module.exports = {
   setGuildWallet,
   getGuildWallet,
   updateGuildWallet,
+  setGuildWalletSecret,
   deleteGuildWallet,
   addBudgetSpend,
   setApprovedRoles,
