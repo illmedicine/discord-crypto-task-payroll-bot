@@ -3348,13 +3348,25 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         return res.status(400).json({ error: 'no_secret', message: 'Treasury wallet private key not configured. Add it in the Treasury tab to enable payouts.' })
       }
 
-      // 4. Fetch SOL price to convert USD → SOL
+      // 4. Fetch SOL price to convert USD → SOL (with fallbacks)
       step = 'fetch_sol_price'
       let solPrice = 0
       try {
         const priceRes = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 })
         solPrice = priceRes.data?.solana?.usd || 0
       } catch (_) {}
+      if (!solPrice) {
+        try {
+          const cbRes = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 5000 })
+          solPrice = parseFloat(cbRes.data?.data?.amount) || 0
+        } catch (_) {}
+      }
+      if (!solPrice) {
+        try {
+          const krRes = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 5000 })
+          solPrice = parseFloat(krRes.data?.result?.SOLUSD?.c?.[0]) || 0
+        } catch (_) {}
+      }
 
       if (!solPrice || solPrice <= 0) {
         return res.status(503).json({ error: 'price_unavailable', message: 'Unable to fetch SOL price. Please try again in a moment.' })
@@ -4185,10 +4197,19 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         try {
           const { data } = await axios.get(
             'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-            { timeout: 8000 }
+            { timeout: 5000 }
           );
-          return data?.solana?.usd || 0;
-        } catch { return 0; }
+          if (data?.solana?.usd) return data.solana.usd;
+        } catch {}
+        try {
+          const { data } = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 5000 });
+          if (data?.data?.amount) return parseFloat(data.data.amount);
+        } catch {}
+        try {
+          const { data } = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 5000 });
+          if (data?.result?.SOLUSD?.c?.[0]) return parseFloat(data.result.SOLUSD.c[0]);
+        } catch {}
+        return 0;
       }
 
       // Fetch SOL price + wallet balances (best-effort)
