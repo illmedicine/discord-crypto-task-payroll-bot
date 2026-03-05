@@ -100,10 +100,17 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
         setChannelId(chRes.data[0].id)
         setPublishChannelId(chRes.data[0].id)
       }
-      // Auto-populate title & description
-      const count = (evRes.data || []).length
-      setTitle(`Illy-Kentucky Derby #${count + 1}`)
-      setDescription(prev => prev || 'Pick your horse and place your bets!')
+      // Auto-populate title & description from last event
+      const evList = evRes.data || []
+      if (evList.length) {
+        const last = evList[evList.length - 1]
+        const m = last.title?.match(/^(.+?)\s*#(\d+)\s*$/)
+        setTitle(m ? `${m[1]} #${Number(m[2]) + 1}` : `${last.title || 'Illy-Kentucky Derby'} #${evList.length + 1}`)
+        setDescription(last.description || 'Pick your horse and place your bets!')
+      } else {
+        setTitle('Illy-Kentucky Derby #1')
+        setDescription(prev => prev || 'Pick your horse and place your bets!')
+      }
     } finally {
       setLoading(false)
     }

@@ -235,7 +235,7 @@ module.exports = {
         }
 
         let title = interaction.options.getString('title');
-        let description = interaction.options.getString('description') || 'Vote for your favorite picture to win!';
+        let description = interaction.options.getString('description');
         const minParticipants = interaction.options.getInteger('min_participants');
         const maxParticipants = interaction.options.getInteger('max_participants');
         const prizeAmount = interaction.options.getNumber('prize_amount');
@@ -244,11 +244,20 @@ module.exports = {
         const ownerFavoriteImageId = interaction.options.getString('favorite_image_id');
         const qualificationUrl = interaction.options.getString('qualification_url') || null;
 
-        // Auto-generate title if not provided
-        if (!title) {
-          const countRow = await db.dbGet('SELECT COUNT(*) as c FROM vote_events WHERE guild_id = ?', [interaction.guildId]);
-          const count = countRow?.c || 0;
-          title = `Guess my favorite picture #${count + 1}`;
+        // Auto-generate title & description from last event if not provided
+        if (!title || !description) {
+          const lastEvent = await db.dbGet('SELECT title, description FROM vote_events WHERE guild_id = ? ORDER BY id DESC LIMIT 1', [interaction.guildId]);
+          if (!title) {
+            if (lastEvent?.title) {
+              const m = lastEvent.title.match(/^(.+?)\s*#(\d+)\s*$/);
+              title = m ? `${m[1]} #${Number(m[2]) + 1}` : `${lastEvent.title} #2`;
+            } else {
+              title = 'Guess my favorite picture #1';
+            }
+          }
+          if (!description) {
+            description = lastEvent?.description || 'Vote for your favorite picture to win!';
+          }
         }
 
         // Validate min/max

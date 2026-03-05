@@ -54,10 +54,17 @@ export default function VoteEvents({ guildId }: Props) {
       setEvents(evRes.data || [])
       setChannels(chRes.data || [])
       if (!channelId && (chRes.data || []).length) setChannelId(chRes.data[0].id)
-      // Auto-populate title & description
-      const count = (evRes.data || []).length
-      setTitle(`Guess my favorite picture #${count + 1}`)
-      setDescription(prev => prev || 'Vote for your favorite picture to win!')
+      // Auto-populate title & description from last event
+      const evList = evRes.data || []
+      if (evList.length) {
+        const last = evList[evList.length - 1]
+        const m = last.title?.match(/^(.+?)\s*#(\d+)\s*$/)
+        setTitle(m ? `${m[1]} #${Number(m[2]) + 1}` : `${last.title || 'Guess my favorite picture'} #${evList.length + 1}`)
+        setDescription(last.description || 'Vote for your favorite picture to win!')
+      } else {
+        setTitle('Guess my favorite picture #1')
+        setDescription(prev => prev || 'Vote for your favorite picture to win!')
+      }
     } finally {
       setLoading(false)
     }

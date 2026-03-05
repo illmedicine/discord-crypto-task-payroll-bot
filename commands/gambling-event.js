@@ -413,7 +413,7 @@ module.exports = {
 
     if (sub === 'create') {
       let title = interaction.options.getString('title');
-      const description = interaction.options.getString('description') || 'Pick your horse and place your bets!';
+      let description = interaction.options.getString('description');
       const mode = interaction.options.getString('mode') || 'house';
       const prizeAmount = interaction.options.getNumber('prize_amount') || 0;
       const currency = interaction.options.getString('currency') || 'USD';
@@ -424,11 +424,20 @@ module.exports = {
       const numSlots = Math.min(Math.max(interaction.options.getInteger('num_slots') || 6, 2), 6);
       const qualificationUrl = interaction.options.getString('qualification_url') || null;
 
-      // Auto-generate title if not provided
-      if (!title) {
-        const countRow = await db.dbGet('SELECT COUNT(*) as c FROM gambling_events WHERE guild_id = ?', [interaction.guildId]);
-        const count = countRow?.c || 0;
-        title = `Illy-Kentucky Derby #${count + 1}`;
+      // Auto-generate title & description from last event if not provided
+      if (!title || !description) {
+        const lastEvent = await db.dbGet('SELECT title, description FROM gambling_events WHERE guild_id = ? ORDER BY id DESC LIMIT 1', [interaction.guildId]);
+        if (!title) {
+          if (lastEvent?.title) {
+            const m = lastEvent.title.match(/^(.+?)\s*#(\d+)\s*$/);
+            title = m ? `${m[1]} #${Number(m[2]) + 1}` : `${lastEvent.title} #2`;
+          } else {
+            title = 'Illy-Kentucky Derby #1';
+          }
+        }
+        if (!description) {
+          description = lastEvent?.description || 'Pick your horse and place your bets!';
+        }
       }
 
       const eventId = await db.createGamblingEvent(

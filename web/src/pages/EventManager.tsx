@@ -262,16 +262,25 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
         if (!rChannelId) { setRChannelId(ch[0].id); setRPublishChannelId(ch[0].id) }
         if (!pChannelId) { setPChannelId(ch[0].id); setPPublishChannelId(ch[0].id) }
       }
-      // Auto-populate default titles & descriptions based on existing event count
-      const veCount = (veRes.data || []).length
-      const geCount = (geRes.data || []).length
-      const peCount = (peRes.data || []).length
-      setVTitle(`Guess my favorite picture #${veCount + 1}`)
-      setVDescription(prev => prev || 'Vote for your favorite picture to win!')
-      setRTitle(`Illy-Kentucky Derby #${geCount + 1}`)
-      setRDescription(prev => prev || 'Pick your horse and place your bets!')
-      setPTitle(`Illy-Poker #${peCount + 1}`)
-      setPDescription(prev => prev || 'Pot-split Texas Hold\'em poker night')
+      // Auto-populate default titles & descriptions from last event (with incremented number)
+      function nextTitle(events: any[], fallback: string) {
+        if (events.length) {
+          const last = events[events.length - 1]
+          const m = last.title?.match(/^(.+?)\s*#(\d+)\s*$/)
+          if (m) return `${m[1]} #${Number(m[2]) + 1}`
+          return `${last.title || fallback} #${events.length + 1}`
+        }
+        return `${fallback} #1`
+      }
+      const veList = veRes.data || []
+      const geList = geRes.data || []
+      const peList = peRes.data || []
+      setVTitle(nextTitle(veList, 'Guess my favorite picture'))
+      setVDescription(veList.length ? veList[veList.length - 1].description || 'Vote for your favorite picture to win!' : 'Vote for your favorite picture to win!')
+      setRTitle(nextTitle(geList, 'Illy-Kentucky Derby'))
+      setRDescription(geList.length ? geList[geList.length - 1].description || 'Pick your horse and place your bets!' : 'Pick your horse and place your bets!')
+      setPTitle(nextTitle(peList, 'Illy-Poker'))
+      setPDescription(peList.length ? peList[peList.length - 1].description || 'Pot-split Texas Hold\'em poker night' : 'Pot-split Texas Hold\'em poker night')
     } finally {
       setLoading(false)
     }
