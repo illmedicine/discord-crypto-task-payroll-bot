@@ -642,6 +642,38 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
+    // Handle Connect Wallet button (gambling events — opens modal for private key)
+    if (interaction.customId.startsWith('dcb_cw_gamble_')) {
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleConnectWalletButton) {
+        try {
+          await gamblingEventCommand.handleConnectWalletButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling gambling connect wallet button:', error);
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: '❌ An error occurred opening the wallet form.', ephemeral: true }).catch(() => {});
+          }
+        }
+      }
+      return;
+    }
+
+    // Handle Connect Wallet button (poker events — opens modal for private key)
+    if (interaction.customId.startsWith('dcb_cw_poker_')) {
+      const pokerCommand = client.commands.get('poker');
+      if (pokerCommand && pokerCommand.handleConnectWalletButton) {
+        try {
+          await pokerCommand.handleConnectWalletButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling poker connect wallet button:', error);
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: '❌ An error occurred opening the wallet form.', ephemeral: true }).catch(() => {});
+          }
+        }
+      }
+      return;
+    }
+
     // Handle gambling event qualify button
     if (interaction.customId.startsWith('gamble_qualify_')) {
       const gamblingEventCommand = client.commands.get('gambling-event');
@@ -925,6 +957,42 @@ client.on('interactionCreate', async interaction => {
 
   // Handle modal submissions
   if (interaction.isModalSubmit()) {
+    // Handle Connect Wallet modal (gambling events — private key submission)
+    if (interaction.customId.startsWith('dcb_wm_gamble_')) {
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleWalletModal) {
+        try {
+          await gamblingEventCommand.handleWalletModal(interaction);
+        } catch (error) {
+          console.error('❌ Error handling gambling wallet modal:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred connecting your wallet.', ephemeral: true }).catch(() => {});
+          } else {
+            await interaction.reply({ content: '❌ An error occurred connecting your wallet.', ephemeral: true }).catch(() => {});
+          }
+        }
+      }
+      return;
+    }
+
+    // Handle Connect Wallet modal (poker events — private key submission)
+    if (interaction.customId.startsWith('dcb_wm_poker_')) {
+      const pokerCommand = client.commands.get('poker');
+      if (pokerCommand && pokerCommand.handleWalletModal) {
+        try {
+          await pokerCommand.handleWalletModal(interaction);
+        } catch (error) {
+          console.error('❌ Error handling poker wallet modal:', error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: '❌ An error occurred connecting your wallet.', ephemeral: true }).catch(() => {});
+          } else {
+            await interaction.reply({ content: '❌ An error occurred connecting your wallet.', ephemeral: true }).catch(() => {});
+          }
+        }
+      }
+      return;
+    }
+
     if (interaction.customId.startsWith('proof_modal_')) {
       const submitProofCommand = client.commands.get('submit-proof');
       if (submitProofCommand && submitProofCommand.handleModal) {

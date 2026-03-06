@@ -1,4 +1,5 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { encryptSecret } = require('../utils/encryption');
 const db = require('../utils/db');
 const crypto = require('../utils/crypto');
 const { processGamblingEvent, HORSE_PRESETS } = require('../utils/gamblingEventProcessor');
@@ -614,8 +615,17 @@ module.exports = {
       // Check user has a wallet with private key connected (with backend fallback)
       const userData = await getUserWithFallback(interaction.user.id);
       if (!userData || !userData.solana_address) {
+        const connectBtn = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`dcb_cw_gamble_${eventId}_${slotNumber}`)
+            .setLabel('🔐 Connect Wallet')
+            .setStyle(ButtonStyle.Primary)
+        );
         return interaction.editReply({
-          content: `❌ **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\``
+          content: `🔐 **Wallet Required!**\n\nThis race requires a **${entryFee} ${event.currency}** entry fee.\n\n` +
+            `Click **Connect Wallet** below to securely add your Phantom private key.\n` +
+            `🔒 Your key is **AES-256 encrypted** — not even the bot owner can see it.`,
+          components: [connectBtn]
         });
       }
 
@@ -627,11 +637,18 @@ module.exports = {
         playerSecret = earlyGuildWallet.wallet_secret;
       }
       if (!playerSecret) {
+        const connectBtn = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`dcb_cw_gamble_${eventId}_${slotNumber}`)
+            .setLabel('🔐 Connect Wallet')
+            .setStyle(ButtonStyle.Primary)
+        );
         return interaction.editReply({
-          content: `❌ **Private Key Required!**\n\nPot-mode horse races require your Solana private key to pay the entry fee.\n\n` +
-            `🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n` +
-            `🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_PRIVATE_KEY\`\n\n` +
-            `Your wallet address: \`${userData.solana_address}\``
+          content: `🔐 **Private Key Required!**\n\nPot-mode horse races need your Solana private key to pay the entry fee.\n\n` +
+            `Click **Connect Wallet** below to securely add your Phantom private key.\n` +
+            `🔒 Your key is **AES-256 encrypted** — not even the bot owner can see it.\n\n` +
+            `Your wallet address: \`${userData.solana_address}\``,
+          components: [connectBtn]
         });
       }
 
@@ -879,6 +896,177 @@ module.exports = {
       content: '❌ Bet cancelled. You can pick a horse any time before the race starts!',
       embeds: [], components: []
     });
+  },
+
+  // ---- Button handler: Connect Wallet (opens modal for private key entry) ----
+  async handleConnectWalletButton(interaction) {
+    // customId format: dcb_cw_gamble_{eventId}_{slotNumber}
+    const parts = interaction.customId.split('_');
+    const eventId = parts[3];
+    const slotNumber = parts[4];
+
+    const modal = new ModalBuilder()
+      .setCustomId(`dcb_wm_gamble_${eventId}_${slotNumber}`)
+      .setTitle('🔐 Connect Your Wallet');
+
+    const keyInput = new TextInputBuilder()
+      .setCustomId('private_key')
+      .setLabel('Phantom Wallet Private Key (base58)')
+      .setPlaceholder('Paste your private key from Phantom → Settings → Security → Export Private Key')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMinLength(40)
+      .setMaxLength(120);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(keyInput));
+    await interaction.showModal(modal);
+  },
+
+  // ---- Modal handler: Process wallet private key submission ----
+  async handleWalletModal(interaction) {
+    // customId format: dcb_wm_gamble_{eventId}_{slotNumber}
+    const parts = interaction.customId.split('_');
+    const eventId = Number(parts[3]);
+    const slotNumber = Number(parts[4]);
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const privateKey = interaction.fields.getTextInputValue('private_key').trim().replace(/[^\x20-\x7E]/g, '');
+
+    // 1. Validate key format
+    let keypair;
+    try {
+      keypair = crypto.getKeypairFromSecret(privateKey);
+    } catch (_) {}
+    if (!keypair) {
+      return interaction.editReply({
+        content: '❌ **Invalid Private Key!**\n\n' +
+          'The key you entered is not a valid Solana private key.\n' +
+          'Make sure you\'re pasting your **private key** (not your wallet address).\n\n' +
+          '💡 **In Phantom:** Settings → Security & Privacy → Export Private Key\n' +
+          '💡 The key should be a long base58 string (≈88 characters)'
+      });
+    }
+
+    const derivedAddress = keypair.publicKey.toBase58();
+    console.log(`[GamblingEvent] Wallet connected via modal: user=${interaction.user.id}, addr=${derivedAddress.slice(0,8)}...`);
+
+    // 2. Store address + encrypted private key
+    await db.addUser(interaction.user.id, interaction.user.username, derivedAddress);
+    await db.setUserWalletSecret(interaction.user.id, privateKey);
+
+    // 3. Sync to backend
+    try {
+      const DCB_BACKEND_URL_VAL = process.env.DCB_BACKEND_URL || '';
+      const DCB_INTERNAL_SECRET_VAL = process.env.DCB_INTERNAL_SECRET || '';
+      if (DCB_BACKEND_URL_VAL && DCB_INTERNAL_SECRET_VAL) {
+        const encryptedKey = encryptSecret(privateKey);
+        await fetch(`${DCB_BACKEND_URL_VAL.replace(/\/$/, '')}/api/internal/user-wallet-key-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET_VAL },
+          body: JSON.stringify({ discordId: interaction.user.id, encryptedKey })
+        });
+        await fetch(`${DCB_BACKEND_URL_VAL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET_VAL },
+          body: JSON.stringify({ discordId: interaction.user.id, solanaAddress: derivedAddress, username: interaction.user.username })
+        });
+        console.log(`[GamblingEvent] Backend wallet sync OK for ${interaction.user.id}`);
+      }
+    } catch (syncErr) {
+      console.error('[GamblingEvent] Backend wallet sync error:', syncErr?.message);
+    }
+
+    // 4. Check if event is still active
+    const event = await getGamblingEventWithFallback(eventId, interaction);
+    if (!event || event.status !== 'active') {
+      return interaction.editReply({
+        content: '✅ **Wallet Connected!** 🔐\n\n' +
+          `🏦 Address: \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\`\n` +
+          `🔒 Private key encrypted & saved securely.\n\n` +
+          `⚠️ This horse race is no longer active, but your wallet is ready for future events!`
+      });
+    }
+
+    // Check if user already bet
+    const existing = await db.getGamblingEventBet(eventId, interaction.user.id);
+    if (existing) {
+      return interaction.editReply({
+        content: '✅ **Wallet Connected!** 🔐\n\n' +
+          `🏦 Address: \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\`\n` +
+          `🔒 Private key encrypted & saved securely.\n\n` +
+          `You already have a bet placed in this race!`
+      });
+    }
+
+    // 5. Check wallet balance
+    const entryFee = event.entry_fee || 0;
+    let solEntryFee = entryFee;
+    let solPrice = null;
+    let walletBalance = 0;
+    try {
+      walletBalance = await crypto.getBalance(derivedAddress);
+      if (event.currency === 'USD') {
+        solPrice = await crypto.getSolanaPrice();
+        if (solPrice) solEntryFee = entryFee / solPrice;
+      }
+    } catch (balErr) {
+      console.warn('[GamblingEvent] Modal balance check error:', balErr.message);
+    }
+
+    if (walletBalance < solEntryFee) {
+      return interaction.editReply({
+        content: '✅ **Wallet Connected!** 🔐\n\n' +
+          `🏦 Address: \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\`\n` +
+          `💰 Balance: **${walletBalance.toFixed(6)} SOL**\n\n` +
+          `❌ **Insufficient funds** for the **${entryFee} ${event.currency}** entry fee.\n` +
+          `📥 Fund your wallet: \`${derivedAddress}\`\n\n` +
+          `Once funded, click the 🏇 horse button again to enter!`
+      });
+    }
+
+    // 6. Balance is sufficient — show confirmation embed (seamless flow — no re-click needed)
+    const slots = await db.getGamblingEventSlots(eventId);
+    const chosenSlot = slots.find(s => s.slot_number === slotNumber);
+    const horseName = chosenSlot?.label || `Horse #${slotNumber}`;
+
+    let feeDisplay = `${entryFee} ${event.currency}`;
+    let solEquivNote = '';
+    if (event.currency === 'USD' && solPrice) {
+      feeDisplay = `${entryFee} USD`;
+      solEquivNote = `\n💱 ≈ **${solEntryFee.toFixed(6)} SOL** @ $${solPrice.toFixed(2)}/SOL`;
+    }
+
+    const guildWallet = await getGuildWalletWithFallback(interaction.guildId);
+    const treasuryAddr = guildWallet?.wallet_address || '(not configured)';
+
+    const confirmButton = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`gamble_confirm_${eventId}_${slotNumber}`)
+        .setLabel('💰 Confirm Bet & Pay Entry Fee')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`gamble_cancel_${eventId}_${slotNumber}`)
+        .setLabel('❌ Cancel')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const confirmEmbed = new EmbedBuilder()
+      .setColor('#14F195')
+      .setTitle('✅ Wallet Connected — Confirm Your Bet')
+      .setDescription(
+        `🔐 **Wallet saved securely!**\n\n` +
+        `🏇 **Horse:** ${horseName}\n` +
+        `💰 **Entry Fee:** ${feeDisplay}${solEquivNote}\n` +
+        `🏦 **Paid to Treasury:** \`${treasuryAddr.slice(0,6)}...${treasuryAddr.slice(-4)}\`\n` +
+        `💳 **From Your Wallet:** \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\` (${walletBalance.toFixed(4)} SOL)\n\n` +
+        `By clicking **Confirm Bet & Pay**, the entry fee will be transferred from your wallet to the server treasury as escrow.\n\n` +
+        `⚠️ Entry fees are non-refundable unless the race is cancelled.`
+      )
+      .setFooter({ text: 'DisCryptoBank • Horse Race Entry' })
+      .setTimestamp();
+
+    return interaction.editReply({ embeds: [confirmEmbed], components: [confirmButton] });
   },
 
   // ---- Button handler: qualify for a gambling event ----

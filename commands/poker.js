@@ -11,7 +11,7 @@
  * Supports crypto mode with SOL buy-ins and automated treasury payouts.
  */
 
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const {
   createTable, addPlayer, removePlayer, startHand,
   playerAction, getValidActions, playerAnte, completeAnte, finishHand, isAnteComplete, logAction,
@@ -25,6 +25,8 @@ let crypto, walletSync, db;
 try { crypto = require('../utils/crypto'); } catch (_) {}
 try { walletSync = require('../utils/walletSync'); } catch (_) {}
 try { db = require('../utils/db'); } catch (_) {}
+let encryptSecret;
+try { encryptSecret = require('../utils/encryption').encryptSecret; } catch (_) {}
 
 // ─── Backend fallback: fetch poker event from backend DB ─────────────────────
 const DCB_BACKEND_URL = process.env.DCB_BACKEND_URL || '';
@@ -281,7 +283,7 @@ async function collectBuyIn(table, discordId) {
     const userData = await getUserWithFallback(discordId);
     console.log(`[PokerBuyIn] User ${discordId}: hasAddr=${!!userData?.solana_address}, hasKey=${!!userData?.wallet_secret}, addr=${userData?.solana_address?.slice(0,8) || 'none'}...`);
     if (!userData || !userData.solana_address) {
-      return { success: false, error: 'You need to connect a wallet first.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** `/user-wallet connect private-key:YOUR_KEY`' };
+      return { success: false, needsWallet: true, error: 'You need to connect a wallet first.' };
     }
 
     // Resolve the player's private key:
@@ -294,7 +296,7 @@ async function collectBuyIn(table, discordId) {
     }
     if (!playerSecret) {
       console.log(`[PokerBuyIn] ❌ No key found for ${discordId}. Treasury addr=${guildWallet.wallet_address?.slice(0,8)}..., user addr=${userData.solana_address?.slice(0,8)}..., match=${userData.solana_address === guildWallet.wallet_address}`);
-      return { success: false, error: `🔑 Private key required for pot-split poker.\n\n🌐 **Recommended:** Add your key securely at the **DCB Event Manager** web app → Profile → 🔐 Wallet & Security\n🤖 **Or via Discord:** \`/user-wallet connect private-key:YOUR_KEY\`\n\nYour wallet address: \`${userData.solana_address}\`` };
+      return { success: false, needsWallet: true, error: `Private key required for pot-split poker.\nYour wallet address: \`${userData.solana_address}\`` };
     }
     console.log(`[PokerBuyIn] ✅ Key resolved for ${discordId}, proceeding with buy-in`);
 
@@ -482,6 +484,8 @@ module.exports = {
 
   // Exported handlers for button interactions (called from index.js)
   handlePokerButton,
+  handleConnectWalletButton,
+  handleWalletModal,
   getTableByChannel,
   getTableById,
   getTableByEventId,
@@ -616,6 +620,104 @@ async function handleClose(interaction) {
   await interaction.reply({ content: '🔒 **Poker table closed.** You can now create a new one with `/poker create`.' });
 }
 
+// ─── Connect Wallet Button Handler (opens modal for private key entry) ──────
+
+async function handleConnectWalletButton(interaction) {
+  // customId format: dcb_cw_poker_{eventId}
+  const parts = interaction.customId.split('_');
+  const eventId = parts[3];
+
+  const modal = new ModalBuilder()
+    .setCustomId(`dcb_wm_poker_${eventId}`)
+    .setTitle('🔐 Connect Your Wallet');
+
+  const keyInput = new TextInputBuilder()
+    .setCustomId('private_key')
+    .setLabel('Phantom Wallet Private Key (base58)')
+    .setPlaceholder('Paste your private key from Phantom → Settings → Security → Export Private Key')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(40)
+    .setMaxLength(120);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(keyInput));
+  await interaction.showModal(modal);
+}
+
+// ─── Wallet Modal Handler (processes private key submission) ─────────────────
+
+async function handleWalletModal(interaction) {
+  // customId format: dcb_wm_poker_{eventId}
+  const parts = interaction.customId.split('_');
+  const eventId = parts[3];
+
+  await interaction.deferReply({ ephemeral: true });
+
+  if (!crypto || !db) {
+    return interaction.editReply({ content: '❌ Crypto modules unavailable. Try again later.' });
+  }
+
+  const privateKey = interaction.fields.getTextInputValue('private_key').trim().replace(/[^\x20-\x7E]/g, '');
+
+  // 1. Validate key format
+  let keypair;
+  try {
+    keypair = crypto.getKeypairFromSecret(privateKey);
+  } catch (_) {}
+  if (!keypair) {
+    return interaction.editReply({
+      content: '❌ **Invalid Private Key!**\n\n' +
+        'The key you entered is not a valid Solana private key.\n' +
+        'Make sure you\'re pasting your **private key** (not your wallet address).\n\n' +
+        '💡 **In Phantom:** Settings → Security & Privacy → Export Private Key\n' +
+        '💡 The key should be a long base58 string (≈88 characters)'
+    });
+  }
+
+  const derivedAddress = keypair.publicKey.toBase58();
+  console.log(`[Poker] Wallet connected via modal: user=${interaction.user.id}, addr=${derivedAddress.slice(0,8)}...`);
+
+  // 2. Store address + encrypted private key
+  await db.addUser(interaction.user.id, interaction.user.username, derivedAddress);
+  await db.setUserWalletSecret(interaction.user.id, privateKey);
+
+  // 3. Sync to backend
+  try {
+    const DCB_BACKEND_URL_VAL = process.env.DCB_BACKEND_URL || '';
+    const DCB_INTERNAL_SECRET_VAL = process.env.DCB_INTERNAL_SECRET || '';
+    if (DCB_BACKEND_URL_VAL && DCB_INTERNAL_SECRET_VAL && encryptSecret) {
+      const encryptedKey = encryptSecret(privateKey);
+      await fetch(`${DCB_BACKEND_URL_VAL.replace(/\/$/, '')}/api/internal/user-wallet-key-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET_VAL },
+        body: JSON.stringify({ discordId: interaction.user.id, encryptedKey })
+      });
+      await fetch(`${DCB_BACKEND_URL_VAL.replace(/\/$/, '')}/api/internal/user-wallet-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET_VAL },
+        body: JSON.stringify({ discordId: interaction.user.id, solanaAddress: derivedAddress, username: interaction.user.username })
+      });
+      console.log(`[Poker] Backend wallet sync OK for ${interaction.user.id}`);
+    }
+  } catch (syncErr) {
+    console.error('[Poker] Backend wallet sync error:', syncErr?.message);
+  }
+
+  // 4. Check balance for the poker table
+  let balanceInfo = '';
+  try {
+    const balance = await crypto.getBalance(derivedAddress);
+    balanceInfo = `\n💰 Balance: **${balance.toFixed(6)} SOL**`;
+  } catch (_) {}
+
+  return interaction.editReply({
+    content: '✅ **Wallet Connected!** 🔐\n\n' +
+      `🏦 Address: \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\`\n` +
+      `🔒 Private key encrypted & saved securely.${balanceInfo}\n\n` +
+      `Click the **Join Table** button again to enter the poker game!`
+  });
+}
+
 // ─── Button Interaction Handler ─────────────────────────────────────────────
 
 async function handlePokerButton(interaction) {
@@ -673,6 +775,21 @@ async function handlePokerButton(interaction) {
         await interaction.deferReply({ ephemeral: true });
         const buyInResult = await collectBuyIn(table, userId);
         if (!buyInResult.success) {
+          // Show Connect Wallet button if user needs to add their key
+          if (buyInResult.needsWallet) {
+            const connectBtn = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`dcb_cw_poker_${table.eventId || table.id}`)
+                .setLabel('🔐 Connect Wallet')
+                .setStyle(ButtonStyle.Primary)
+            );
+            return interaction.editReply({
+              content: `🔐 **Wallet Required!**\n\nThis poker table requires a **${table.buyIn} ${table.currency}** buy-in.\n\n` +
+                `Click **Connect Wallet** below to securely add your Phantom private key.\n` +
+                `🔒 Your key is **AES-256 encrypted** — not even the bot owner can see it.`,
+              components: [connectBtn]
+            });
+          }
           return interaction.editReply({ content: `❌ ${buyInResult.error}` });
         }
         // Track the actual SOL amount paid (important for USD→SOL conversion)
