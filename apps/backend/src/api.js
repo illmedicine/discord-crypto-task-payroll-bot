@@ -4133,6 +4133,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         houseEarningsSOLRow, houseEarningsUSDRow,
         // Gambling pot-split player payouts (SOL + USD)
         potSplitPayoutsSOLRow, potSplitPayoutsUSDRow,
+        // Verified winners from gambling (horse race) + poker
+        gamblingWinners, pokerWinners,
+        // Total horse-race events + poker games hosted
+        horseRaceEventsCount, pokerEventsCount,
       ] = await Promise.all([
         safe(db.get('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM contests'), { c: 0 }),
@@ -4190,6 +4194,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players * 0.9), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'SOL' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
         // Pot-split player payouts (90% of pot) — USD events
         safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players * 0.9), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'USD' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
+        // ── Verified winners from gambling (horse race) events ──
+        safe(db.get("SELECT COUNT(*) AS c FROM gambling_event_bets WHERE is_winner = 1"), { c: 0 }),
+        // ── Verified winners from poker events (received a payout) ──
+        safe(db.get("SELECT COUNT(*) AS c FROM poker_event_players WHERE payout_amount > 0"), { c: 0 }),
+        // ── Total horse race events hosted (completed / ended) ──
+        safe(db.get("SELECT COUNT(*) AS c FROM gambling_events WHERE status IN ('ended','completed') OR winning_slot IS NOT NULL"), { c: 0 }),
+        // ── Total poker games hosted (completed / ended) ──
+        safe(db.get("SELECT COUNT(*) AS c FROM poker_events WHERE status IN ('ended','completed')"), { c: 0 }),
       ]);
 
       // Active servers = actual Discord guilds the bot is in (live count)
@@ -4285,7 +4297,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       res.json({
         totalTransactions: payWalletCommands?.c || 0,
-        totalWinners: (contestWinners.c || 0) + (voteWinners.c || 0),
+        totalWinners: (contestWinners.c || 0) + (voteWinners.c || 0) + (gamblingWinners.c || 0) + (pokerWinners.c || 0) + (proofPayouts.c || 0),
         eventsHosted: (contestRow.c || 0) + (voteEventRow.c || 0) + (eventRow.c || 0),
         tasksCreated: (bulkTaskRow.c || 0) + (taskRow.c || 0),
         voteEventsCreated: voteEventRow.c || 0,
@@ -4300,7 +4312,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         treasuryWalletsConnected: treasuryWalletCount.c,
         userWalletsConnected: userWalletCount.c,
         activeServers,
-        totalPayouts: (contestWinners.c || 0) + (voteWinners.c || 0) + (proofPayouts.c || 0),
+        totalPayouts: (contestWinners.c || 0) + (voteWinners.c || 0) + (proofPayouts.c || 0) + (gamblingWinners.c || 0) + (pokerWinners.c || 0),
+        horseRaceEvents: horseRaceEventsCount.c || 0,
+        pokerGamesHosted: pokerEventsCount.c || 0,
         totalUsers: usersRow.c,
         siteVisitors: siteVisitors?.count || 0,
         totalCommandsRun: totalCommandsRun?.c || 0,
