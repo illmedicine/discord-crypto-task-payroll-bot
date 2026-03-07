@@ -4117,7 +4117,19 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         usersRow,
         treasuryWalletCount, userWalletCount,
         siteVisitors, totalCommandsRun, managerClicks,
-        payWalletCommands
+        payWalletCommands,
+        // Worker payouts (SOL + USD)
+        workerPayoutsSOL, workerPayoutsUSD,
+        // Gambling pot-split stats (SOL + USD)
+        gamblingPotSOL, gamblingPotUSD,
+        // Poker pot stats (SOL + USD)
+        pokerPotSOL, pokerPotUSD,
+        // Auto-pay capable users (wallet + key connected)
+        autoPayRow,
+        // Gambling pot-split house earnings (SOL + USD)
+        houseEarningsSOLRow, houseEarningsUSDRow,
+        // Gambling pot-split player payouts (SOL + USD)
+        potSplitPayoutsSOLRow, potSplitPayoutsUSDRow,
       ] = await Promise.all([
         safe(db.get('SELECT COUNT(*) AS c FROM transactions'), { c: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM contests'), { c: 0 }),
@@ -4147,11 +4159,34 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get('SELECT COUNT(*) AS c FROM users'), { c: 0 }),
         // Wallet counts
         safe(db.get('SELECT COUNT(*) AS c FROM guild_wallets WHERE wallet_address IS NOT NULL'), { c: 0 }),
-        safe(db.get("SELECT COUNT(*) AS c FROM users WHERE solana_address IS NOT NULL"), { c: 0 }),
+        // FIX: Count user wallets from user_wallets table (where /user-wallet connect stores data)
+        safe(db.get("SELECT COUNT(*) AS c FROM user_wallets WHERE solana_address IS NOT NULL"), { c: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'site_visitors'"), { count: 0 }),
         safe(db.get('SELECT COUNT(*) AS c FROM command_audit'), { c: 0 }),
         safe(db.get("SELECT count FROM site_analytics WHERE metric = 'manager_clicks'"), { count: 0 }),
         safe(db.get("SELECT COUNT(*) AS c FROM command_audit WHERE command_name IN ('pay', 'wallet', 'user-wallet', 'bot-wallet')"), { c: 0 }),
+        // Worker payouts (SOL amount)
+        safe(db.get("SELECT COALESCE(SUM(amount_sol), 0) AS total FROM worker_payouts WHERE status = 'confirmed' OR tx_signature IS NOT NULL"), { total: 0 }),
+        // Worker payouts (stored USD amount)
+        safe(db.get("SELECT COALESCE(SUM(amount_usd), 0) AS total FROM worker_payouts WHERE (status = 'confirmed' OR tx_signature IS NOT NULL) AND amount_usd > 0"), { total: 0 }),
+        // Gambling pot-split total pot (SOL events)
+        safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'SOL' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
+        // Gambling pot-split total pot (USD events)
+        safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'USD' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
+        // Poker pot total (SOL events)
+        safe(db.get("SELECT COALESCE(SUM(buy_in * current_players), 0) AS total FROM poker_events WHERE mode = 'pot' AND currency = 'SOL' AND (status = 'ended' OR status = 'completed')"), { total: 0 }),
+        // Poker pot total (USD events)
+        safe(db.get("SELECT COALESCE(SUM(buy_in * current_players), 0) AS total FROM poker_events WHERE mode = 'pot' AND currency = 'USD' AND (status = 'ended' OR status = 'completed')"), { total: 0 }),
+        // Auto-pay capable users: have both wallet address + encrypted key
+        safe(db.get("SELECT COUNT(*) AS c FROM user_wallets WHERE solana_address IS NOT NULL AND wallet_secret IS NOT NULL"), { c: 0 }),
+        // House earnings from pot-split (10% house cut) — SOL events
+        safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players * 0.1), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'SOL' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
+        // House earnings from pot-split (10% house cut) — USD events
+        safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players * 0.1), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'USD' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
+        // Pot-split player payouts (90% of pot) — SOL events
+        safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players * 0.9), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'SOL' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
+        // Pot-split player payouts (90% of pot) — USD events
+        safe(db.get("SELECT COALESCE(SUM(entry_fee * current_players * 0.9), 0) AS total FROM gambling_events WHERE mode = 'pot' AND currency = 'USD' AND (status = 'ended' OR status = 'completed' OR winning_slot IS NOT NULL)"), { total: 0 }),
       ]);
 
       // Active servers = actual Discord guilds the bot is in (live count)
@@ -4208,8 +4243,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         );
         treasuryBalanceSOL = treasuryBalances.reduce((s, b) => s + b, 0);
 
-        // User wallets (bot DB uses solana_address)
-        const userWallets = await safe(db.all("SELECT solana_address AS addr FROM users WHERE solana_address IS NOT NULL"), []);
+        // User wallets — use user_wallets table (where /user-wallet connect stores data)
+        const userWallets = await safe(db.all("SELECT solana_address AS addr FROM user_wallets WHERE solana_address IS NOT NULL"), []);
         const userBalances = await Promise.all(
           userWallets.map(w => fetchSolBalance(w.addr))
         );
@@ -4221,9 +4256,29 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const treasuryWalletValue = treasuryBalanceSOL * solPrice;
       const userWalletValue = userBalanceSOL * solPrice;
 
-      // Total prize pool (computed after solPrice is known)
-      const totalPaidOutSOL = txSOL + poolSOL + (solPrice > 0 ? poolUSD / solPrice : 0);
-      const totalPaidOutUSD = (txSOL + poolSOL) * solPrice + poolUSD;
+      // Total paid out (computed after solPrice is known)
+      // Include: on-chain transactions + event prize pools + worker payouts + gambling/poker pot payouts
+      const wPaySOL = workerPayoutsSOL.total || 0;
+      const wPayUSD = workerPayoutsUSD.total || 0;
+      const gPotSOL = gamblingPotSOL.total || 0;
+      const gPotUSD = gamblingPotUSD.total || 0;
+      const pPotSOL = pokerPotSOL.total || 0;
+      const pPotUSD = pokerPotUSD.total || 0;
+
+      const allSOL = txSOL + poolSOL + wPaySOL + gPotSOL + pPotSOL;
+      const allUSD = poolUSD + wPayUSD + gPotUSD + pPotUSD;
+
+      const totalPaidOutSOL = allSOL + (solPrice > 0 ? allUSD / solPrice : 0);
+      const totalPaidOutUSD = allSOL * solPrice + allUSD;
+
+      // Pot-split specific stats (converted to USD)
+      const houseEarningsSOLVal = houseEarningsSOLRow.total || 0;
+      const houseEarningsUSDVal = houseEarningsUSDRow.total || 0;
+      const totalHouseEarningsUSD = houseEarningsSOLVal * solPrice + houseEarningsUSDVal;
+
+      const potPayoutsSOLVal = potSplitPayoutsSOLRow.total || 0;
+      const potPayoutsUSDVal = potSplitPayoutsUSDRow.total || 0;
+      const totalPotSplitPayoutsUSD = potPayoutsSOLVal * solPrice + potPayoutsUSDVal;
 
       res.json({
         totalTransactions: payWalletCommands?.c || 0,
@@ -4247,6 +4302,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         siteVisitors: siteVisitors?.count || 0,
         totalCommandsRun: totalCommandsRun?.c || 0,
         managerClicks: managerClicks?.count || 0,
+        autoPayUsers: autoPayRow?.c || 0,
+        houseEarningsUSD: totalHouseEarningsUSD,
+        potSplitPayoutsUSD: totalPotSplitPayoutsUSD,
         lastUpdated: new Date().toISOString(),
       });
     } catch (err) {
