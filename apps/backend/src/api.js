@@ -4200,8 +4200,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         safe(db.get("SELECT COUNT(*) AS c FROM poker_event_players WHERE payout_amount > 0"), { c: 0 }),
         // ── Total horse race events hosted (completed / ended) ──
         safe(db.get("SELECT COUNT(*) AS c FROM gambling_events WHERE status IN ('ended','completed') OR winning_slot IS NOT NULL"), { c: 0 }),
-        // ── Total poker games hosted (completed / ended) ──
-        safe(db.get("SELECT COUNT(*) AS c FROM poker_events WHERE status IN ('ended','completed')"), { c: 0 }),
+        // ── Total poker games hosted (had players join OR status updated) ──
+        safe(db.get("SELECT COUNT(*) AS c FROM poker_events WHERE status IN ('ended','completed') OR ended_at IS NOT NULL OR current_players > 0 OR id IN (SELECT DISTINCT poker_event_id FROM poker_event_players)"), { c: 0 }),
       ]);
 
       // Active servers = actual Discord guilds the bot is in (live count)
