@@ -2788,6 +2788,15 @@ const updatePokerEventMessageId = (eventId, messageId) => {
   });
 };
 
+const getPokerEventPlayers = (eventId) => {
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT * FROM poker_event_players WHERE poker_event_id = ?`, [eventId], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+};
+
 const updatePokerEventCurrentPlayers = (eventId) => {
   return new Promise((resolve, reject) => {
     db.run(
@@ -2969,6 +2978,7 @@ module.exports = {
   // Poker Event functions
   getPokerEvent,
   getPokerEventPlayer,
+  getPokerEventPlayers,
   updatePokerEventStatus,
   updatePokerEventMessageId,
   updatePokerEventCurrentPlayers,

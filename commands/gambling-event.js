@@ -395,7 +395,7 @@ module.exports = {
     )
     .addSubcommand(sub =>
       sub.setName('info')
-        .setDescription('View horse race event details')
+        .setDescription('View event details (horse races and poker)')
         .addIntegerOption(opt => opt.setName('event_id').setDescription('Event ID').setRequired(true))
     )
     .addSubcommand(sub =>
@@ -479,9 +479,44 @@ module.exports = {
     if (sub === 'info') {
       const eventId = interaction.options.getInteger('event_id');
       const event = await db.getGamblingEvent(eventId);
+
+      // If not a horse race, check poker events
       if (!event || event.guild_id !== interaction.guildId) {
-        return interaction.reply({ content: '❌ Horse race event not found.', ephemeral: true });
+        const pokerEvent = await db.getPokerEvent(eventId);
+        if (pokerEvent && pokerEvent.guild_id === interaction.guildId) {
+          const players = await db.getPokerEventPlayers(eventId);
+
+          const embed = new EmbedBuilder()
+            .setColor('#9B59B6')
+            .setTitle(`🎰 Poker Event #${pokerEvent.id}`)
+            .setDescription(pokerEvent.description || pokerEvent.title)
+            .addFields(
+              { name: 'Mode', value: pokerEvent.mode === 'pot' ? 'Pot (entry fees pooled)' : 'Free Play', inline: true },
+              { name: 'Buy-in', value: pokerEvent.buy_in ? `${pokerEvent.buy_in} ${pokerEvent.currency}` : 'Free', inline: true },
+              { name: 'Blinds', value: `${pokerEvent.small_blind}/${pokerEvent.big_blind}`, inline: true },
+              { name: 'Starting Chips', value: `${pokerEvent.starting_chips}`, inline: true },
+              { name: 'Players', value: `${pokerEvent.current_players}/${pokerEvent.max_players}`, inline: true },
+              { name: 'Status', value: pokerEvent.status, inline: true },
+              { name: 'Turn Timer', value: `${pokerEvent.turn_timer}s`, inline: true },
+              { name: 'Created', value: pokerEvent.created_at || 'Unknown', inline: true },
+            )
+            .setTimestamp();
+
+          if (players.length > 0) {
+            const playerList = players.map(p => {
+              const status = p.payment_status === 'paid' ? '✅' : p.payment_status === 'payout_failed' ? '❌' : p.payment_status === 'committed' ? '💰' : '⏳';
+              const payout = p.payout_amount ? ` → ${p.payout_amount} ${pokerEvent.currency}` : '';
+              return `${status} <@${p.user_id}> (${p.final_chips} chips${payout})`;
+            }).join('\n');
+            embed.addFields({ name: `Players (${players.length})`, value: playerList.substring(0, 1024) });
+          }
+
+          return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+        return interaction.reply({ content: '❌ Event not found. Check the event ID and make sure it belongs to this server.', ephemeral: true });
       }
+
       const slots = await db.getGamblingEventSlots(eventId);
       const bets = await db.getGamblingEventBets(eventId);
       const slotList = slots.map(s => {
