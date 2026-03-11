@@ -81,6 +81,18 @@ async function startServer() {
   const app = buildApi({ discordClient: client })
   app.listen(port, () => {
     console.log(`[backend] listening on ${port} (REST-only mode, no gateway)`)
+
+    // Startup: check bot API connectivity
+    const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+    console.log(`[backend] DCB_BOT_API_URL = ${BOT_API_URL || '(not set)'}`)
+    if (BOT_API_URL) {
+      const healthUrl = `${BOT_API_URL.replace(/\/$/, '')}/api/health`
+      console.log(`[backend] Testing bot API connectivity: ${healthUrl}`)
+      fetch(healthUrl, { signal: AbortSignal.timeout(10000) })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+        .then(data => console.log(`[backend] ✅ Bot API reachable:`, JSON.stringify(data)))
+        .catch(err => console.error(`[backend] ❌ Bot API unreachable: ${err?.cause?.code || err?.code || err?.message}`))
+    }
   })
 
   // Refresh guild cache periodically (every 5 minutes)
