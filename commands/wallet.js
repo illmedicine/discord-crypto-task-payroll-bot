@@ -88,7 +88,7 @@ module.exports = {
               { name: 'Status', value: '🔒 Locked via Discord' },
               { name: 'Configured On', value: new Date(existingWallet.configured_at).toLocaleString() },
               { name: 'Add Private Key?', value: 'Use `/wallet set-key` to add or update the private key for auto-payouts.' },
-              { name: 'Need to change wallet?', value: 'Server owners can disconnect and reconnect the wallet from **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)**.' }
+              { name: 'Need to change wallet?', value: 'Server owners can disconnect and reconnect the wallet from **[DCB Event Manager](https://dcb-games.com/)**.' }
             )
             .setTimestamp();
 
@@ -146,14 +146,14 @@ module.exports = {
         const embed = new EmbedBuilder()
           .setColor('#14F195')
           .setTitle('✅ Treasury Wallet Configured')
-          .setDescription('Server treasury wallet has been connected and synced to [DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/).')
+          .setDescription('Server treasury wallet has been connected and synced to [DCB Event Manager](https://dcb-games.com/).')
           .addFields(
             { name: 'Treasury Address', value: `\`${address}\`` },
             { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
             { name: 'Auto-Payouts', value: hasSecret ? '✅ Enabled — payments will be sent from this wallet automatically' : '❌ Disabled — provide the wallet private key to enable auto-payouts' },
             { name: 'Status', value: '🔒 Connected' },
             { name: 'Configured By', value: interaction.user.username },
-            { name: 'Manage', value: 'Use **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** to update or disconnect the wallet.' }
+            { name: 'Manage', value: 'Use **[DCB Event Manager](https://dcb-games.com/)** to update or disconnect the wallet.' }
           )
           .setTimestamp();
 
@@ -255,7 +255,7 @@ module.exports = {
         
         if (!guildWallet) {
           return interaction.editReply({
-            content: '❌ No treasury wallet configured for this server. Ask the **Server Owner** to configure one with `/wallet connect` or via **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)**.'
+            content: '❌ No treasury wallet configured for this server. Ask the **Server Owner** to configure one with `/wallet connect` or via **[DCB Event Manager](https://dcb-games.com/)**.'
           });
         }
 
@@ -295,7 +295,7 @@ module.exports = {
         
         if (!guildWallet) {
           return interaction.editReply({
-            content: '❌ No treasury wallet configured for this server. Use `/wallet connect` or **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** to set one up.'
+            content: '❌ No treasury wallet configured for this server. Use `/wallet connect` or **[DCB Event Manager](https://dcb-games.com/)** to set one up.'
           });
         }
 
@@ -307,7 +307,7 @@ module.exports = {
             { name: 'Network', value: process.env.CLUSTER || 'mainnet-beta' },
             { name: 'Wallet Type', value: 'Server Treasury (Phantom)' },
             { name: 'Status', value: '🔒 Connected' },
-            { name: 'Manage', value: 'Use **[DCB Event Manager](https://illmedicine.github.io/discord-crypto-task-payroll-bot/)** to update or disconnect' },
+            { name: 'Manage', value: 'Use **[DCB Event Manager](https://dcb-games.com/)** to update or disconnect' },
             { name: 'Configured At', value: new Date(guildWallet.configured_at).toLocaleString() },
             { name: 'RPC Endpoint', value: process.env.SOLANA_RPC_URL || 'api.mainnet-beta.solana.com' },
             { name: 'Purpose', value: 'Permanent treasury for all server payroll & transactions' }

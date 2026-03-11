@@ -103,7 +103,7 @@ const LATEST_FEATURES = GIT_RECENT_CHANGES.length > 0
   ? GIT_RECENT_CHANGES.map(msg => msg.replace(/^(feat|fix|chore|refactor|docs):\s*/i, '').slice(0, 80))
   : ['DisCryptoBank is live!'];
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildVoiceStates] });
 
 // Command collection
 client.commands = new Collection();
@@ -668,6 +668,22 @@ client.on('interactionCreate', async interaction => {
           console.error('❌ Error handling poker connect wallet button:', error);
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({ content: '❌ An error occurred opening the wallet form.', ephemeral: true }).catch(() => {});
+          }
+        }
+      }
+      return;
+    }
+
+    // Handle music player buttons
+    if (interaction.customId.startsWith('music_')) {
+      const musicCommand = client.commands.get('music');
+      if (musicCommand && musicCommand.handleMusicButton) {
+        try {
+          await musicCommand.handleMusicButton(interaction);
+        } catch (error) {
+          console.error('❌ Error handling music button:', error);
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: '❌ An error occurred.', ephemeral: true }).catch(() => {});
           }
         }
       }

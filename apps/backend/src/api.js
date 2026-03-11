@@ -73,11 +73,12 @@ module.exports = function buildApi({ discordClient }) {
     if (uiBase) {
       try { origins.push(new URL(uiBase).origin) } catch (_) { origins.push(uiBase) }
     }
-    // Always allow GitHub Pages origin + dcb-gm.com
     origins.push('https://illmedicine.github.io')
     origins.push('https://dcb-gm.com')
     origins.push('http://dcb-gm.com')
     origins.push('https://www.dcb-gm.com')
+    origins.push('https://dcb-games.com')
+    origins.push('https://www.dcb-games.com')
     return origins
   })()
 
@@ -1157,16 +1158,148 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/user/wallet/status/:discordId', requireAuth, async (req, res) => {
     try {
       const { discordId } = req.params
-      const row = await db.get('SELECT solana_address, wallet_secret, username FROM user_wallets WHERE discord_id = ?', [discordId])
-      if (!row) return res.json({ wallet: false, key: false, auto_pay_capable: false })
-      const hasKey = !!(row.wallet_secret && decryptSecret(row.wallet_secret))
+      const row = await db.get('SELECT solana_address, wallet_secret, username, bot_has_key FROM user_wallets WHERE discord_id = ?', [discordId])
+
+      let hasWallet = !!(row?.solana_address)
+      let hasKey = !!(row?.wallet_secret && decryptSecret(row.wallet_secret))
+      let addressShort = row?.solana_address ? `${row.solana_address.slice(0, 4)}...${row.solana_address.slice(-4)}` : null
+
+      // Check cached bot_has_key flag (updated via bulk wallet sync)
+      if (!hasKey && row?.bot_has_key) hasKey = true
+
+      // If still incomplete, fall back to the bot's own database
+      if (!hasWallet || !hasKey) {
+        try {
+          const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+          if (BOT_API_URL) {
+            const _ac = new AbortController(); const _to = setTimeout(() => _ac.abort(), 5000)
+            const botRes = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${discordId}`, {
+              headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+              signal: _ac.signal
+            })
+            clearTimeout(_to)
+            if (botRes.ok) {
+              const botData = await botRes.json()
+              if (botData.connected && botData.wallet_address) {
+                if (!hasWallet) {
+                  hasWallet = true
+                  addressShort = `${botData.wallet_address.slice(0, 4)}...${botData.wallet_address.slice(-4)}`
+                }
+                // Cache address locally
+                if (!row?.solana_address) {
+                  try {
+                    await db.run(
+                      `INSERT INTO user_wallets (discord_id, solana_address, username, bot_has_key, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                       ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, bot_has_key = excluded.bot_has_key, updated_at = CURRENT_TIMESTAMP`,
+                      [discordId, botData.wallet_address, botData.username || null, botData.has_key ? 1 : 0]
+                    )
+                  } catch (_) {}
+                }
+              }
+              if (botData.has_key && !hasKey) {
+                hasKey = true
+                // Persist bot_has_key flag so we don't need to call bot next time
+                try { await db.run('UPDATE user_wallets SET bot_has_key = 1 WHERE discord_id = ?', [discordId]) } catch (_) {}
+              }
+            }
+          }
+        } catch (_botErr) { /* bot fallback is best-effort */ }
+      }
+
       return res.json({
-        wallet: !!row.solana_address,
+        wallet: hasWallet,
         key: hasKey,
-        auto_pay_capable: !!(row.solana_address && hasKey),
-        address_short: row.solana_address ? `${row.solana_address.slice(0, 4)}...${row.solana_address.slice(-4)}` : null,
+        auto_pay_capable: !!(hasWallet && hasKey),
+        address_short: addressShort,
       })
     } catch (err) {
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // POST /api/user/wallet/status/bulk — batch wallet/key status for multiple users
+  app.post('/api/user/wallet/status/bulk', requireAuth, async (req, res) => {
+    try {
+      const { discord_ids } = req.body || {}
+      if (!Array.isArray(discord_ids) || discord_ids.length === 0) return res.json({})
+      // Limit to prevent abuse
+      const ids = discord_ids.slice(0, 100)
+      const placeholders = ids.map(() => '?').join(',')
+      const rows = await db.all(
+        `SELECT discord_id, solana_address, wallet_secret, bot_has_key FROM user_wallets WHERE discord_id IN (${placeholders})`,
+        ids
+      )
+      const rowMap = {}
+      for (const row of (rows || [])) {
+        const hasWallet = !!row.solana_address
+        const localKey = !!(row.wallet_secret && decryptSecret(row.wallet_secret))
+        const hasKey = localKey || !!row.bot_has_key
+        rowMap[row.discord_id] = {
+          wallet: hasWallet,
+          key: hasKey,
+          auto_pay_capable: !!(hasWallet && hasKey),
+          address_short: row.solana_address ? `${row.solana_address.slice(0, 4)}...${row.solana_address.slice(-4)}` : null,
+        }
+      }
+
+      // For any IDs not found locally, try the bot in one batch
+      const missingIds = ids.filter(id => !rowMap[id] || (!rowMap[id].auto_pay_capable))
+      if (missingIds.length > 0) {
+        try {
+          const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+          if (BOT_API_URL) {
+            // Fetch each missing ID from bot (parallel, bounded)
+            const botResults = await Promise.allSettled(
+              missingIds.map(async (id) => {
+                const _ac = new AbortController(); const _to = setTimeout(() => _ac.abort(), 5000)
+                try {
+                  const r = await fetch(`${BOT_API_URL.replace(/\/$/, '')}/api/internal/user-wallet/${id}`, {
+                    headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' },
+                    signal: _ac.signal
+                  })
+                  clearTimeout(_to)
+                  if (r.ok) return { id, ...(await r.json()) }
+                } catch (_) { clearTimeout(_to) }
+                return { id, connected: false, has_key: false }
+              })
+            )
+            for (const result of botResults) {
+              if (result.status !== 'fulfilled') continue
+              const bd = result.value
+              if (!bd?.connected || !bd?.wallet_address) continue
+              const existing = rowMap[bd.id]
+              const hasWallet = true
+              const hasKey = !!(existing?.key || bd.has_key)
+              rowMap[bd.id] = {
+                wallet: hasWallet,
+                key: hasKey,
+                auto_pay_capable: !!(hasWallet && hasKey),
+                address_short: `${bd.wallet_address.slice(0, 4)}...${bd.wallet_address.slice(-4)}`,
+              }
+              // Cache in DB
+              try {
+                await db.run(
+                  `INSERT INTO user_wallets (discord_id, solana_address, username, bot_has_key, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(discord_id) DO UPDATE SET
+                     solana_address = COALESCE(excluded.solana_address, user_wallets.solana_address),
+                     bot_has_key = MAX(COALESCE(user_wallets.bot_has_key, 0), excluded.bot_has_key),
+                     updated_at = CURRENT_TIMESTAMP`,
+                  [bd.id, bd.wallet_address, bd.username || null, bd.has_key ? 1 : 0]
+                )
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Fill in any remaining missing IDs with defaults
+      for (const id of ids) {
+        if (!rowMap[id]) rowMap[id] = { wallet: false, key: false, auto_pay_capable: false, address_short: null }
+      }
+
+      res.json(rowMap)
+    } catch (err) {
+      console.error('[wallet/status/bulk] error:', err?.message)
       res.status(500).json({ error: 'internal_error' })
     }
   })
@@ -3601,26 +3734,40 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
   app.get('/api/admin/guilds/:guildId/members', requireAuth, requireGuildMember, async (req, res) => {
     try {
+      const search = (req.query.search || '').trim().toLowerCase()
       let list = []
-      if (typeof req.guild.members?.fetch === 'function') {
-        const members = await req.guild.members.fetch({ limit: 100 })
-        list = members.filter(m => !m.user.bot).map(m => ({
-          id: m.id, username: m.user.username, display_name: m.displayName, avatar: m.user.displayAvatarURL({ size: 32 })
-        }))
-      } else {
-        // REST-only fallback
-        try {
-          const members = await discordBotAPI(`/guilds/${req.params.guildId}/members?limit=100`)
-          list = members.filter(m => !m.user?.bot).map(m => ({
-            id: m.user.id,
-            username: m.user.username,
-            display_name: m.nick || m.user.global_name || m.user.username,
-            avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=32` : null
-          }))
-        } catch (restErr) {
-          console.warn('[members] REST fallback failed:', restErr?.message)
+
+      // Use REST API with pagination to fetch ALL guild members (up to 1000)
+      try {
+        let allMembers = []
+        let after = '0'
+        const PER_PAGE = 1000
+        for (let page = 0; page < 10; page++) {
+          const batch = await discordBotAPI(`/guilds/${req.params.guildId}/members?limit=${PER_PAGE}&after=${after}`)
+          if (!batch || !batch.length) break
+          allMembers = allMembers.concat(batch)
+          if (batch.length < PER_PAGE) break
+          after = batch[batch.length - 1].user.id
         }
+        list = allMembers.filter(m => !m.user?.bot).map(m => ({
+          id: m.user.id,
+          username: m.user.username,
+          display_name: m.nick || m.user.global_name || m.user.username,
+          avatar: m.user.avatar ? `https://cdn.discordapp.com/avatars/${m.user.id}/${m.user.avatar}.png?size=32` : null
+        }))
+      } catch (restErr) {
+        console.warn('[members] REST fetch failed:', restErr?.message)
       }
+
+      // Server-side search filter (by name, username, or ID)
+      if (search && list.length > 0) {
+        list = list.filter(m =>
+          m.display_name.toLowerCase().includes(search) ||
+          m.username.toLowerCase().includes(search) ||
+          m.id.includes(search)
+        )
+      }
+
       res.json(list)
     } catch (err) {
       console.error('[members] GET error:', err?.message || err)
@@ -4402,10 +4549,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       for (const row of rows) {
         if (!row.discord_id || !row.solana_address) continue
         await db.run(
-          `INSERT INTO user_wallets (discord_id, solana_address, username, updated_at)
-           VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-           ON CONFLICT(discord_id) DO UPDATE SET solana_address = excluded.solana_address, updated_at = CURRENT_TIMESTAMP`,
-          [row.discord_id, row.solana_address, row.username || null]
+          `INSERT INTO user_wallets (discord_id, solana_address, username, bot_has_key, updated_at)
+           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(discord_id) DO UPDATE SET
+             solana_address = excluded.solana_address,
+             bot_has_key = MAX(COALESCE(user_wallets.bot_has_key, 0), excluded.bot_has_key),
+             updated_at = CURRENT_TIMESTAMP`,
+          [row.discord_id, row.solana_address, row.username || null, row.has_key ? 1 : 0]
         )
         synced++
       }

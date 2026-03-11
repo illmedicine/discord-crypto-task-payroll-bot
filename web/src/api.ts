@@ -19,7 +19,7 @@ function resolveApiBase(): string {
     if (isCapacitor) {
       return PROD_API_BASE
     }
-    if (h.endsWith('github.io') || p.startsWith('/discord-crypto-task-payroll-bot')) {
+    if (h.endsWith('github.io') || p.startsWith('/discord-crypto-task-payroll-bot') || h.endsWith('dcb-games.com')) {
       return PROD_API_BASE
     }
   }

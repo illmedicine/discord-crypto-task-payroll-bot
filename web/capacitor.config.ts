@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.dcb.eventmanager',
+  appId: 'com.dcbgames.eventmanager',
   appName: 'DCB Event Manager',
   webDir: 'dist',
   android: {

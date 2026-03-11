@@ -12,9 +12,9 @@ API
 
 The frontend expects the backend API at the same origin under `/api` during development. The bot backend exposes these endpoints when running locally (see `server/api.js`).
 
-Deployment to GitHub Pages
+Deployment to dcb-games.com (via GitHub Pages + Custom Domain)
 
-- Set `vite.config.ts` base to `/DCB-Event-Manager/` (already configured)
+- The site is served at **https://dcb-games.com** via GitHub Pages with a CNAME record
 - Build: `npm run build`
 - Deploy: `npm run deploy` (requires `gh-pages` and permission to push to the repo's `gh-pages` branch)
 

@@ -1,6 +1,6 @@
 param(
   [string]$ServiceName = "dcb-payroll-backend",
-  [string]$UiBase = "https://illmedicine.github.io/discord-crypto-task-payroll-bot/"
+  [string]$UiBase = "https://dcb-games.com"
 )
 
 $ErrorActionPreference = "Stop"

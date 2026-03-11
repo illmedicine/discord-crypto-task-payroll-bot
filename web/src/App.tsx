@@ -5,6 +5,7 @@ import History from './pages/History'
 import Treasury from './pages/Treasury'
 import Workers from './pages/Workers'
 import QualifyPage from './pages/QualifyPage'
+import ServerMusic from './pages/ServerMusic'
 
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
@@ -12,12 +13,13 @@ import EventTicker from './components/EventTicker'
 import WalletSettings from './components/WalletSettings'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify' | 'wallet'
+type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify' | 'wallet' | 'music'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Home', icon: '📊' },
   { id: 'treasury', label: 'Treasury', icon: '💰' },
   { id: 'events', label: 'Events', icon: '🎯' },
+  { id: 'music', label: 'Server Music', icon: '🎵' },
   { id: 'workers', label: 'Workers', icon: '👥' },
   { id: 'history', label: 'History', icon: '📜' },
 ]
@@ -197,7 +199,7 @@ export default function App() {
       <div className="login-container">
         <div className="login-card">
           <div style={{ marginBottom: 20 }}>
-            <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover', margin: '0 auto 14px', display: 'block', boxShadow: '0 8px 24px rgba(99,140,255,0.3)' }} />
+            <img src="https://dcb-games.com/assets/discryptobank-logo.png" alt="DCB" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover', margin: '0 auto 14px', display: 'block', boxShadow: '0 8px 24px rgba(99,140,255,0.3)' }} />
           </div>
           <h1>DCB Event Manager</h1>
           <p>Discord Crypto Task & Payroll Manager</p>
@@ -284,7 +286,7 @@ export default function App() {
         {/* Top header bar */}
         <header className="mobile-header">
           <div className="mobile-header-left">
-            <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" className="mobile-header-logo" />
+            <img src="https://dcb-games.com/assets/discryptobank-logo.png" alt="DCB" className="mobile-header-logo" />
             <div className="mobile-header-title">
               <span className="mobile-header-app-name">DCB Manager</span>
               <button className="mobile-guild-btn" onClick={() => setShowGuildPicker(v => !v)}>
@@ -405,6 +407,7 @@ export default function App() {
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
+            {page === 'music' && <ServerMusic guildId={guildId} />}
             {page === 'wallet' && <WalletSettings />}
           </ProfilerLogger>
         </main>
@@ -438,7 +441,7 @@ export default function App() {
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
-          <img src="https://illmedicine.github.io/DisCryptoBankWebSite/assets/discryptobank-logo.png" alt="DCB" className="sidebar-brand-logo" />
+          <img src="https://dcb-games.com/assets/discryptobank-logo.png" alt="DCB" className="sidebar-brand-logo" />
           <span className="sidebar-brand-text">DCB Event Manager</span>
         </div>
 
@@ -590,6 +593,7 @@ export default function App() {
             {page === 'history' && <History guildId={guildId} />}
             {page === 'treasury' && <Treasury guildId={guildId} isOwner={isOwner} />}
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
+            {page === 'music' && <ServerMusic guildId={guildId} />}
             {page === 'wallet' && <WalletSettings />}
           </ProfilerLogger>
         </main>

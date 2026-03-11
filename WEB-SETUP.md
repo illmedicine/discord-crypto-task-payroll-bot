@@ -1,8 +1,10 @@
-Web UI (GitHub Pages) setup
+Web UI (Custom Domain: dcb-games.com) setup
 
 The web UI in `web/` is a static single-page app built with Vite + React.
 
-Important: the UI relies on the bot backend to perform authenticated actions (OAuth login, publish messages, create contests, etc.). When deployed to GitHub Pages you must configure the backend URL so the front end can reach it.
+The site is hosted via GitHub Pages with the custom domain **dcb-games.com** configured in GoDaddy DNS.
+
+Important: the UI relies on the bot backend to perform authenticated actions (OAuth login, publish messages, create contests, etc.). The backend URL must be configured so the front end can reach it.
 
 1. Set the backend URL for the web build
 
@@ -16,7 +18,7 @@ The `pages-deploy-vite.yml` workflow runs `npm run build` in `web/` and publishe
 3. OAuth redirect / CORS
 
 - Make sure your backend OAuth redirect URI is configured correctly in your Discord application settings (e.g. `https://your-backend.example.com/auth/discord/callback`).
-- Ensure your backend sets appropriate CORS headers so the GitHub Pages site (or any origin) can call the API.
+- Ensure your backend sets appropriate CORS headers so dcb-games.com (and any origin) can call the API.
 
 4. Local testing
 

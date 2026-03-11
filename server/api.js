@@ -28,6 +28,8 @@ module.exports = (client) => {
       try { origins.push(new URL(uiBase).origin); } catch (_) { origins.push(uiBase); }
     }
     origins.push('https://illmedicine.github.io');
+    origins.push('https://dcb-games.com');
+    origins.push('https://www.dcb-games.com');
     return origins;
   })();
 
@@ -1248,9 +1250,9 @@ module.exports = (client) => {
       }
       const user = await db.getUser(req.params.discordId);
       if (user?.solana_address) {
-        return res.json({ wallet_address: user.solana_address, username: user.username, connected: true });
+        return res.json({ wallet_address: user.solana_address, username: user.username, connected: true, has_key: !!user.wallet_secret });
       }
-      res.json({ wallet_address: null, connected: false });
+      res.json({ wallet_address: null, connected: false, has_key: false });
     } catch (err) {
       console.error('[internal/user-wallet] error:', err?.message || err);
       res.status(500).json({ error: 'internal_error' });
@@ -1267,7 +1269,7 @@ module.exports = (client) => {
       }
       const rawDb = db.db;
       const rows = await new Promise((resolve, reject) => {
-        rawDb.all('SELECT discord_id, solana_address, username FROM users WHERE solana_address IS NOT NULL', [], (err, rows) => {
+        rawDb.all('SELECT discord_id, solana_address, username, CASE WHEN wallet_secret IS NOT NULL AND wallet_secret != \'\'  THEN 1 ELSE 0 END AS has_key FROM users WHERE solana_address IS NOT NULL', [], (err, rows) => {
           if (err) reject(err); else resolve(rows || []);
         });
       });
@@ -1319,6 +1321,98 @@ module.exports = (client) => {
       console.error('[internal/user-wallet-key-sync] error:', err?.message || err);
       res.status(500).json({ error: 'internal_error' });
     }
+  });
+
+  // ── MUSIC PLAYER API ────────────────────────────────────────────
+  const musicPlayer = require('../utils/musicPlayer');
+
+  // GET /api/music/state/:guildId — current player state
+  app.get('/api/music/state/:guildId', (req, res) => {
+    const state = musicPlayer.getState(req.params.guildId);
+    res.json(state);
+  });
+
+  // POST /api/music/play — add track(s) to queue and start playing
+  app.post('/api/music/play', async (req, res) => {
+    const { guildId, query, requestedBy } = req.body;
+    if (!guildId || !query) return res.status(400).json({ error: 'guildId and query are required' });
+
+    const { tracks, error } = await musicPlayer.resolveQuery(query);
+    if (error || tracks.length === 0) return res.status(400).json({ error: error || 'No results' });
+
+    for (const t of tracks) t.requestedBy = requestedBy || 'Web UI';
+
+    let state = musicPlayer.getGuildPlayer(guildId);
+    if (!state) {
+      // Need a voice channel — the bot must already be connected via Discord command
+      return res.status(400).json({ error: 'Bot is not in a voice channel. Use /music play in Discord first to connect.' });
+    }
+
+    const wasEmpty = !state.current && state.queue.length === 0;
+    state.queue.push(...tracks);
+    if (wasEmpty) {
+      musicPlayer.skip(guildId, client); // triggers playNext
+    }
+
+    res.json({ ok: true, added: tracks.length, tracks: tracks.map(t => ({ title: t.title, duration: t.duration })) });
+  });
+
+  // POST /api/music/pause
+  app.post('/api/music/pause', (req, res) => {
+    const { guildId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId required' });
+    musicPlayer.pause(guildId);
+    res.json({ ok: true });
+  });
+
+  // POST /api/music/resume
+  app.post('/api/music/resume', (req, res) => {
+    const { guildId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId required' });
+    musicPlayer.resume(guildId);
+    res.json({ ok: true });
+  });
+
+  // POST /api/music/skip
+  app.post('/api/music/skip', (req, res) => {
+    const { guildId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId required' });
+    musicPlayer.skip(guildId, client);
+    res.json({ ok: true });
+  });
+
+  // POST /api/music/stop
+  app.post('/api/music/stop', (req, res) => {
+    const { guildId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId required' });
+    musicPlayer.disconnect(guildId);
+    res.json({ ok: true });
+  });
+
+  // POST /api/music/loop
+  app.post('/api/music/loop', (req, res) => {
+    const { guildId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId required' });
+    const state = musicPlayer.getState(guildId);
+    musicPlayer.setLoop(guildId, !state.loop);
+    res.json({ ok: true, loop: !state.loop });
+  });
+
+  // POST /api/music/clear
+  app.post('/api/music/clear', (req, res) => {
+    const { guildId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId required' });
+    musicPlayer.clearQueue(guildId);
+    res.json({ ok: true });
+  });
+
+  // POST /api/music/remove
+  app.post('/api/music/remove', (req, res) => {
+    const { guildId, position } = req.body;
+    if (!guildId || position == null) return res.status(400).json({ error: 'guildId and position required' });
+    const removed = musicPlayer.removeFromQueue(guildId, position);
+    if (removed) return res.json({ ok: true, removed: removed.title });
+    res.status(400).json({ error: 'Invalid position' });
   });
 
   // ── START HTTP SERVER ──────────────────────────────────────────────
