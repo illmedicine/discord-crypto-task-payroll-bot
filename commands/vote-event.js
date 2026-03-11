@@ -70,16 +70,6 @@ module.exports = {
         .setName('create')
         .setDescription('Create a new voting event (Server Owner only)')
         // All required options first
-        .addStringOption(option =>
-          option.setName('title')
-            .setDescription('Event title (auto-generated if empty)')
-            .setRequired(false)
-        )
-        .addStringOption(option =>
-          option.setName('description')
-            .setDescription('Event description')
-            .setRequired(false)
-        )
         .addIntegerOption(option =>
           option.setName('min_participants')
             .setDescription('Minimum participants to start event')
@@ -105,6 +95,16 @@ module.exports = {
             .setRequired(true)
         )
         // Optional options after required
+        .addStringOption(option =>
+          option.setName('title')
+            .setDescription('Event title (auto-generated if empty)')
+            .setRequired(false)
+        )
+        .addStringOption(option =>
+          option.setName('description')
+            .setDescription('Event description')
+            .setRequired(false)
+        )
         .addNumberOption(option =>
           option.setName('prize_amount')
             .setDescription('Prize amount to split among winners (optional)')

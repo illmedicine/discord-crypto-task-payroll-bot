@@ -370,6 +370,7 @@ module.exports = {
     .addSubcommand(sub =>
       sub.setName('create')
         .setDescription('Create a new horse race event')
+        .addIntegerOption(opt => opt.setName('max_players').setDescription('Max players').setRequired(true))
         .addStringOption(opt => opt.setName('title').setDescription('Event title (auto-generated if empty)').setRequired(false))
         .addStringOption(opt => opt.setName('description').setDescription('Event description').setRequired(false))
         .addStringOption(opt =>
@@ -384,7 +385,6 @@ module.exports = {
         .addStringOption(opt => opt.setName('currency').setDescription('Currency (SOL/USD)').setRequired(false))
         .addNumberOption(opt => opt.setName('entry_fee').setDescription('Entry fee per player (pot mode)').setRequired(false))
         .addIntegerOption(opt => opt.setName('min_players').setDescription('Min players to race (default 1)').setMinValue(1).setRequired(false))
-        .addIntegerOption(opt => opt.setName('max_players').setDescription('Max players').setRequired(true))
         .addIntegerOption(opt => opt.setName('duration_minutes').setDescription('Duration in minutes').setRequired(false))
         .addIntegerOption(opt => opt.setName('num_slots').setDescription('Number of horses (2-6, default 6)').setRequired(false))
         .addStringOption(opt => opt.setName('qualification_url').setDescription('URL users must visit to qualify (optional)').setRequired(false))
