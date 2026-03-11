@@ -199,7 +199,7 @@ export default function App() {
       <div className="login-container">
         <div className="login-card">
           <div style={{ marginBottom: 20 }}>
-            <img src="https://dcb-games.com/assets/discryptobank-logo.png" alt="DCB" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover', margin: '0 auto 14px', display: 'block', boxShadow: '0 8px 24px rgba(99,140,255,0.3)' }} />
+            <div style={{ width: 72, height: 72, borderRadius: '50%', margin: '0 auto 14px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(99,140,255,0.3)', background: 'linear-gradient(135deg, #638cff, #4f46e5)', color: '#fff', fontWeight: 700, fontSize: 22, letterSpacing: 1 }}>DCB</div>
           </div>
           <h1>DCB Event Manager</h1>
           <p>Discord Crypto Task & Payroll Manager</p>
@@ -286,7 +286,7 @@ export default function App() {
         {/* Top header bar */}
         <header className="mobile-header">
           <div className="mobile-header-left">
-            <img src="https://dcb-games.com/assets/discryptobank-logo.png" alt="DCB" className="mobile-header-logo" />
+            <div className="mobile-header-logo" style={{ width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #638cff, #4f46e5)', color: '#fff', fontWeight: 700, fontSize: 11, letterSpacing: 0.5, flexShrink: 0 }}>DCB</div>
             <div className="mobile-header-title">
               <span className="mobile-header-app-name">DCB Manager</span>
               <button className="mobile-guild-btn" onClick={() => setShowGuildPicker(v => !v)}>
@@ -441,7 +441,7 @@ export default function App() {
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
-          <img src="https://dcb-games.com/assets/discryptobank-logo.png" alt="DCB" className="sidebar-brand-logo" />
+          <div className="sidebar-brand-logo" style={{ width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #638cff, #4f46e5)', color: '#fff', fontWeight: 700, fontSize: 12, letterSpacing: 0.5, flexShrink: 0 }}>DCB</div>
           <span className="sidebar-brand-text">DCB Event Manager</span>
         </div>
 

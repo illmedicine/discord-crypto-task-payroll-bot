@@ -26,7 +26,7 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
   const fetchState = useCallback(async () => {
     if (!guildId) return
     try {
-      const res = await api.get(`/api/music/state/${guildId}`)
+      const res = await api.get(`/music/state/${guildId}`)
       setState(res.data)
     } catch { /* bot may not be connected yet */ }
   }, [guildId])
@@ -44,7 +44,7 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
     setError('')
     setSuccess('')
     try {
-      const res = await api.post('/api/music/play', { guildId, query: query.trim() })
+      const res = await api.post('/music/play', { guildId, query: query.trim() })
       setSuccess(`Added ${res.data.added} track(s) to queue`)
       setQuery('')
       fetchState()
@@ -57,7 +57,7 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
 
   const sendAction = async (action: string, body?: any) => {
     try {
-      await api.post(`/api/music/${action}`, { guildId, ...body })
+      await api.post(`/music/${action}`, { guildId, ...body })
       fetchState()
     } catch (err: any) {
       setError(err.response?.data?.error || `Failed: ${action}`)
