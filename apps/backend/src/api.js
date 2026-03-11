@@ -4596,5 +4596,41 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   }, 3000)
 
+  // ---- Music Player Proxy (forwards to bot API) ----
+  const musicProxy = async (req, res, method, path) => {
+    const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+    if (!BOT_API_URL) return res.status(503).json({ error: 'bot_api_not_configured' })
+    try {
+      const url = `${BOT_API_URL.replace(/\/$/, '')}${path}`
+      const opts = { timeout: 8000, headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' } }
+      const r = method === 'get'
+        ? await axios.get(url, opts)
+        : await axios.post(url, req.body, opts)
+      res.json(r.data)
+    } catch (err) {
+      const status = err?.response?.status || 502
+      res.status(status).json(err?.response?.data || { error: 'bot_unreachable' })
+    }
+  }
+
+  app.get('/api/music/state/:guildId', requireAuth, (req, res) =>
+    musicProxy(req, res, 'get', `/api/music/state/${req.params.guildId}`))
+  app.post('/api/music/play', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/play'))
+  app.post('/api/music/pause', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/pause'))
+  app.post('/api/music/resume', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/resume'))
+  app.post('/api/music/skip', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/skip'))
+  app.post('/api/music/stop', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/stop'))
+  app.post('/api/music/loop', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/loop'))
+  app.post('/api/music/clear', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/clear'))
+  app.post('/api/music/remove', requireAuth, (req, res) =>
+    musicProxy(req, res, 'post', '/api/music/remove'))
+
   return app
 }
