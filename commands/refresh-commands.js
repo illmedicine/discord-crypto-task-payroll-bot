@@ -33,10 +33,13 @@ module.exports = {
       // Get all commands
       const client = interaction.client;
       const commands = [];
+      const commandNames = [];
       
       for (const command of client.commands.values()) {
         commands.push(command.data.toJSON());
+        commandNames.push(command.data.name);
       }
+      console.log(`[refresh-commands] Command order: ${commandNames.map((n, i) => `${i}:${n}`).join(', ')}`);
 
       // Register commands globally
       const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -76,14 +79,30 @@ module.exports = {
     } catch (error) {
       console.error('Error refreshing commands:', error);
 
+      // Try to decode which commands are at fault from the error message
+      let debugInfo = '';
+      if (error.message) {
+        const indexMatches = error.message.match(/(\d+)\.options/g);
+        if (indexMatches) {
+          const indices = [...new Set(indexMatches.map(m => parseInt(m)))];
+          const client = interaction.client;
+          const names = [...client.commands.values()].map(c => c.data.name);
+          debugInfo = indices.map(i => `Index ${i} → ${names[i] || '?'}`).join('\n');
+        }
+      }
+
       const errorEmbed = new EmbedBuilder()
         .setColor('#FF0000')
         .setTitle('❌ Refresh Failed')
-        .setDescription(error.message)
+        .setDescription(error.message?.substring(0, 2000) || 'Unknown error')
         .addFields(
-          { name: 'Error Type', value: error.name || 'Unknown' },
+          { name: 'Error Type', value: `${error.name || 'Unknown'}${error.code ? `[${error.code}]` : ''}` },
           { name: 'Check', value: '• Verify bot has admin permissions\n• Check DISCORD_TOKEN is valid\n• Check DISCORD_CLIENT_ID is correct' }
         );
+
+      if (debugInfo) {
+        errorEmbed.addFields({ name: '🔍 Problem Commands', value: debugInfo.substring(0, 1024) });
+      }
 
       return interaction.editReply({ embeds: [errorEmbed] });
     }

@@ -45,9 +45,11 @@ module.exports = (client) => {
 
   // Basic health check
   const BOT_BUILD_TS = new Date().toISOString();
+  const BOT_VERSION = 'v2.3.0-fix-options';
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
+      version: BOT_VERSION,
       build: BOT_BUILD_TS,
       gateway: client?.ws?.status === 0 ? 'connected' : `status_${client?.ws?.status}`,
       user: client?.user?.tag || null,
