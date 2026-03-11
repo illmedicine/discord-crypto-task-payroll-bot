@@ -1324,16 +1324,25 @@ module.exports = (client) => {
   });
 
   // ── MUSIC PLAYER API ────────────────────────────────────────────
-  const musicPlayer = require('../utils/musicPlayer');
+  let musicPlayer;
+  try {
+    musicPlayer = require('../utils/musicPlayer');
+    console.log('[API] ✅ musicPlayer loaded');
+  } catch (err) {
+    console.error('[API] ⚠️ musicPlayer failed to load:', err.message);
+    console.error('[API] Music routes will return 503. Stack:', err.stack);
+  }
 
   // GET /api/music/state/:guildId — current player state
   app.get('/api/music/state/:guildId', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable — check bot logs' });
     const state = musicPlayer.getState(req.params.guildId);
     res.json(state);
   });
 
   // POST /api/music/play — add track(s) to queue and start playing
   app.post('/api/music/play', async (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable — check bot logs' });
     const { guildId, query, requestedBy } = req.body;
     if (!guildId || !query) return res.status(400).json({ error: 'guildId and query are required' });
 
@@ -1359,6 +1368,7 @@ module.exports = (client) => {
 
   // POST /api/music/pause
   app.post('/api/music/pause', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId required' });
     musicPlayer.pause(guildId);
@@ -1367,6 +1377,7 @@ module.exports = (client) => {
 
   // POST /api/music/resume
   app.post('/api/music/resume', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId required' });
     musicPlayer.resume(guildId);
@@ -1375,6 +1386,7 @@ module.exports = (client) => {
 
   // POST /api/music/skip
   app.post('/api/music/skip', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId required' });
     musicPlayer.skip(guildId, client);
@@ -1383,6 +1395,7 @@ module.exports = (client) => {
 
   // POST /api/music/stop
   app.post('/api/music/stop', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId required' });
     musicPlayer.disconnect(guildId);
@@ -1391,6 +1404,7 @@ module.exports = (client) => {
 
   // POST /api/music/loop
   app.post('/api/music/loop', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId required' });
     const state = musicPlayer.getState(guildId);
@@ -1400,6 +1414,7 @@ module.exports = (client) => {
 
   // POST /api/music/clear
   app.post('/api/music/clear', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId } = req.body;
     if (!guildId) return res.status(400).json({ error: 'guildId required' });
     musicPlayer.clearQueue(guildId);
@@ -1408,6 +1423,7 @@ module.exports = (client) => {
 
   // POST /api/music/remove
   app.post('/api/music/remove', (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable' });
     const { guildId, position } = req.body;
     if (!guildId || position == null) return res.status(400).json({ error: 'guildId and position required' });
     const removed = musicPlayer.removeFromQueue(guildId, position);
