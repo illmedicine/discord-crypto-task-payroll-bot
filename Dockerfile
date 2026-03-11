@@ -8,4 +8,5 @@ ENV NODE_ENV=production
 # Force cache bust on every deploy
 ARG CACHEBUST=1
 RUN echo "deploy: $(date -u +%Y%m%dT%H%M%SZ)" > /app/.deploy-ts
+EXPOSE 8080
 CMD ["node", "index.js"]
