@@ -468,7 +468,14 @@ module.exports = {
       .setDescription('Show the current table status'))
     .addSubcommand(sub => sub
       .setName('close')
-      .setDescription('Close/destroy the poker table in this channel')),
+      .setDescription('Close/destroy the poker table in this channel'))
+    .addSubcommand(sub => sub
+      .setName('retry-payout')
+      .setDescription('Retry failed payouts for a poker event (admin only)')
+      .addIntegerOption(opt => opt
+        .setName('event-id')
+        .setDescription('The poker event ID (shown in payout embed footer)')
+        .setRequired(true))),
 
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
@@ -479,6 +486,7 @@ module.exports = {
       case 'leave': return handleLeave(interaction);
       case 'status': return handleStatus(interaction);
       case 'close': return handleClose(interaction);
+      case 'retry-payout': return handleRetryPayout(interaction);
     }
   },
 
@@ -1125,6 +1133,159 @@ async function sendHoleCards(table, channel) {
     } catch (err) {
       console.log(`[Poker] Error sending hole cards to ${seat.discordId}:`, err.message);
     }
+  }
+}
+
+// ─── Retry Payout Handler ───────────────────────────────────────────────────
+
+async function handleRetryPayout(interaction) {
+  // Only server admins can retry payouts
+  const isAdmin = interaction.memberPermissions?.has('Administrator');
+  if (!isAdmin) {
+    return interaction.reply({ content: '❌ Only server administrators can retry failed payouts.', ephemeral: true });
+  }
+
+  const eventId = interaction.options.getInteger('event-id');
+  if (!eventId || !db || !crypto || !walletSync) {
+    return interaction.reply({ content: '❌ Crypto/database modules unavailable.', ephemeral: true });
+  }
+
+  await interaction.deferReply();
+
+  try {
+    // Look up the poker event
+    const event = await db.getPokerEvent(eventId);
+    if (!event) {
+      return interaction.editReply({ content: `❌ Poker event #${eventId} not found.` });
+    }
+    if (event.guild_id !== interaction.guildId) {
+      return interaction.editReply({ content: '❌ That event belongs to a different server.' });
+    }
+
+    // Find players with failed payouts
+    const rawDb = db.db;
+    const failedPlayers = await new Promise((resolve, reject) => {
+      rawDb.all(
+        `SELECT * FROM poker_event_players WHERE poker_event_id = ? AND payment_status = 'payout_failed'`,
+        [eventId],
+        (err, rows) => err ? reject(err) : resolve(rows || [])
+      );
+    });
+
+    if (failedPlayers.length === 0) {
+      // Also check for 'committed' players who never got paid (buy-in collected but no payout attempted)
+      const unpaidPlayers = await new Promise((resolve, reject) => {
+        rawDb.all(
+          `SELECT * FROM poker_event_players WHERE poker_event_id = ? AND payment_status IN ('committed', 'none') AND final_chips > 0 AND payout_amount = 0`,
+          [eventId],
+          (err, rows) => err ? reject(err) : resolve(rows || [])
+        );
+      });
+      if (unpaidPlayers.length === 0) {
+        return interaction.editReply({ content: `✅ No failed or pending payouts found for Poker Event #${eventId}.` });
+      }
+      // Treat unpaid as needing retry too
+      failedPlayers.push(...unpaidPlayers);
+    }
+
+    // Get guild wallet for sending
+    const guildWallet = await walletSync.getGuildWalletWithFallback(interaction.guildId);
+    if (!guildWallet || !guildWallet.wallet_secret) {
+      return interaction.editReply({ content: '❌ No treasury wallet configured for this server.' });
+    }
+    const keypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
+    if (!keypair) {
+      return interaction.editReply({ content: '❌ Invalid treasury wallet key.' });
+    }
+
+    // Check treasury balance
+    const treasuryAddr = guildWallet.wallet_address;
+    const balance = await crypto.getBalance(treasuryAddr);
+
+    // Calculate total needed
+    let totalNeeded = 0;
+    const playersToRetry = [];
+
+    // Recalculate payout amounts from the event data
+    const allPlayers = await new Promise((resolve, reject) => {
+      rawDb.all(
+        `SELECT * FROM poker_event_players WHERE poker_event_id = ?`,
+        [eventId],
+        (err, rows) => err ? reject(err) : resolve(rows || [])
+      );
+    });
+
+    const totalBuyIns = allPlayers.reduce((sum, p) => sum + (p.buy_in_amount || 0), 0);
+    const houseCut = totalBuyIns * 0.10;
+    const payoutPool = totalBuyIns - houseCut;
+    const totalChips = allPlayers.reduce((sum, p) => sum + (p.final_chips || 0), 0);
+
+    for (const player of failedPlayers) {
+      if (!player.wallet_address) continue;
+      let payoutSol = player.payout_amount;
+      // Recalculate if payout_amount was never set
+      if (!payoutSol && totalChips > 0 && player.final_chips > 0) {
+        payoutSol = (player.final_chips / totalChips) * payoutPool;
+      }
+      if (!payoutSol || payoutSol < 0.000001) continue;
+      totalNeeded += payoutSol;
+      playersToRetry.push({ ...player, payoutSol });
+    }
+
+    if (playersToRetry.length === 0) {
+      return interaction.editReply({ content: `✅ No actionable failed payouts for Poker Event #${eventId}.` });
+    }
+
+    const txFeeBuffer = 0.00005 * playersToRetry.length;
+    if (balance < totalNeeded + txFeeBuffer) {
+      return interaction.editReply({
+        content: `❌ Insufficient treasury balance.\n` +
+          `Treasury: **${balance.toFixed(6)} SOL**\n` +
+          `Needed: **${(totalNeeded + txFeeBuffer).toFixed(6)} SOL** (${playersToRetry.length} payout(s) + fees)\n\n` +
+          `Fund the treasury wallet \`${treasuryAddr}\` with at least **${((totalNeeded + txFeeBuffer) - balance).toFixed(6)} SOL** more, then run this command again.`
+      });
+    }
+
+    // Process retries
+    const results = [];
+    for (const player of playersToRetry) {
+      try {
+        const result = await crypto.sendSolFrom(keypair, player.wallet_address, player.payoutSol);
+        if (result && result.success) {
+          results.push({ userId: player.user_id, amount: player.payoutSol, success: true, tx: result.signature });
+          await db.dbRun(
+            'UPDATE poker_event_players SET payout_amount = ?, payment_status = ?, payout_tx_signature = ? WHERE poker_event_id = ? AND user_id = ?',
+            [player.payoutSol, 'paid', result.signature || null, eventId, player.user_id]
+          ).catch(() => {});
+        } else {
+          results.push({ userId: player.user_id, amount: player.payoutSol, success: false, error: result?.error || 'Transfer failed' });
+        }
+      } catch (err) {
+        results.push({ userId: player.user_id, amount: player.payoutSol, success: false, error: err.message });
+      }
+    }
+
+    const lines = results.map(r =>
+      r.success
+        ? `✅ <@${r.userId}>: ${r.amount.toFixed(4)} SOL → [tx](https://solscan.io/tx/${r.tx})`
+        : `❌ <@${r.userId}>: ${r.amount.toFixed(4)} SOL — ${r.error}`
+    );
+
+    const successCount = results.filter(r => r.success).length;
+    const embed = new EmbedBuilder()
+      .setColor(successCount === results.length ? '#27AE60' : '#E74C3C')
+      .setTitle('🔄 Poker Payout Retry')
+      .setDescription(
+        `Event #${eventId} — ${successCount}/${results.length} payouts succeeded\n\n` +
+        lines.join('\n')
+      )
+      .setFooter({ text: `Retried by ${interaction.user.tag}` })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (err) {
+    console.error('[Poker] Retry payout error:', err);
+    await interaction.editReply({ content: `❌ Error: ${err.message}` });
   }
 }
 

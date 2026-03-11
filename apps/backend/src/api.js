@@ -4599,19 +4599,51 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // ---- Music Player Proxy (forwards to bot API) ----
   const musicProxy = async (req, res, method, path) => {
     const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
-    if (!BOT_API_URL) return res.status(503).json({ error: 'bot_api_not_configured' })
+    if (!BOT_API_URL) {
+      console.error('[music-proxy] DCB_BOT_API_URL / BOT_API_URL is not configured')
+      return res.status(503).json({ error: 'Bot API URL is not configured. Set DCB_BOT_API_URL in Railway environment variables.' })
+    }
     try {
       const url = `${BOT_API_URL.replace(/\/$/, '')}${path}`
-      const opts = { timeout: 8000, headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' } }
+      const opts = { timeout: 12000, headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' } }
       const r = method === 'get'
         ? await axios.get(url, opts)
         : await axios.post(url, req.body, opts)
       res.json(r.data)
     } catch (err) {
       const status = err?.response?.status || 502
-      res.status(status).json(err?.response?.data || { error: 'bot_unreachable' })
+      const detail = err?.code || err?.message || 'unknown'
+      console.error(`[music-proxy] ${method.toUpperCase()} ${path} failed: ${detail} (status=${status})`)
+      if (err?.response?.data) {
+        res.status(status).json(err.response.data)
+      } else if (err?.code === 'ECONNREFUSED') {
+        res.status(502).json({ error: 'Bot API is not responding. The bot service may be down or restarting.' })
+      } else if (err?.code === 'ENOTFOUND') {
+        res.status(502).json({ error: 'Bot API hostname not found. Check DCB_BOT_API_URL configuration.' })
+      } else if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
+        res.status(504).json({ error: 'Bot API request timed out. The bot service may be overloaded.' })
+      } else {
+        res.status(502).json({ error: `Bot API unreachable: ${detail}` })
+      }
     }
   }
+
+  // Diagnostic endpoint: check bot API connectivity
+  app.get('/api/music/health', requireAuth, async (req, res) => {
+    const BOT_API_URL = process.env.DCB_BOT_API_URL || process.env.BOT_API_URL || ''
+    if (!BOT_API_URL) {
+      return res.json({ ok: false, error: 'DCB_BOT_API_URL not configured', botUrl: null })
+    }
+    try {
+      const r = await axios.get(`${BOT_API_URL.replace(/\/$/, '')}/api/health`, {
+        timeout: 5000,
+        headers: { 'x-dcb-internal-secret': process.env.DCB_INTERNAL_SECRET || '' }
+      })
+      res.json({ ok: true, botUrl: BOT_API_URL.replace(/\/+$/, ''), botHealth: r.data })
+    } catch (err) {
+      res.json({ ok: false, error: err?.code || err?.message || 'unreachable', botUrl: BOT_API_URL.replace(/\/+$/, '') })
+    }
+  })
 
   app.get('/api/music/state/:guildId', requireAuth, (req, res) =>
     musicProxy(req, res, 'get', `/api/music/state/${req.params.guildId}`))

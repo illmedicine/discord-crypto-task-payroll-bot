@@ -22,20 +22,31 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [botConnected, setBotConnected] = useState<boolean | null>(null)
+  const [botError, setBotError] = useState('')
 
   const fetchState = useCallback(async () => {
     if (!guildId) return
     try {
       const res = await api.get(`/music/state/${guildId}`)
       setState(res.data)
-    } catch { /* bot may not be connected yet */ }
+      setBotConnected(true)
+      setBotError('')
+    } catch (err: any) {
+      const status = err?.response?.status
+      const msg = err?.response?.data?.error || ''
+      if (status === 502 || status === 503 || status === 504) {
+        setBotConnected(false)
+        setBotError(msg || 'Bot API is unreachable')
+      }
+    }
   }, [guildId])
 
   useEffect(() => {
     fetchState()
-    const interval = setInterval(fetchState, 3000) // poll every 3s
+    const interval = setInterval(fetchState, botConnected === false ? 10000 : 3000) // slower poll when bot unreachable
     return () => clearInterval(interval)
-  }, [fetchState])
+  }, [fetchState, botConnected])
 
   const handlePlay = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -69,6 +80,14 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
       <h2 style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
         <span>🎵</span> Server Music
       </h2>
+
+      {botConnected === false && (
+        <div style={{ padding: '12px 16px', marginBottom: 16, background: '#3a2000', border: '1px solid #ff9800', borderRadius: 8, fontSize: 13, color: '#ffb74d', lineHeight: 1.5 }}>
+          <strong>⚠️ Bot API Unreachable</strong>
+          <div style={{ marginTop: 4 }}>{botError || 'The music bot service is not responding. Music features will not work until the bot is back online.'}</div>
+          <div style={{ marginTop: 6, fontSize: 12, color: '#ff9800' }}>The page will keep trying to reconnect automatically.</div>
+        </div>
+      )}
 
       {/* Add Track / Playlist */}
       <div className="card" style={{ padding: 20, marginBottom: 20 }}>
