@@ -68,15 +68,33 @@ async function resolveQuery(query) {
         requestedBy: null,
       });
     } else if (validated === 'yt_playlist') {
-      const playlist = await play.playlist_info(query, { incomplete: true });
-      const videos = await playlist.all_videos();
-      for (const v of videos.slice(0, 100)) { // cap at 100 tracks
-        tracks.push({
-          title: v.title,
-          url: v.url,
-          duration: v.durationRaw || '?',
-          requestedBy: null,
-        });
+      try {
+        const playlist = await play.playlist_info(query, { incomplete: true });
+        const videos = await playlist.all_videos();
+        for (const v of videos.slice(0, 100)) { // cap at 100 tracks
+          tracks.push({
+            title: v.title,
+            url: v.url,
+            duration: v.durationRaw || '?',
+            requestedBy: null,
+          });
+        }
+      } catch (plErr) {
+        // YouTube Mix/Radio playlists often fail — fall back to the video in the URL
+        console.warn('[MusicPlayer] Playlist parse failed, trying as single video:', plErr.message);
+        const videoUrl = query.replace(/[&?]list=[^&]*/g, '').replace(/[&?]start_radio=[^&]*/g, '').replace(/[&?]index=[^&]*/g, '');
+        try {
+          const info = await play.video_info(videoUrl);
+          tracks.push({
+            title: info.video_details.title,
+            url: videoUrl,
+            duration: info.video_details.durationRaw || '?',
+            requestedBy: null,
+          });
+        } catch (vErr) {
+          console.error('[MusicPlayer] Video fallback also failed:', vErr.message);
+          return { tracks: [], error: `Playlist and video lookup both failed: ${plErr.message}` };
+        }
       }
     } else if (validated === 'so_track') {
       const info = await play.soundcloud(query);
