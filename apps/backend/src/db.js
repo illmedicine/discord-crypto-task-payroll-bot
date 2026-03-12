@@ -326,6 +326,9 @@ db.serialize(() => {
   // Migration: add wallet_secret column to user_wallets (encrypted private key)
   db.run(`ALTER TABLE user_wallets ADD COLUMN wallet_secret TEXT`, () => {})
 
+  // Migration: add bot_has_key column to user_wallets (cached flag from bot)
+  db.run(`ALTER TABLE user_wallets ADD COLUMN bot_has_key INTEGER DEFAULT 0`, () => {})
+
   // Worker payouts – tracks every SOL payment made to a worker via the web dashboard
   db.run(
     `CREATE TABLE IF NOT EXISTS worker_payouts (
