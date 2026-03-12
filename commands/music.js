@@ -76,27 +76,28 @@ module.exports = {
         t.requestedBy = interaction.user.username;
       }
 
-      // Get or create guild player
+      // Get or create guild player and queue tracks
       let state = musicPlayer.getGuildPlayer(guildId);
       const wasEmpty = !state || (!state.current && state.queue.length === 0);
 
       if (!state) {
-        // First time — connect
-        const guildState = musicPlayer.getGuildPlayer(guildId);
-        if (!guildState) {
-          // Add tracks to queue before connecting
-          const { guildPlayers } = musicPlayer;
-          const player = require('@discordjs/voice').createAudioPlayer();
-          const newState = {
-            player,
+        // First time — create state, add tracks, then connect
+        const { guildPlayers, createGuildPlayer: _create } = musicPlayer;
+        state = musicPlayer.getGuildPlayer(guildId);
+        if (!state) {
+          // createGuildPlayer is internal, so manually create and register
+          const { createAudioPlayer: _cap } = require('@discordjs/voice');
+          state = {
+            player: _cap(),
             connection: null,
-            queue: tracks,
+            queue: [],
             current: null,
             loop: false,
             textChannelId: interaction.channelId,
           };
-          guildPlayers.set(guildId, newState);
+          guildPlayers.set(guildId, state);
         }
+        state.queue.push(...tracks);
         await musicPlayer.connectAndPlay(
           guildId,
           voiceChannel.id,
@@ -109,7 +110,6 @@ module.exports = {
         state.queue.push(...tracks);
         state.textChannelId = interaction.channelId;
         if (wasEmpty) {
-          // Reconnect if needed
           if (!state.connection) {
             await musicPlayer.connectAndPlay(
               guildId,

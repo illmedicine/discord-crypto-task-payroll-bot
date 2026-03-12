@@ -1342,10 +1342,72 @@ module.exports = (client) => {
     res.json(state);
   });
 
+  // POST /api/music/join — connect bot to a voice channel from the web UI
+  app.post('/api/music/join', async (req, res) => {
+    if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable — check bot logs' });
+    const { guildId, channelId } = req.body;
+    if (!guildId) return res.status(400).json({ error: 'guildId is required' });
+
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      let targetChannelId = channelId;
+
+      if (!targetChannelId) {
+        // Find the first voice channel with members in it, or fall back to first VC
+        const channels = await guild.channels.fetch();
+        const voiceChannels = channels.filter(c => c && (c.type === 2 || c.type === 13)); // GuildVoice or GuildStageVoice
+        const populated = voiceChannels.find(c => c.members && c.members.size > 0);
+        targetChannelId = populated?.id || voiceChannels.first()?.id;
+      }
+
+      if (!targetChannelId) {
+        return res.status(400).json({ error: 'No voice channels found in this server' });
+      }
+
+      // Check if bot has Connect + Speak permissions in the target channel
+      const channel = await guild.channels.fetch(targetChannelId);
+      if (!channel) return res.status(400).json({ error: 'Voice channel not found' });
+      const perms = channel.permissionsFor(guild.members.me);
+      if (perms && !perms.has('Connect')) {
+        return res.status(403).json({ error: 'Bot lacks Connect permission in that voice channel' });
+      }
+      if (perms && !perms.has('Speak')) {
+        return res.status(403).json({ error: 'Bot lacks Speak permission in that voice channel' });
+      }
+
+      await musicPlayer.connectAndPlay(
+        guildId,
+        targetChannelId,
+        guild.voiceAdapterCreator,
+        null,
+        client
+      );
+
+      res.json({ ok: true, channelId: targetChannelId, channelName: channel.name });
+    } catch (err) {
+      console.error('[API] /api/music/join error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/music/voice-channels/:guildId — list voice channels for the web UI
+  app.get('/api/music/voice-channels/:guildId', async (req, res) => {
+    try {
+      const guild = await client.guilds.fetch(req.params.guildId);
+      const channels = await guild.channels.fetch();
+      const voiceChannels = channels
+        .filter(c => c && (c.type === 2 || c.type === 13))
+        .map(c => ({ id: c.id, name: c.name, members: c.members ? c.members.size : 0 }));
+      res.json(voiceChannels);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/music/play — add track(s) to queue and start playing
   app.post('/api/music/play', async (req, res) => {
     if (!musicPlayer) return res.status(503).json({ error: 'Music engine unavailable — check bot logs' });
-    const { guildId, query, requestedBy } = req.body;
+    const { guildId, query, requestedBy, channelId } = req.body;
     if (!guildId || !query) return res.status(400).json({ error: 'guildId and query are required' });
 
     const { tracks, error } = await musicPlayer.resolveQuery(query);
@@ -1355,8 +1417,48 @@ module.exports = (client) => {
 
     let state = musicPlayer.getGuildPlayer(guildId);
     if (!state) {
-      // Need a voice channel — the bot must already be connected via Discord command
-      return res.status(400).json({ error: 'Bot is not in a voice channel. Use /music play in Discord first to connect.' });
+      // Auto-join: find/use a voice channel and connect
+      try {
+        const guild = await client.guilds.fetch(guildId);
+        let targetChannelId = channelId;
+
+        if (!targetChannelId) {
+          const channels = await guild.channels.fetch();
+          const voiceChannels = channels.filter(c => c && (c.type === 2 || c.type === 13));
+          const populated = voiceChannels.find(c => c.members && c.members.size > 0);
+          targetChannelId = populated?.id || voiceChannels.first()?.id;
+        }
+
+        if (!targetChannelId) {
+          return res.status(400).json({ error: 'No voice channels found. The bot cannot join without a voice channel.' });
+        }
+
+        // Create state, add tracks, then connect
+        const { createAudioPlayer } = require('@discordjs/voice');
+        const { guildPlayers } = musicPlayer;
+        state = {
+          player: createAudioPlayer(),
+          connection: null,
+          queue: tracks,
+          current: null,
+          loop: false,
+          textChannelId: null,
+        };
+        guildPlayers.set(guildId, state);
+
+        await musicPlayer.connectAndPlay(
+          guildId,
+          targetChannelId,
+          guild.voiceAdapterCreator,
+          null,
+          client
+        );
+
+        return res.json({ ok: true, added: tracks.length, joined: targetChannelId, tracks: tracks.map(t => ({ title: t.title, duration: t.duration })) });
+      } catch (joinErr) {
+        console.error('[API] /api/music/play auto-join error:', joinErr.message);
+        return res.status(400).json({ error: `Could not join voice channel: ${joinErr.message}` });
+      }
     }
 
     const wasEmpty = !state.current && state.queue.length === 0;

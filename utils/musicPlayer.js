@@ -236,12 +236,16 @@ async function connectAndPlay(guildId, channelId, adapterCreator, textChannelId,
   }
   state.textChannelId = textChannelId;
 
+  // Remove old listeners to prevent accumulation on reconnect
+  state.player.removeAllListeners(AudioPlayerStatus.Idle);
+  state.player.removeAllListeners('error');
+
   // Join voice channel
   const connection = joinVoiceChannel({
     channelId,
     guildId,
     adapterCreator,
-    selfDeaf: false,
+    selfDeaf: true,
   });
 
   state.connection = connection;
@@ -278,8 +282,10 @@ async function connectAndPlay(guildId, channelId, adapterCreator, textChannelId,
     cleanup(guildId);
   });
 
-  // Start playback
-  playNext(guildId, client);
+  // Start playback if there are tracks queued
+  if (state.queue.length > 0) {
+    playNext(guildId, client);
+  }
 }
 
 function disconnect(guildId) {

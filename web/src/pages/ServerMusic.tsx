@@ -16,6 +16,12 @@ interface MusicState {
   loop: boolean
 }
 
+interface VoiceChannel {
+  id: string
+  name: string
+  members: number
+}
+
 export default function ServerMusic({ guildId }: { guildId: string }) {
   const [state, setState] = useState<MusicState>({ playing: false, paused: false, current: null, queue: [], loop: false })
   const [query, setQuery] = useState('')
@@ -24,6 +30,9 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
   const [success, setSuccess] = useState('')
   const [botConnected, setBotConnected] = useState<boolean | null>(null)
   const [botError, setBotError] = useState('')
+  const [voiceChannels, setVoiceChannels] = useState<VoiceChannel[]>([])
+  const [selectedChannel, setSelectedChannel] = useState('')
+  const [joining, setJoining] = useState(false)
 
   const fetchState = useCallback(async () => {
     if (!guildId) return
@@ -47,6 +56,32 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
     const interval = setInterval(fetchState, botConnected === false ? 10000 : 3000) // slower poll when bot unreachable
     return () => clearInterval(interval)
   }, [fetchState, botConnected])
+
+  // Fetch voice channels when guild changes
+  useEffect(() => {
+    if (!guildId || botConnected === false) return
+    api.get(`/music/voice-channels/${guildId}`).then(res => {
+      setVoiceChannels(res.data || [])
+      // Auto-select the channel with the most members, or first one
+      const sorted = [...(res.data || [])].sort((a: VoiceChannel, b: VoiceChannel) => b.members - a.members)
+      if (sorted.length > 0) setSelectedChannel(sorted[0].id)
+    }).catch(() => {})
+  }, [guildId, botConnected])
+
+  const handleJoin = async () => {
+    if (!selectedChannel) return
+    setJoining(true)
+    setError('')
+    try {
+      const res = await api.post('/music/join', { guildId, channelId: selectedChannel })
+      setSuccess(`Bot joined ${res.data.channelName || 'voice channel'}`)
+      fetchState()
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to join voice channel')
+    } finally {
+      setJoining(false)
+    }
+  }
 
   const handlePlay = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -162,7 +197,37 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
         ) : (
           <div style={{ color: 'var(--text-muted)', fontSize: 14, padding: '20px 0', textAlign: 'center' }}>
             <span style={{ fontSize: 32, display: 'block', marginBottom: 8 }}>🔇</span>
-            Nothing is playing. Use <code>/music play</code> in Discord to connect the bot to a voice channel, then add music here or via commands.
+            Bot is not in a voice channel. Select a channel and connect:
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+              <select
+                value={selectedChannel}
+                onChange={e => setSelectedChannel(e.target.value)}
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-color, #333)',
+                  background: 'var(--bg-secondary, #1a1e2e)',
+                  color: 'var(--text-primary, #fff)',
+                  fontSize: 14,
+                  minWidth: 180,
+                }}
+              >
+                {voiceChannels.length === 0 && <option value="">No voice channels</option>}
+                {voiceChannels.map(vc => (
+                  <option key={vc.id} value={vc.id}>
+                    🔊 {vc.name} {vc.members > 0 ? `(${vc.members} user${vc.members !== 1 ? 's' : ''})` : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn btn-primary"
+                onClick={handleJoin}
+                disabled={joining || !selectedChannel}
+                style={{ padding: '10px 20px', fontSize: 14 }}
+              >
+                {joining ? 'Joining...' : '🔊 Connect Bot'}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -224,9 +289,9 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
       <div style={{ marginTop: 16, padding: '12px 16px', background: 'var(--bg-secondary, #1a1e2e)', borderRadius: 8, fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         <strong>💡 Tips:</strong>
         <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-          <li>The bot must be in a voice channel first — use <code>/music play [url]</code> in Discord to connect it.</li>
+          <li>Select a voice channel and click <strong>Connect Bot</strong>, or add a song — the bot will auto-join the most populated voice channel.</li>
           <li>Paste full YouTube/SoundCloud/Spotify playlist URLs to add entire playlists at once.</li>
-          <li>To stop hearing the music personally, use <code>/music mute</code> in Discord or click the 🔇 Mute Me button — this deafens only you while music keeps playing for everyone else.</li>
+          <li>To stop hearing the music personally, use <code>/music mute</code> in Discord — this deafens only you while music keeps playing for everyone else.</li>
         </ul>
       </div>
     </div>
