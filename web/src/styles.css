@@ -101,9 +101,9 @@ body {
 .sidebar-brand-logo {
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
-  box-shadow: 0 4px 12px rgba(99,140,255,0.3);
+  border-radius: 0;
+  object-fit: contain;
+  box-shadow: none;
 }
 
 .sidebar-brand-text {
