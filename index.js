@@ -275,6 +275,31 @@ client.once('clientReady', async () => {
   console.log(`   1. Try typing / in Discord (may take 5-15 min to sync)`);
   console.log(`   2. Close and reopen Discord`);
   console.log(`   3. Wait for Railway deployment to finish\n`);
+
+  // ─── Startup permission audit ───
+  const REQUIRED_PERMS = ['Connect', 'Speak', 'SendMessages', 'EmbedLinks'];
+  const BOT_PERMS_INT = '2184267776';
+  const startupInviteUrl = `https://discord.com/api/oauth2/authorize?client_id=${process.env.DISCORD_CLIENT_ID}&permissions=${BOT_PERMS_INT}&scope=bot%20applications.commands`;
+
+  setTimeout(async () => {
+    console.log('🔍 Running startup permission audit...');
+    let needsUpdate = 0;
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        const me = guild.members.me || await guild.members.fetchMe();
+        const missing = REQUIRED_PERMS.filter(p => !me.permissions.has(p));
+        if (missing.length > 0) {
+          needsUpdate++;
+          console.log(`   ⚠️ ${guild.name}: missing ${missing.join(', ')}`);
+        }
+      } catch {}
+    }
+    if (needsUpdate > 0) {
+      console.log(`⚠️ ${needsUpdate} guild(s) have missing permissions. Use /admin announce to notify them.`);
+    } else {
+      console.log('✅ All guilds have required permissions.');
+    }
+  }, 10000);
   
   // Update status every 30 seconds to cycle through features
   setInterval(() => {

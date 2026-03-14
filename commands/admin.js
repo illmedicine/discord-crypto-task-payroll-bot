@@ -1,5 +1,12 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('../utils/db');
+
+// Permissions integer for the bot invite URL
+const REQUIRED_PERMISSIONS = '2184267776';
+
+function getInviteUrl(clientId) {
+  return `https://discord.com/api/oauth2/authorize?client_id=${clientId}&permissions=${REQUIRED_PERMISSIONS}&scope=bot%20applications.commands`;
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -30,6 +37,21 @@ module.exports = {
             .setDescription('Contest ID to claim')
             .setRequired(true)
         )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('announce')
+        .setDescription('Send an update announcement to all servers (bot owner only)')
+        .addStringOption(option =>
+          option.setName('message')
+            .setDescription('Custom message to include (optional)')
+            .setRequired(false)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('check-permissions')
+        .setDescription('Check bot permissions in this server and show update link if needed')
     ),
 
   async execute(interaction) {
@@ -358,6 +380,123 @@ module.exports = {
           content: `❌ Error: ${error.message}`
         });
       }
+    }
+
+    // ==================== CHECK PERMISSIONS ====================
+    if (subcommand === 'check-permissions') {
+      await interaction.deferReply({ ephemeral: true });
+
+      const me = interaction.guild.members.me;
+      const clientId = interaction.client.user.id;
+      const inviteUrl = getInviteUrl(clientId);
+
+      const required = [
+        { name: 'SendMessages', label: 'Send Messages' },
+        { name: 'EmbedLinks', label: 'Embed Links' },
+        { name: 'ReadMessageHistory', label: 'Read Message History' },
+        { name: 'Connect', label: 'Connect (Voice)' },
+        { name: 'Speak', label: 'Speak (Voice)' },
+        { name: 'UseVAD', label: 'Use Voice Activity' },
+      ];
+
+      const lines = required.map(p => {
+        const has = me.permissions.has(p.name);
+        return `${has ? '✅' : '❌'} ${p.label}`;
+      });
+
+      const missing = required.filter(p => !me.permissions.has(p.name));
+      const allGood = missing.length === 0;
+
+      const embed = new EmbedBuilder()
+        .setColor(allGood ? '#14F195' : '#ff4444')
+        .setTitle(allGood ? '✅ All Permissions OK' : '⚠️ Missing Bot Permissions')
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: allGood ? 'Bot is fully configured!' : 'Click the button below to update bot permissions' });
+
+      const components = [];
+      if (!allGood) {
+        components.push(new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('🔄 Update Bot Permissions')
+            .setStyle(ButtonStyle.Link)
+            .setURL(inviteUrl)
+        ));
+      }
+
+      return interaction.editReply({ embeds: [embed], components });
+    }
+
+    // ==================== ANNOUNCE ====================
+    if (subcommand === 'announce') {
+      // Only the bot application owner can use this
+      const app = await interaction.client.application.fetch();
+      const ownerId = app.owner?.id || app.owner?.ownerId;
+      if (interaction.user.id !== ownerId) {
+        return interaction.reply({ content: '❌ Only the bot owner can send global announcements.', ephemeral: true });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const customMsg = interaction.options.getString('message') || '';
+      const clientId = interaction.client.user.id;
+      const inviteUrl = getInviteUrl(clientId);
+
+      const embed = new EmbedBuilder()
+        .setColor('#638cff')
+        .setTitle('🚀 DisCryptoBank Update Available!')
+        .setDescription(
+          '**New features have been added to DisCryptoBank!**\n\n' +
+          '🎵 **Server Music** — Play YouTube, SoundCloud & Spotify from the web dashboard\n' +
+          '🃏 **Poker Events** — Host Texas Hold\'em tournaments with SOL buy-ins\n' +
+          '🎰 **Gambling Events** — Horse races with crypto wagering\n' +
+          '🗳️ **Vote Events** — Community polls with on-chain results\n\n' +
+          (customMsg ? `📢 **${customMsg}**\n\n` : '') +
+          '**To enable all features, the bot needs updated permissions.** Click the button below to re-authorize — your server data and settings will NOT be affected.'
+        )
+        .setThumbnail(interaction.client.user.displayAvatarURL({ size: 128 }))
+        .setFooter({ text: 'DisCryptoBank • Re-authorizing is safe and keeps all your data' });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setLabel('🔄 Update DisCryptoBank')
+          .setStyle(ButtonStyle.Link)
+          .setURL(inviteUrl),
+        new ButtonBuilder()
+          .setLabel('📊 Web Dashboard')
+          .setStyle(ButtonStyle.Link)
+          .setURL('https://dcb-games.com')
+      );
+
+      let sent = 0;
+      let failed = 0;
+      const errors = [];
+
+      for (const guild of interaction.client.guilds.cache.values()) {
+        try {
+          // Try system channel first, then first writable text channel
+          let channel = guild.systemChannel;
+          if (!channel || !channel.permissionsFor(guild.members.me)?.has('SendMessages')) {
+            const textChannels = guild.channels.cache.filter(
+              c => c.type === 0 && c.permissionsFor(guild.members.me)?.has('SendMessages')
+            );
+            channel = textChannels.first();
+          }
+          if (channel) {
+            await channel.send({ embeds: [embed], components: [row] });
+            sent++;
+          } else {
+            failed++;
+            errors.push(`${guild.name}: no writable channel`);
+          }
+        } catch (err) {
+          failed++;
+          errors.push(`${guild.name}: ${err.message}`);
+        }
+      }
+
+      return interaction.editReply({
+        content: `📢 **Announcement sent!**\n✅ Delivered to **${sent}** servers\n${failed > 0 ? `❌ Failed: **${failed}** servers${errors.length > 0 ? `\n\`\`\`\n${errors.slice(0, 10).join('\n')}\n\`\`\`` : ''}` : ''}`
+      });
     }
   }
 };
