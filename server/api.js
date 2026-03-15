@@ -1395,11 +1395,22 @@ module.exports = (client) => {
     try {
       const guild = await client.guilds.fetch(req.params.guildId);
       const channels = await guild.channels.fetch();
-      const voiceChannels = channels
-        .filter(c => c && (c.type === 2 || c.type === 13))
-        .map(c => ({ id: c.id, name: c.name, members: c.members ? c.members.size : 0 }));
-      res.json(voiceChannels);
+      const result = [];
+      for (const [, c] of channels) {
+        if (!c) continue;
+        // type 2 = GuildVoice, type 13 = GuildStageVoice
+        if (c.type === 2 || c.type === 13) {
+          result.push({
+            id: c.id,
+            name: c.name,
+            members: c.members ? c.members.size : 0,
+          });
+        }
+      }
+      console.log(`[API] voice-channels for ${req.params.guildId}: found ${result.length} channels`);
+      res.json(result);
     } catch (err) {
+      console.error('[API] voice-channels error:', err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -1433,18 +1444,9 @@ module.exports = (client) => {
           return res.status(400).json({ error: 'No voice channels found. The bot cannot join without a voice channel.' });
         }
 
-        // Create state, add tracks, then connect
-        const { createAudioPlayer } = require('@discordjs/voice');
-        const { guildPlayers } = musicPlayer;
-        state = {
-          player: createAudioPlayer(),
-          connection: null,
-          queue: tracks,
-          current: null,
-          loop: false,
-          textChannelId: null,
-        };
-        guildPlayers.set(guildId, state);
+        // Create state using musicPlayer's own factory, add tracks, then connect
+        state = musicPlayer.createGuildPlayer(guildId);
+        state.queue.push(...tracks);
 
         await musicPlayer.connectAndPlay(
           guildId,
@@ -1464,7 +1466,8 @@ module.exports = (client) => {
     const wasEmpty = !state.current && state.queue.length === 0;
     state.queue.push(...tracks);
     if (wasEmpty) {
-      musicPlayer.skip(guildId, client); // triggers playNext
+      // Use skip which now handles idle players properly
+      musicPlayer.skip(guildId, client);
     }
 
     res.json({ ok: true, added: tracks.length, tracks: tracks.map(t => ({ title: t.title, duration: t.duration })) });

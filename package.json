@@ -28,6 +28,8 @@
     "multer": "^2.0.2",
     "opusscript": "^0.0.8",
     "play-dl": "^1.9.7",
+    "@distube/ytdl-core": "^4.16.12",
+    "youtube-sr": "^4.3.11",
     "sqlite3": "^5.1.7"
   },
   "engines": {

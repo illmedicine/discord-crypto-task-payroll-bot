@@ -2,16 +2,17 @@
  * Music Player Engine for DCB Bot
  * 
  * Manages voice connections, audio streaming, and per-guild queues.
- * Supports YouTube, SoundCloud, Spotify URLs and playlists via play-dl.
- * 
- * "Personal mute" is handled client-side — Discord doesn't support
- * per-user audio muting from a bot. Users deafen themselves via
- * the /music mute command (which server-deafens them) or by using
- * Discord's built-in self-deafen. The bot always plays for everyone.
+ * Supports YouTube URLs/playlists via @distube/ytdl-core + youtube-sr,
+ * with play-dl as optional fallback for SoundCloud/Spotify.
  */
 
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, getVoiceConnection } = require('@discordjs/voice');
-const play = require('play-dl');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, getVoiceConnection, StreamType } = require('@discordjs/voice');
+const ytdl = require('@distube/ytdl-core');
+const YouTube = require('youtube-sr').default;
+
+// Optional: keep play-dl for SoundCloud/Spotify metadata
+let playDl;
+try { playDl = require('play-dl'); } catch (e) { console.warn('[MusicPlayer] play-dl not available — SoundCloud/Spotify support disabled'); }
 
 // Per-guild state: { player, connection, queue[], current, loop, volume, textChannelId }
 const guildPlayers = new Map();
@@ -56,39 +57,45 @@ async function resolveQuery(query) {
     }
   }
 
-  try {
-    const validated = await play.validate(query);
+  // Helper to format seconds to m:ss or h:mm:ss
+  function formatDuration(seconds) {
+    if (!seconds || isNaN(seconds)) return '?';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${m}:${String(s).padStart(2, '0')}`;
+  }
 
-    if (validated === 'yt_video') {
-      const info = await play.video_info(query);
-      tracks.push({
-        title: info.video_details.title,
-        url: query,
-        duration: info.video_details.durationRaw || '?',
-        requestedBy: null,
-      });
-    } else if (validated === 'yt_playlist') {
+  try {
+    const isYouTube = /^https?:\/\/(www\.|m\.|music\.)?youtu(\.be|be\.com)\//i.test(query);
+    const isSoundCloud = /^https?:\/\/(www\.)?soundcloud\.com\//i.test(query);
+    const isSpotify = /^https?:\/\/(open\.)?spotify\.com\//i.test(query);
+    const isUrl = /^https?:\/\//i.test(query);
+
+    if (isYouTube && /[?&]list=/.test(query)) {
+      // YouTube playlist
       try {
-        const playlist = await play.playlist_info(query, { incomplete: true });
-        const videos = await playlist.all_videos();
-        for (const v of videos.slice(0, 100)) { // cap at 100 tracks
+        const playlist = await YouTube.getPlaylist(query, { fetchAll: true });
+        const videos = playlist.videos || [];
+        for (const v of videos.slice(0, 100)) {
           tracks.push({
-            title: v.title,
-            url: v.url,
-            duration: v.durationRaw || '?',
+            title: v.title || 'Unknown',
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+            duration: formatDuration(v.duration / 1000),
             requestedBy: null,
           });
         }
       } catch (plErr) {
-        // YouTube Mix/Radio playlists often fail — fall back to the video in the URL
         console.warn('[MusicPlayer] Playlist parse failed, trying as single video:', plErr.message);
         const videoUrl = query.replace(/[&?]list=[^&]*/g, '').replace(/[&?]start_radio=[^&]*/g, '').replace(/[&?]index=[^&]*/g, '');
         try {
-          const info = await play.video_info(videoUrl);
+          const info = await ytdl.getInfo(videoUrl);
           tracks.push({
-            title: info.video_details.title,
-            url: videoUrl,
-            duration: info.video_details.durationRaw || '?',
+            title: info.videoDetails.title,
+            url: info.videoDetails.video_url,
+            duration: formatDuration(Number(info.videoDetails.lengthSeconds)),
             requestedBy: null,
           });
         } catch (vErr) {
@@ -96,63 +103,55 @@ async function resolveQuery(query) {
           return { tracks: [], error: `Playlist and video lookup both failed: ${plErr.message}` };
         }
       }
-    } else if (validated === 'so_track') {
-      const info = await play.soundcloud(query);
+    } else if (isYouTube || (isUrl && ytdl.validateURL(query))) {
+      // Single YouTube video
+      const info = await ytdl.getInfo(query);
       tracks.push({
-        title: info.name,
-        url: info.url,
-        duration: info.durationRaw || '?',
+        title: info.videoDetails.title,
+        url: info.videoDetails.video_url,
+        duration: formatDuration(Number(info.videoDetails.lengthSeconds)),
         requestedBy: null,
       });
-    } else if (validated === 'so_playlist') {
-      const playlist = await play.soundcloud(query);
-      const items = playlist.tracks || [];
-      for (const t of items.slice(0, 100)) {
-        tracks.push({
-          title: t.name,
-          url: t.url,
-          duration: t.durationRaw || '?',
-          requestedBy: null,
-        });
+    } else if (isSoundCloud && playDl) {
+      const validated = await playDl.validate(query);
+      if (validated === 'so_track') {
+        const info = await playDl.soundcloud(query);
+        tracks.push({ title: info.name, url: info.url, duration: formatDuration(Math.floor(info.durationInMs / 1000)), requestedBy: null });
+      } else if (validated === 'so_playlist') {
+        const pl = await playDl.soundcloud(query);
+        for (const t of (pl.tracks || []).slice(0, 100)) {
+          tracks.push({ title: t.name, url: t.url, duration: formatDuration(Math.floor(t.durationInMs / 1000)), requestedBy: null });
+        }
       }
-    } else if (validated === 'sp_track' || validated === 'sp_album' || validated === 'sp_playlist') {
-      // Spotify → search on YouTube for each track
+    } else if (isSpotify && playDl) {
+      // Spotify -> resolve metadata then search YouTube
+      const validated = await playDl.validate(query);
       if (validated === 'sp_track') {
-        const sp = await play.spotify(query);
-        const searched = await play.search(`${sp.name} ${sp.artists?.map(a => a.name).join(' ') || ''}`, { limit: 1, source: { youtube: 'video' } });
+        const sp = await playDl.spotify(query);
+        const searched = await YouTube.search(`${sp.name} ${sp.artists?.map(a => a.name).join(' ') || ''}`, { limit: 1, type: 'video' });
         if (searched.length > 0) {
-          tracks.push({
-            title: sp.name,
-            url: searched[0].url,
-            duration: searched[0].durationRaw || '?',
-            requestedBy: null,
-          });
+          tracks.push({ title: sp.name, url: `https://www.youtube.com/watch?v=${searched[0].id}`, duration: formatDuration(Math.floor((sp.durationInMs || 0) / 1000)), requestedBy: null });
         }
       } else {
-        const sp = await play.spotify(query);
+        const sp = await playDl.spotify(query);
         const items = await sp.all_tracks();
-        for (const t of items.slice(0, 50)) { // cap at 50 for Spotify playlists
+        for (const t of items.slice(0, 50)) {
           try {
-            const searched = await play.search(`${t.name} ${t.artists?.map(a => a.name).join(' ') || ''}`, { limit: 1, source: { youtube: 'video' } });
+            const searched = await YouTube.search(`${t.name} ${t.artists?.map(a => a.name).join(' ') || ''}`, { limit: 1, type: 'video' });
             if (searched.length > 0) {
-              tracks.push({
-                title: t.name,
-                url: searched[0].url,
-                duration: searched[0].durationRaw || '?',
-                requestedBy: null,
-              });
+              tracks.push({ title: t.name, url: `https://www.youtube.com/watch?v=${searched[0].id}`, duration: formatDuration(Math.floor((t.durationInMs || 0) / 1000)), requestedBy: null });
             }
           } catch { /* skip failed lookups */ }
         }
       }
     } else {
-      // Search YouTube by text
-      const results = await play.search(query, { limit: 1, source: { youtube: 'video' } });
+      // Text search on YouTube
+      const results = await YouTube.search(query, { limit: 1, type: 'video' });
       if (results.length > 0) {
         tracks.push({
-          title: results[0].title,
-          url: results[0].url,
-          duration: results[0].durationRaw || '?',
+          title: results[0].title || 'Unknown',
+          url: `https://www.youtube.com/watch?v=${results[0].id}`,
+          duration: formatDuration(results[0].duration / 1000),
           requestedBy: null,
         });
       }
@@ -168,9 +167,22 @@ async function resolveQuery(query) {
 /**
  * Stream a track URL into an AudioResource.
  */
-async function createStreamResource(url) {
-  const stream = await play.stream(url);
-  return createAudioResource(stream.stream, { inputType: stream.type });
+async function createStreamResource(track) {
+  const url = typeof track === 'string' ? track : track.url;
+  const isSoundCloud = /soundcloud\.com/i.test(url);
+
+  if (isSoundCloud && playDl) {
+    const stream = await playDl.stream(url);
+    return createAudioResource(stream.stream, { inputType: stream.type });
+  }
+
+  // YouTube — use @distube/ytdl-core
+  const stream = ytdl(url, {
+    filter: 'audioonly',
+    quality: 'highestaudio',
+    highWaterMark: 1 << 25,
+  });
+  return createAudioResource(stream, { inputType: StreamType.Arbitrary });
 }
 
 /**
@@ -196,7 +208,7 @@ async function playNext(guildId, client) {
   state.current = track;
 
   try {
-    const resource = await createStreamResource(track.url);
+    const resource = await createStreamResource(track);
     state.player.play(resource);
 
     // Notify text channel
@@ -336,7 +348,13 @@ function resume(guildId) {
 
 function skip(guildId, client) {
   const state = guildPlayers.get(guildId);
-  if (state) state.player.stop(); // triggers Idle → playNext
+  if (!state) return;
+  // If player is already Idle, stop() is a no-op — call playNext directly
+  if (state.player.state.status === AudioPlayerStatus.Idle) {
+    playNext(guildId, client);
+  } else {
+    state.player.stop(); // triggers Idle → playNext
+  }
 }
 
 function setLoop(guildId, enabled) {
@@ -363,11 +381,13 @@ module.exports = {
   disconnect,
   getState,
   getGuildPlayer,
+  createGuildPlayer,
   pause,
   resume,
   skip,
   setLoop,
   clearQueue,
   removeFromQueue,
+  playNext,
   guildPlayers,
 };

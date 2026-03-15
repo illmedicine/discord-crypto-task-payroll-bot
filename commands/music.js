@@ -81,22 +81,9 @@ module.exports = {
       const wasEmpty = !state || (!state.current && state.queue.length === 0);
 
       if (!state) {
-        // First time — create state, add tracks, then connect
-        const { guildPlayers, createGuildPlayer: _create } = musicPlayer;
-        state = musicPlayer.getGuildPlayer(guildId);
-        if (!state) {
-          // createGuildPlayer is internal, so manually create and register
-          const { createAudioPlayer: _cap } = require('@discordjs/voice');
-          state = {
-            player: _cap(),
-            connection: null,
-            queue: [],
-            current: null,
-            loop: false,
-            textChannelId: interaction.channelId,
-          };
-          guildPlayers.set(guildId, state);
-        }
+        // First time — use musicPlayer's own factory to create state
+        state = musicPlayer.createGuildPlayer(guildId);
+        state.textChannelId = interaction.channelId;
         state.queue.push(...tracks);
         await musicPlayer.connectAndPlay(
           guildId,
@@ -106,7 +93,7 @@ module.exports = {
           interaction.client
         );
       } else {
-        // Already connected — add to queue
+        // Already exists — add to queue
         state.queue.push(...tracks);
         state.textChannelId = interaction.channelId;
         if (wasEmpty) {
@@ -119,7 +106,8 @@ module.exports = {
               interaction.client
             );
           } else {
-            musicPlayer.skip(guildId, interaction.client); // triggers playNext
+            // skip() now handles idle players properly (calls playNext directly if idle)
+            musicPlayer.skip(guildId, interaction.client);
           }
         }
       }

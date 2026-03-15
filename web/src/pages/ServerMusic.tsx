@@ -59,14 +59,18 @@ export default function ServerMusic({ guildId }: { guildId: string }) {
 
   // Fetch voice channels when guild changes
   useEffect(() => {
-    if (!guildId || botConnected === false) return
+    if (!guildId) return
+    // Fetch voice channels regardless of bot connection state — the API server handles this
     api.get(`/music/voice-channels/${guildId}`).then(res => {
-      setVoiceChannels(res.data || [])
+      const data = Array.isArray(res.data) ? res.data : []
+      setVoiceChannels(data)
       // Auto-select the channel with the most members, or first one
-      const sorted = [...(res.data || [])].sort((a: VoiceChannel, b: VoiceChannel) => b.members - a.members)
-      if (sorted.length > 0) setSelectedChannel(sorted[0].id)
-    }).catch(() => {})
-  }, [guildId, botConnected])
+      const sorted = [...data].sort((a: VoiceChannel, b: VoiceChannel) => b.members - a.members)
+      if (sorted.length > 0 && !selectedChannel) setSelectedChannel(sorted[0].id)
+    }).catch((err) => {
+      console.warn('Failed to fetch voice channels:', err?.message)
+    })
+  }, [guildId])
 
   const handleJoin = async () => {
     if (!selectedChannel) return
