@@ -820,6 +820,25 @@ client.on('interactionCreate', async interaction => {
       return;
     }
 
+    // Handle gambling Start Race Now button
+    if (interaction.customId.startsWith('gamble_start_')) {
+      const gamblingEventCommand = client.commands.get('gambling-event');
+      if (gamblingEventCommand && gamblingEventCommand.handleStartRace) {
+        try {
+          await interaction.deferReply({ ephemeral: true });
+          await gamblingEventCommand.handleStartRace(interaction);
+        } catch (error) {
+          console.error('❌ Error handling start race:', error);
+          try {
+            await interaction.editReply({ content: '❌ Failed to start the race.' });
+          } catch (_) {
+            try { await interaction.reply({ content: '❌ Failed to start the race.', ephemeral: true }); } catch (_) {}
+          }
+        }
+      }
+      return;
+    }
+
     // Handle contest enter button (web-published)
     if (interaction.customId.startsWith('contest_enter_')) {
       try {

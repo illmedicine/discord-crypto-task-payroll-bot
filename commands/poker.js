@@ -159,14 +159,17 @@ async function processPokerPayouts(table, channel) {
       return;
     }
 
-    // Use actual SOL amounts collected (tracked during buy-in) instead of raw buyIn value
+    // Use actual amounts collected (tracked during buy-in) instead of raw buyIn value
     // This handles USD→SOL conversion correctly
+    const isUsdc = table.currency === 'USDC';
     let totalBuyIns = 0;
     if (table.solBuyIns && table.solBuyIns.size > 0) {
       for (const amt of table.solBuyIns.values()) totalBuyIns += amt;
     } else {
       // Fallback: try to read from DB records, or convert now
-      if (table.currency === 'USD' && crypto.getSolanaPrice) {
+      if (isUsdc) {
+        totalBuyIns = table.seats.length * table.buyIn;
+      } else if (table.currency === 'USD' && crypto.getSolanaPrice) {
         const solPrice = await crypto.getSolanaPrice();
         if (solPrice) {
           totalBuyIns = table.seats.length * (table.buyIn / solPrice);
@@ -177,7 +180,9 @@ async function processPokerPayouts(table, channel) {
         totalBuyIns = table.seats.length * table.buyIn;
       }
     }
-    console.log(`[Poker] Payout pool calculation: totalBuyIns=${totalBuyIns.toFixed(6)} SOL, seats=${table.seats.length}, currency=${table.currency}`);
+    const unit = isUsdc ? 'USDC' : 'SOL';
+    const decimals = isUsdc ? 2 : 4;
+    console.log(`[Poker] Payout pool calculation: totalBuyIns=${totalBuyIns.toFixed(isUsdc ? 2 : 6)} ${unit}, seats=${table.seats.length}, currency=${table.currency}`);
     const houseCut = totalBuyIns * 0.10;
     const payoutPool = totalBuyIns - houseCut;
 
@@ -208,7 +213,12 @@ async function processPokerPayouts(table, channel) {
 
       // Send from treasury
       const keypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
-      if (!keypair) {
+      let result;
+      if (isUsdc) {
+        result = await crypto.sendUsdcFrom(guildWallet.wallet_secret, recipientAddr, payoutSol);
+      } else {
+        result = await crypto.sendSolFrom(keypair, recipientAddr, payoutSol);
+      }
         payoutResults.push({ user: seat.displayName, success: false, reason: 'Invalid treasury key' });
         continue;
       }
@@ -232,17 +242,17 @@ async function processPokerPayouts(table, channel) {
           ).catch(() => {});
         }
       }
-    }
+    }decimals)} ${unit} → [tx](https://solscan.io/tx/${r.tx})`
+        : `❌ **${r.user}**: ${r.reason}`
+    );
 
-    // Update event status
-    if (db.updatePokerEventStatus) {
-      await db.updatePokerEventStatus(table.eventId, 'ended').catch(() => {});
-    }
-
-    // Post payout summary
-    const lines = payoutResults.map(r =>
-      r.success
-        ? `✅ **${r.user}**: ${r.amount.toFixed(4)} SOL → [tx](https://solscan.io/tx/${r.tx})`
+    const payoutEmbed = new EmbedBuilder()
+      .setColor('#27AE60')
+      .setTitle('💰 Poker Payouts')
+      .setDescription(
+        `Total pool: **${totalBuyIns.toFixed(decimals)} ${unit}**\n` +
+        `House cut (10%): **${houseCut.toFixed(decimals)} ${unit}**\n` +
+        `Paid out: **${payoutPool.toFixed(decimals)} ${unit}} SOL → [tx](https://solscan.io/tx/${r.tx})`
         : `❌ **${r.user}**: ${r.reason}`
     );
 
@@ -300,10 +310,15 @@ async function collectBuyIn(table, discordId) {
     }
     console.log(`[PokerBuyIn] ✅ Key resolved for ${discordId}, proceeding with buy-in`);
 
-    // Convert buy-in to SOL if currency is USD
+    // Convert buy-in to SOL if currency is USD (USDC needs no conversion)
+    const isUsdc = table.currency === 'USDC';
     let solAmount = table.buyIn;
     let solPrice = null;
-    if (table.currency === 'USD') {
+    if (isUsdc) {
+      // USDC: amount stays as-is, no conversion
+      solAmount = table.buyIn;
+      console.log(`[PokerBuyIn] USDC buy-in: ${table.buyIn} USDC (no conversion needed)`);
+    } else if (table.currency === 'USD') {
       solPrice = await crypto.getSolanaPrice();
       if (!solPrice) {
         return { success: false, error: 'Unable to fetch SOL price for USD conversion. Try again in a moment.' };
@@ -313,12 +328,19 @@ async function collectBuyIn(table, discordId) {
     }
 
     // Check balance (need solAmount + small buffer for tx fee)
-    const txFeeBuffer = 0.000015;
-    const balance = await crypto.getBalance(userData.solana_address);
+    const txFeeBuffer = isUsdc ? 0 : 0.000015;
+    let balance;
+    if (isUsdc) {
+      balance = await crypto.getUsdcBalance(userData.solana_address);
+    } else {
+      balance = await crypto.getBalance(userData.solana_address);
+    }
     if (balance < solAmount + txFeeBuffer) {
+      const unit = isUsdc ? 'USDC' : 'SOL';
+      const decimals = isUsdc ? 2 : 4;
       return {
         success: false,
-        error: `Insufficient balance: **${balance.toFixed(4)} SOL** available, need **${solAmount.toFixed(6)} SOL**${solPrice ? ` (${table.buyIn} USD @ $${solPrice.toFixed(2)}/SOL)` : ''}.`
+        error: `Insufficient balance: **${balance.toFixed(decimals)} ${unit}** available, need **${solAmount.toFixed(isUsdc ? 2 : 6)} ${unit}**${solPrice ? ` (${table.buyIn} USD @ $${solPrice.toFixed(2)}/SOL)` : ''}.`
       };
     }
 
@@ -326,7 +348,12 @@ async function collectBuyIn(table, discordId) {
     const keypair = crypto.getKeypairFromSecret(playerSecret);
     if (!keypair) return { success: false, error: 'Invalid wallet key. Re-connect your wallet.' };
 
-    const result = await crypto.sendSolFrom(keypair, guildWallet.wallet_address, solAmount);
+    let result;
+    if (isUsdc) {
+      result = await crypto.sendUsdcFrom(playerSecret, guildWallet.wallet_address, solAmount);
+    } else {
+      result = await crypto.sendSolFrom(keypair, guildWallet.wallet_address, solAmount);
+    }
     if (!result || !result.success) {
       return { success: false, error: result?.error || 'SOL transfer failed.' };
     }
@@ -585,6 +612,11 @@ async function handleLeave(interaction) {
     return interaction.reply({ content: '❌ No poker table in this channel.', ephemeral: true });
   }
 
+  // Block leaving once the game has started (ante or later) — only host can close
+  if (table.phase !== 'waiting' && table.phase !== 'finished') {
+    return interaction.reply({ content: '❌ You cannot leave during an active game. By anting up you agreed to play the full game. The host must use `/poker close` to end the table.', ephemeral: true });
+  }
+
   const result = removePlayer(table, interaction.user.id);
   if (result.error) {
     return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
@@ -836,6 +868,10 @@ async function handlePokerButton(interaction) {
     }
 
     case 'leave': {
+      // Block leaving once the game has started (ante or later) — only host can close
+      if (table.phase !== 'waiting' && table.phase !== 'finished') {
+        return interaction.reply({ content: '❌ You cannot leave during an active game. By anting up you agreed to play the full game. The host must close the table to end it.', ephemeral: true });
+      }
       const result = removePlayer(table, userId);
       if (result.error) {
         return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
@@ -1199,8 +1235,16 @@ async function handleRetryPayout(interaction) {
     }
 
     // Check treasury balance
+    const isUsdc = event.currency === 'USDC';
     const treasuryAddr = guildWallet.wallet_address;
-    const balance = await crypto.getBalance(treasuryAddr);
+    let balance;
+    if (isUsdc) {
+      balance = await crypto.getUsdcBalance(treasuryAddr);
+    } else {
+      balance = await crypto.getBalance(treasuryAddr);
+    }
+    const retryUnit = isUsdc ? 'USDC' : 'SOL';
+    const retryDecimals = isUsdc ? 2 : 6;
 
     // Calculate total needed
     let totalNeeded = 0;
@@ -1236,13 +1280,13 @@ async function handleRetryPayout(interaction) {
       return interaction.editReply({ content: `✅ No actionable failed payouts for Poker Event #${eventId}.` });
     }
 
-    const txFeeBuffer = 0.00005 * playersToRetry.length;
+    const txFeeBuffer = isUsdc ? 0 : 0.00005 * playersToRetry.length;
     if (balance < totalNeeded + txFeeBuffer) {
       return interaction.editReply({
         content: `❌ Insufficient treasury balance.\n` +
-          `Treasury: **${balance.toFixed(6)} SOL**\n` +
-          `Needed: **${(totalNeeded + txFeeBuffer).toFixed(6)} SOL** (${playersToRetry.length} payout(s) + fees)\n\n` +
-          `Fund the treasury wallet \`${treasuryAddr}\` with at least **${((totalNeeded + txFeeBuffer) - balance).toFixed(6)} SOL** more, then run this command again.`
+          `Treasury: **${balance.toFixed(retryDecimals)} ${retryUnit}**\n` +
+          `Needed: **${(totalNeeded + txFeeBuffer).toFixed(retryDecimals)} ${retryUnit}** (${playersToRetry.length} payout(s)${isUsdc ? '' : ' + fees'})\n\n` +
+          `Fund the treasury wallet \`${treasuryAddr}\` with at least **${((totalNeeded + txFeeBuffer) - balance).toFixed(retryDecimals)} ${retryUnit}** more, then run this command again.`
       });
     }
 
@@ -1250,7 +1294,12 @@ async function handleRetryPayout(interaction) {
     const results = [];
     for (const player of playersToRetry) {
       try {
-        const result = await crypto.sendSolFrom(keypair, player.wallet_address, player.payoutSol);
+        let result;
+        if (isUsdc) {
+          result = await crypto.sendUsdcFrom(guildWallet.wallet_secret, player.wallet_address, player.payoutSol);
+        } else {
+          result = await crypto.sendSolFrom(keypair, player.wallet_address, player.payoutSol);
+        }
         if (result && result.success) {
           results.push({ userId: player.user_id, amount: player.payoutSol, success: true, tx: result.signature });
           await db.dbRun(
@@ -1267,8 +1316,8 @@ async function handleRetryPayout(interaction) {
 
     const lines = results.map(r =>
       r.success
-        ? `✅ <@${r.userId}>: ${r.amount.toFixed(4)} SOL → [tx](https://solscan.io/tx/${r.tx})`
-        : `❌ <@${r.userId}>: ${r.amount.toFixed(4)} SOL — ${r.error}`
+        ? `✅ <@${r.userId}>: ${r.amount.toFixed(retryDecimals)} ${retryUnit} → [tx](https://solscan.io/tx/${r.tx})`
+        : `❌ <@${r.userId}>: ${r.amount.toFixed(retryDecimals)} ${retryUnit} — ${r.error}`
     );
 
     const successCount = results.filter(r => r.success).length;

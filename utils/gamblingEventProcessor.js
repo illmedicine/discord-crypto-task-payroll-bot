@@ -158,9 +158,11 @@ function syncStatusToBackend(eventId, status, guildId) {
  * Convert amount to SOL if needed.
  * If currency is SOL, returns amount as-is.
  * If currency is USD, converts using live SOL price.
+ * If currency is USDC, returns as-is (1 USDC = 1 USD, paid via SPL token).
  */
 async function convertToSol(amount, currency, crypto) {
   if (!currency || currency === 'SOL') return { solAmount: amount, rate: 1 };
+  if (currency === 'USDC') return { solAmount: amount, rate: 1, isUsdc: true };
   if (currency === 'USD') {
     const solPrice = await crypto.getSolanaPrice();
     if (!solPrice) return { solAmount: null, rate: null, error: 'Unable to fetch SOL price for USD conversion' };
@@ -170,30 +172,49 @@ async function convertToSol(amount, currency, crypto) {
   return { solAmount: amount, rate: 1 };
 }
 
-/** Send SOL via guild treasury wallet (shared helper) */
-async function sendPayment(crypto, recipientAddress, solAmount, guildWallet) {
+/** Send payment via guild treasury wallet. Supports SOL and USDC. */
+async function sendPayment(crypto, recipientAddress, amount, guildWallet, currency) {
   // Must have a guild treasury wallet with a valid keypair
   if (guildWallet && guildWallet.wallet_secret) {
-    // Validate keypair before sending
     const keypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
     if (!keypair) {
       return { success: false, error: 'Treasury private key is invalid — check [DCB Event Manager](https://dcb-games.com/) → Treasury' };
     }
 
-    // Pre-check treasury balance
+    // USDC payments use SPL token transfer
+    if (currency === 'USDC') {
+      if (!crypto.sendUsdcFrom) {
+        return { success: false, error: 'USDC transfers unavailable — @solana/spl-token not installed on bot' };
+      }
+      // Pre-check USDC balance
+      try {
+        const usdcBalance = await crypto.getUsdcBalance(keypair.publicKey.toString());
+        if (usdcBalance < amount) {
+          return {
+            success: false,
+            error: `Insufficient treasury USDC balance: ${usdcBalance.toFixed(2)} USDC available, need ${amount.toFixed(2)} USDC. Fund the treasury wallet.`
+          };
+        }
+      } catch (balErr) {
+        console.warn('[sendPayment] USDC balance pre-check failed, proceeding anyway:', balErr.message);
+      }
+      return crypto.sendUsdcFrom(keypair, recipientAddress, amount);
+    }
+
+    // SOL payments
     try {
       const balance = await crypto.getBalance(keypair.publicKey.toString());
-      if (balance < solAmount) {
+      if (balance < amount) {
         return {
           success: false,
-          error: `Insufficient treasury balance: ${balance.toFixed(4)} SOL available, need ${solAmount.toFixed(4)} SOL. Fund the treasury wallet.`
+          error: `Insufficient treasury balance: ${balance.toFixed(4)} SOL available, need ${amount.toFixed(4)} SOL. Fund the treasury wallet.`
         };
       }
     } catch (balErr) {
       console.warn('[sendPayment] Balance pre-check failed, proceeding anyway:', balErr.message);
     }
 
-    return crypto.sendSolFrom(keypair, recipientAddress, solAmount);
+    return crypto.sendSolFrom(keypair, recipientAddress, amount);
   }
 
   // No guild wallet secret — cannot pay
@@ -418,20 +439,22 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     console.log(`[HorseRace] Event #${eventId}: entry_fee=${event.entry_fee}, prize_amount=${event.prize_amount}, currency=${event.currency}`);
     console.log(`[HorseRace] Event #${eventId}: guildWallet=${guildWallet ? guildWallet.wallet_address : 'NULL'}`);
 
-    // ======== Convert prize to SOL if currency is USD ========
+    // ======== Convert prize to SOL if currency is USD (USDC pays directly, no conversion) ========
     let solPrizePerWinner = prizePerWinner;
     let solConversionRate = null;
-    if (prizePerWinner > 0 && event.currency && event.currency !== 'SOL') {
+    const isUsdc = event.currency === 'USDC';
+    if (prizePerWinner > 0 && event.currency && event.currency !== 'SOL' && !isUsdc) {
       const conv = await convertToSol(prizePerWinner, event.currency, crypto);
       if (conv.error || conv.solAmount === null) {
         console.error(`[HorseRace] Event #${eventId}: ${conv.error || 'USD conversion failed'}`);
-        // Will use prizePerWinner as-is (treated as SOL) rather than skip payments entirely
       } else {
         solConversionRate = conv.rate;
         solPrizePerWinner = conv.solAmount;
         console.log(`[HorseRace] Event #${eventId}: Converted ${prizePerWinner} ${event.currency} → ${solPrizePerWinner.toFixed(6)} SOL (rate: $${conv.rate})`);
       }
     }
+    // For USDC: pay in USDC directly, amount stays as-is
+    const paymentAmount = isUsdc ? prizePerWinner : solPrizePerWinner;
 
     // ======== Solana payouts to winners ========
     const paymentResults = [];
@@ -455,22 +478,29 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           }
         } else {
           // Pre-check treasury balance once for total needed
-          const totalNeeded = solPrizePerWinner * winnerUserIds.length;
+          const totalNeeded = paymentAmount * winnerUserIds.length;
           let treasuryBalance = null;
           try {
-            treasuryBalance = await crypto.getBalance(treasuryKeypair.publicKey.toString());
-            console.log(`[HorseRace] Event #${eventId}: Treasury balance=${treasuryBalance?.toFixed(4)} SOL, total needed=${totalNeeded.toFixed(4)} SOL`);
+            if (isUsdc) {
+              treasuryBalance = await crypto.getUsdcBalance(treasuryKeypair.publicKey.toString());
+              console.log(`[HorseRace] Event #${eventId}: Treasury USDC balance=${treasuryBalance?.toFixed(2)}, total needed=${totalNeeded.toFixed(2)} USDC`);
+            } else {
+              treasuryBalance = await crypto.getBalance(treasuryKeypair.publicKey.toString());
+              console.log(`[HorseRace] Event #${eventId}: Treasury balance=${treasuryBalance?.toFixed(4)} SOL, total needed=${totalNeeded.toFixed(4)} SOL`);
+            }
           } catch (balErr) {
             console.warn(`[HorseRace] Balance pre-check failed:`, balErr.message);
           }
 
           if (treasuryBalance !== null && treasuryBalance < totalNeeded) {
-            console.error(`[HorseRace] Event #${eventId}: Insufficient treasury balance: ${treasuryBalance.toFixed(4)} SOL < ${totalNeeded.toFixed(4)} SOL needed`);
+            const unit = isUsdc ? 'USDC' : 'SOL';
+            const fmt = isUsdc ? 2 : 4;
+            console.error(`[HorseRace] Event #${eventId}: Insufficient treasury balance: ${treasuryBalance.toFixed(fmt)} ${unit} < ${totalNeeded.toFixed(fmt)} ${unit} needed`);
             for (const userId of winnerUserIds) {
               await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null).catch(() => {});
               paymentResults.push({
                 userId, success: false,
-                reason: `Insufficient treasury balance: ${treasuryBalance.toFixed(4)} SOL available, need ${totalNeeded.toFixed(4)} SOL`
+                reason: `Insufficient treasury balance: ${treasuryBalance.toFixed(fmt)} ${unit} available, need ${totalNeeded.toFixed(fmt)} ${unit}`
               });
             }
           } else {
@@ -479,15 +509,15 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
                 const userData = await db.getUser(userId);
                 const bet = winnerBets.find(b => b.user_id === userId);
                 const recipientAddr = userData?.solana_address || bet?.wallet_address;
-                console.log(`[HorseRace] Payment attempt: userId=${userId}, recipientAddr=${recipientAddr}, amount=${solPrizePerWinner.toFixed(6)} SOL (${prizePerWinner} ${event.currency})`);
+                console.log(`[HorseRace] Payment attempt: userId=${userId}, recipientAddr=${recipientAddr}, amount=${paymentAmount.toFixed(6)} ${isUsdc ? 'USDC' : 'SOL'} (${prizePerWinner} ${event.currency})`);
 
                 if (recipientAddr) {
-                  const res = await sendPayment(crypto, recipientAddr, solPrizePerWinner, guildWallet);
+                  const res = await sendPayment(crypto, recipientAddr, paymentAmount, guildWallet, isUsdc ? 'USDC' : undefined);
                   console.log(`[HorseRace] Payment result for ${userId}:`, JSON.stringify(res));
                   if (res && res.success) {
-                    await db.recordTransaction(event.guild_id, guildWallet.wallet_address, recipientAddr, solPrizePerWinner, res.signature);
+                    await db.recordTransaction(event.guild_id, guildWallet.wallet_address, recipientAddr, isUsdc ? paymentAmount : paymentAmount, res.signature);
                     await db.updateGamblingBetPayment(eventId, userId, 'paid_out', 'payout', res.signature);
-                    paymentResults.push({ userId, address: recipientAddr, amount: prizePerWinner, solAmount: solPrizePerWinner, success: true, signature: res.signature });
+                    paymentResults.push({ userId, address: recipientAddr, amount: prizePerWinner, solAmount: isUsdc ? null : solPrizePerWinner, usdcAmount: isUsdc ? paymentAmount : null, success: true, signature: res.signature });
                   } else {
                     console.error(`[HorseRace] Payment FAILED for ${userId}: ${res?.error || 'Unknown error'}`);
                     await db.updateGamblingBetPayment(eventId, userId, 'payout_failed', 'payout', null);
@@ -584,7 +614,9 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
         if (winnerUserIds.length > 0 && prizePerWinner > 0) {
           let perWinnerText = `${prizePerWinner.toFixed(4)} ${event.currency}`;
-          if (solConversionRate && event.currency !== 'SOL') {
+          if (isUsdc) {
+            perWinnerText = `${prizePerWinner.toFixed(2)} USDC`;
+          } else if (solConversionRate && event.currency !== 'SOL') {
             perWinnerText += ` (≈ ${solPrizePerWinner.toFixed(6)} SOL)`;
           }
           resultsEmbed.addFields(
@@ -596,9 +628,14 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           let paymentSummary = '';
           for (const r of paymentResults) {
             if (r.success) {
-              const amtText = r.solAmount && event.currency !== 'SOL'
-                ? `${r.amount.toFixed(4)} ${event.currency} (${r.solAmount.toFixed(6)} SOL)`
-                : `${(r.solAmount || r.amount).toFixed(4)} SOL`;
+              let amtText;
+              if (r.usdcAmount) {
+                amtText = `${r.usdcAmount.toFixed(2)} USDC`;
+              } else if (r.solAmount && event.currency !== 'SOL') {
+                amtText = `${r.amount.toFixed(4)} ${event.currency} (${r.solAmount.toFixed(6)} SOL)`;
+              } else {
+                amtText = `${(r.solAmount || r.amount).toFixed(4)} SOL`;
+              }
               paymentSummary += `✅ <@${r.userId}>: ${amtText} — [View TX](https://solscan.io/tx/${r.signature})\n`;
             } else {
               paymentSummary += `❌ <@${r.userId}>: ${r.reason}\n`;
@@ -629,7 +666,8 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           }
           if (prizePerWinner > 0) {
             let prizeText = `${prizePerWinner.toFixed(4)} ${event.currency}`;
-            if (solConversionRate && event.currency !== 'SOL') prizeText += ` (≈ ${solPrizePerWinner.toFixed(6)} SOL)`;
+            if (isUsdc) prizeText = `${prizePerWinner.toFixed(2)} USDC`;
+            else if (solConversionRate && event.currency !== 'SOL') prizeText += ` (≈ ${solPrizePerWinner.toFixed(6)} SOL)`;
             mentionContent += `💰 **Prize per winner:** ${prizeText}\n`;
           }
           mentionContent += `\nCongratulations ${winnerMentions}! 🏆`;

@@ -382,7 +382,11 @@ module.exports = {
             .setRequired(false)
         )
         .addNumberOption(opt => opt.setName('prize_amount').setDescription('Prize pool (house mode)').setRequired(false))
-        .addStringOption(opt => opt.setName('currency').setDescription('Currency (SOL/USD)').setRequired(false))
+        .addStringOption(opt => opt.setName('currency').setDescription('Currency (SOL/USD/USDC)').addChoices(
+              { name: 'SOL', value: 'SOL' },
+              { name: 'USD', value: 'USD' },
+              { name: 'USDC (stable, no price fluctuation)', value: 'USDC' }
+            ).setRequired(false))
         .addNumberOption(opt => opt.setName('entry_fee').setDescription('Entry fee per player (pot mode)').setRequired(false))
         .addIntegerOption(opt => opt.setName('min_players').setDescription('Min players to race (default 1)').setMinValue(1).setRequired(false))
         .addIntegerOption(opt => opt.setName('duration_minutes').setDescription('Duration in minutes').setRequired(false))
@@ -691,24 +695,31 @@ module.exports = {
       let walletBalance = 0;
       let solEntryFee = entryFee;
       let solPrice = null;
+      const isUsdc = event.currency === 'USDC';
       try {
-        walletBalance = await crypto.getBalance(userData.solana_address);
-        if (event.currency === 'USD') {
-          solPrice = await crypto.getSolanaPrice();
-          if (solPrice) {
-            solEntryFee = entryFee / solPrice;
+        if (isUsdc) {
+          walletBalance = await crypto.getUsdcBalance(userData.solana_address);
+        } else {
+          walletBalance = await crypto.getBalance(userData.solana_address);
+          if (event.currency === 'USD') {
+            solPrice = await crypto.getSolanaPrice();
+            if (solPrice) {
+              solEntryFee = entryFee / solPrice;
+            }
           }
         }
       } catch (balErr) {
         console.warn('[GamblingEvent] Balance check error:', balErr.message);
       }
 
-      if (walletBalance < solEntryFee) {
+      const requiredAmount = isUsdc ? entryFee : solEntryFee;
+      if (walletBalance < requiredAmount) {
+        const unit = isUsdc ? 'USDC' : 'SOL';
         return interaction.editReply({
           content: `❌ **Insufficient Wallet Funds!**\n\n` +
             `💰 Entry fee: **${entryFee} ${event.currency}**${solPrice ? ` (≈ ${solEntryFee.toFixed(6)} SOL)` : ''}\n` +
-            `🏦 Wallet balance: **${walletBalance.toFixed(6)} SOL**\n` +
-            `📉 Short by: **${(solEntryFee - walletBalance).toFixed(6)} SOL**\n\n` +
+            `🏦 Wallet balance: **${walletBalance.toFixed(isUsdc ? 2 : 6)} ${unit}**\n` +
+            `📉 Short by: **${(requiredAmount - walletBalance).toFixed(isUsdc ? 2 : 6)} ${unit}**\n\n` +
             `📥 Fund your wallet: \`${userData.solana_address}\``
         });
       }
@@ -716,7 +727,10 @@ module.exports = {
       // Build fee display
       let feeDisplay = `${entryFee} ${event.currency}`;
       let solEquivNote = '';
-      if (event.currency === 'USD' && solPrice) {
+      if (isUsdc) {
+        feeDisplay = `${entryFee} USDC`;
+        solEquivNote = '\n💱 USDC is a stablecoin — **no price fluctuation**';
+      } else if (event.currency === 'USD' && solPrice) {
         feeDisplay = `${entryFee} USD`;
         solEquivNote = `\n💱 ≈ **${solEntryFee.toFixed(6)} SOL** @ $${solPrice.toFixed(2)}/SOL`;
       }
@@ -827,10 +841,14 @@ module.exports = {
       });
     }
 
-    // 3. Calculate SOL amount to transfer
+    // 3. Calculate transfer amount
+    const isUsdc = event.currency === 'USDC';
     let solAmount = entryFee;
     let solPrice = null;
-    if (event.currency === 'USD') {
+    if (isUsdc) {
+      // USDC: amount is already in USDC, no conversion needed
+      solAmount = entryFee;
+    } else if (event.currency === 'USD') {
       solPrice = await crypto.getSolanaPrice();
       if (!solPrice) {
         return interaction.editReply({
@@ -844,30 +862,45 @@ module.exports = {
     // 4. Check wallet balance
     let walletBalance = 0;
     try {
-      walletBalance = await crypto.getBalance(userData.solana_address);
+      if (isUsdc) {
+        walletBalance = await crypto.getUsdcBalance(userData.solana_address);
+      } else {
+        walletBalance = await crypto.getBalance(userData.solana_address);
+      }
     } catch (_) {}
 
-    // Need enough for entry fee + ~0.000005 SOL tx fee
-    const txFeeBuffer = 0.00001;
-    if (walletBalance < solAmount + txFeeBuffer) {
+    const txFeeBuffer = isUsdc ? 0 : 0.00001;
+    const requiredAmount = isUsdc ? entryFee : solAmount;
+    if (walletBalance < requiredAmount + txFeeBuffer) {
+      const unit = isUsdc ? 'USDC' : 'SOL';
+      const decimals = isUsdc ? 2 : 6;
       return interaction.editReply({
         content: `❌ **Insufficient Wallet Funds!**\n\n` +
-          `💰 Entry fee: **${solAmount.toFixed(6)} SOL**${solPrice ? ` (${entryFee} USD)` : ''}\n` +
-          `🏦 Wallet balance: **${walletBalance.toFixed(6)} SOL**\n` +
-          `📉 Short by: **${(solAmount + txFeeBuffer - walletBalance).toFixed(6)} SOL**\n\n` +
+          `💰 Entry fee: **${requiredAmount.toFixed(decimals)} ${unit}**${solPrice ? ` (${entryFee} USD)` : ''}\n` +
+          `🏦 Wallet balance: **${walletBalance.toFixed(decimals)} ${unit}**\n` +
+          `📉 Short by: **${(requiredAmount + txFeeBuffer - walletBalance).toFixed(decimals)} ${unit}**\n\n` +
           `📥 Fund your wallet: \`${userData.solana_address}\``,
         embeds: [], components: []
       });
     }
 
-    // 5. Execute the actual SOL transfer: user's wallet → treasury
-    console.log(`[GamblingConfirm] Transferring ${solAmount.toFixed(6)} SOL from ${userData.solana_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
-
-    const transferResult = await crypto.sendSolFrom(
-      playerSecret,
-      guildWallet.wallet_address,
-      solAmount
-    );
+    // 5. Execute the transfer: user's wallet → treasury
+    let transferResult;
+    if (isUsdc) {
+      console.log(`[GamblingConfirm] Transferring ${entryFee.toFixed(2)} USDC from ${userData.solana_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
+      transferResult = await crypto.sendUsdcFrom(
+        playerSecret,
+        guildWallet.wallet_address,
+        entryFee
+      );
+    } else {
+      console.log(`[GamblingConfirm] Transferring ${solAmount.toFixed(6)} SOL from ${userData.solana_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
+      transferResult = await crypto.sendSolFrom(
+        playerSecret,
+        guildWallet.wallet_address,
+        solAmount
+      );
+    }
 
     if (!transferResult.success) {
       console.error(`[GamblingConfirm] ❌ Transfer failed for user ${interaction.user.id} on event #${eventId}:`, transferResult.error);
@@ -901,7 +934,9 @@ module.exports = {
 
     // Build fee display
     let feeDisplay = `${solAmount.toFixed(6)} SOL`;
-    if (event.currency === 'USD' && solPrice) {
+    if (isUsdc) {
+      feeDisplay = `${entryFee.toFixed(2)} USDC`;
+    } else if (event.currency === 'USD' && solPrice) {
       feeDisplay = `${entryFee} USD (${solAmount.toFixed(6)} SOL)`;
     }
 
@@ -931,6 +966,43 @@ module.exports = {
       content: '❌ Bet cancelled. You can pick a horse any time before the race starts!',
       embeds: [], components: []
     });
+  },
+
+  // ---- Button handler: Start Race Now (host/admin only) ----
+  async handleStartRace(interaction) {
+    const parts = interaction.customId.split('_');
+    const eventId = Number(parts[2]);
+
+    const event = await getGamblingEventWithFallback(eventId, interaction);
+    if (!event) {
+      return interaction.editReply({ content: '❌ Horse race event not found.' });
+    }
+
+    // Only the event creator or server admins can start the race
+    const isCreator = event.created_by === interaction.user.id;
+    const isAdmin = interaction.memberPermissions?.has('Administrator');
+    if (!isCreator && !isAdmin) {
+      return interaction.editReply({ content: '❌ Only the event host or a server admin can start the race early.' });
+    }
+
+    if (event.status !== 'active') {
+      return interaction.editReply({ content: '❌ This horse race is no longer active.' });
+    }
+
+    if (event.current_players < 1) {
+      return interaction.editReply({ content: '❌ Cannot start — no riders have joined yet!' });
+    }
+
+    await interaction.editReply({ content: `🏁 **Starting Horse Race #${eventId} now!** The race is being initiated...` });
+
+    try {
+      const channel = await interaction.client.channels.fetch(event.channel_id);
+      if (channel) {
+        await channel.send({ content: `🏇 **Horse Race #${eventId}** — The host started the race early! Here we go... 🏁` });
+      }
+    } catch (_) {}
+
+    await processGamblingEvent(eventId, interaction.client, 'manual_start');
   },
 
   // ---- Button handler: Connect Wallet (opens modal for private key entry) ----
@@ -1036,24 +1108,32 @@ module.exports = {
 
     // 5. Check wallet balance
     const entryFee = event.entry_fee || 0;
+    const isUsdc = event.currency === 'USDC';
     let solEntryFee = entryFee;
     let solPrice = null;
     let walletBalance = 0;
     try {
-      walletBalance = await crypto.getBalance(derivedAddress);
-      if (event.currency === 'USD') {
-        solPrice = await crypto.getSolanaPrice();
-        if (solPrice) solEntryFee = entryFee / solPrice;
+      if (isUsdc) {
+        walletBalance = await crypto.getUsdcBalance(derivedAddress);
+      } else {
+        walletBalance = await crypto.getBalance(derivedAddress);
+        if (event.currency === 'USD') {
+          solPrice = await crypto.getSolanaPrice();
+          if (solPrice) solEntryFee = entryFee / solPrice;
+        }
       }
     } catch (balErr) {
       console.warn('[GamblingEvent] Modal balance check error:', balErr.message);
     }
 
-    if (walletBalance < solEntryFee) {
+    const requiredAmount = isUsdc ? entryFee : solEntryFee;
+    if (walletBalance < requiredAmount) {
+      const unit = isUsdc ? 'USDC' : 'SOL';
+      const decimals = isUsdc ? 2 : 6;
       return interaction.editReply({
         content: '✅ **Wallet Connected!** 🔐\n\n' +
           `🏦 Address: \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\`\n` +
-          `💰 Balance: **${walletBalance.toFixed(6)} SOL**\n\n` +
+          `💰 Balance: **${walletBalance.toFixed(decimals)} ${unit}**\n\n` +
           `❌ **Insufficient funds** for the **${entryFee} ${event.currency}** entry fee.\n` +
           `📥 Fund your wallet: \`${derivedAddress}\`\n\n` +
           `Once funded, click the 🏇 horse button again to enter!`
@@ -1067,13 +1147,18 @@ module.exports = {
 
     let feeDisplay = `${entryFee} ${event.currency}`;
     let solEquivNote = '';
-    if (event.currency === 'USD' && solPrice) {
+    if (isUsdc) {
+      feeDisplay = `${entryFee} USDC`;
+      solEquivNote = '\n💱 USDC is a stablecoin — **no price fluctuation**';
+    } else if (event.currency === 'USD' && solPrice) {
       feeDisplay = `${entryFee} USD`;
       solEquivNote = `\n💱 ≈ **${solEntryFee.toFixed(6)} SOL** @ $${solPrice.toFixed(2)}/SOL`;
     }
 
     const guildWallet = await getGuildWalletWithFallback(interaction.guildId);
     const treasuryAddr = guildWallet?.wallet_address || '(not configured)';
+    const balUnit = isUsdc ? 'USDC' : 'SOL';
+    const balDecimals = isUsdc ? 2 : 4;
 
     const confirmButton = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -1094,7 +1179,7 @@ module.exports = {
         `🏇 **Horse:** ${horseName}\n` +
         `💰 **Entry Fee:** ${feeDisplay}${solEquivNote}\n` +
         `🏦 **Paid to Treasury:** \`${treasuryAddr.slice(0,6)}...${treasuryAddr.slice(-4)}\`\n` +
-        `💳 **From Your Wallet:** \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\` (${walletBalance.toFixed(4)} SOL)\n\n` +
+        `💳 **From Your Wallet:** \`${derivedAddress.slice(0,6)}...${derivedAddress.slice(-4)}\` (${walletBalance.toFixed(balDecimals)} ${balUnit})\n\n` +
         `By clicking **Confirm Bet & Pay**, the entry fee will be transferred from your wallet to the server treasury as escrow.\n\n` +
         `⚠️ Entry fees are non-refundable unless the race is cancelled.`
       )
@@ -1385,5 +1470,17 @@ function buildSlotButtons(eventId, slots, qualificationUrl) {
   for (let i = 0; i < buttons.length; i += 5) {
     components.push(new ActionRowBuilder().addComponents(...buttons.slice(i, i + 5)));
   }
+
+  // Add Start Race button (host/admin only) — always present on horse races
+  if (components.length < 5) { // Discord max 5 action rows
+    const startRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`gamble_start_${eventId}`)
+        .setLabel('🏁 Start Race Now')
+        .setStyle(ButtonStyle.Danger)
+    );
+    components.push(startRow);
+  }
+
   return components;
 }

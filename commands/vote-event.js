@@ -117,7 +117,8 @@ module.exports = {
             .setRequired(false)
             .addChoices(
               { name: 'SOL', value: 'SOL' },
-              { name: 'USD', value: 'USD' }
+              { name: 'USD', value: 'USD' },
+              { name: 'USDC (stable, no price fluctuation)', value: 'USDC' }
             )
         )
         .addIntegerOption(option =>

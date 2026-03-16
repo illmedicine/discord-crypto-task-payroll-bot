@@ -11,6 +11,16 @@ const bs58 = require('bs58');
 const { decryptSecret, isEncrypted } = require('./encryption');
 require('dotenv').config();
 
+// SPL Token support for USDC transfers
+let splToken;
+try { splToken = require('@solana/spl-token'); } catch (_) {
+  console.warn('[CRYPTO] @solana/spl-token not installed — USDC transfers will be unavailable');
+}
+
+// USDC Mint on Solana mainnet (6 decimals)
+const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+const USDC_DECIMALS = 6;
+
 // Initialize Solana connection
 const connection = new Connection(
   process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
@@ -296,6 +306,81 @@ const generateKeypair = () => {
   };
 };
 
+// ─── USDC (SPL Token) Transfers ─────────────────────────────────────────────
+
+/**
+ * Get USDC balance for a wallet address.
+ * Returns the USDC amount (human-readable, 6 decimals).
+ */
+const getUsdcBalance = async (publicKey) => {
+  if (!splToken) return 0;
+  try {
+    const owner = new PublicKey(publicKey);
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(owner, { mint: USDC_MINT });
+    if (!tokenAccounts.value || tokenAccounts.value.length === 0) return 0;
+    let total = 0;
+    for (const acct of tokenAccounts.value) {
+      const info = acct.account.data.parsed?.info;
+      if (info?.tokenAmount?.uiAmount) total += info.tokenAmount.uiAmount;
+    }
+    return total;
+  } catch (error) {
+    console.error('[CRYPTO] Error fetching USDC balance:', error.message);
+    return 0;
+  }
+};
+
+/**
+ * Send USDC from a keypair to a recipient address.
+ * amountUsdc is human-readable (e.g. 5.00 for 5 USDC).
+ * Automatically creates the recipient's associated token account if needed.
+ */
+const sendUsdcFrom = async (keypairOrSecret, recipientAddress, amountUsdc) => {
+  if (!splToken) return { success: false, error: 'USDC transfers unavailable — @solana/spl-token not installed' };
+  try {
+    const wallet = typeof keypairOrSecret === 'string'
+      ? getKeypairFromSecret(keypairOrSecret)
+      : keypairOrSecret;
+    if (!wallet) throw new Error('Invalid wallet keypair');
+
+    const recipient = new PublicKey(recipientAddress);
+    const amountRaw = Math.floor(amountUsdc * Math.pow(10, USDC_DECIMALS));
+
+    // Get or create the sender's associated token account
+    const senderAta = await splToken.getOrCreateAssociatedTokenAccount(
+      connection, wallet, USDC_MINT, wallet.publicKey
+    );
+
+    // Get or create the recipient's associated token account
+    const recipientAta = await splToken.getOrCreateAssociatedTokenAccount(
+      connection, wallet, USDC_MINT, recipient
+    );
+
+    // Build USDC transfer instruction
+    const transferIx = splToken.createTransferInstruction(
+      senderAta.address,
+      recipientAta.address,
+      wallet.publicKey,
+      amountRaw
+    );
+
+    const transaction = new Transaction().add(transferIx);
+    const signature = await sendAndConfirmTransaction(connection, transaction, [wallet]);
+
+    return {
+      success: true,
+      signature,
+      amount: amountUsdc,
+      recipient: recipientAddress
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
 module.exports = {
   connection,
   getWallet,
@@ -303,9 +388,13 @@ module.exports = {
   generateKeypair,
   sendSol,
   sendSolFrom,
+  sendUsdcFrom,
   getBalance,
+  getUsdcBalance,
   isValidSolanaAddress,
   getSolanaPrice,
   verifyIncomingTransfer,
-  LAMPORTS_PER_SOL
+  LAMPORTS_PER_SOL,
+  USDC_MINT,
+  USDC_DECIMALS
 };

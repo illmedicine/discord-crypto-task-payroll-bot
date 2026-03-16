@@ -270,19 +270,15 @@ function removePlayer(table, discordId) {
   const idx = table.seats.findIndex(s => s.discordId === discordId);
   if (idx === -1) return { error: 'Not at this table.' };
 
-  // If game is in progress, mark as folded/sitting out
+  // Once a hand has started (ante phase or later), players cannot leave.
+  // The table can only end via the host closing it.
   if (table.phase !== 'waiting' && table.phase !== 'finished') {
-    table.seats[idx].folded = true;
-    table.seats[idx].sittingOut = true;
-    // If it was their turn, advance
-    if (table.currentPlayerIndex === idx) {
-      advanceToNextPlayer(table);
-    }
-  } else {
-    table.seats.splice(idx, 1);
-    // Adjust dealer index
-    if (table.dealerIndex >= table.seats.length) table.dealerIndex = 0;
+    return { error: 'You cannot leave during an active game. The host must close the table to end the game.' };
   }
+
+  table.seats.splice(idx, 1);
+  // Adjust dealer index
+  if (table.dealerIndex >= table.seats.length) table.dealerIndex = 0;
   table.lastActivity = Date.now();
   return { ok: true };
 }

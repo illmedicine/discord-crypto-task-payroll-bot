@@ -1296,6 +1296,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                   <select className="form-select" value={vCurrency} onChange={e => setVCurrency(e.target.value)}>
                     <option value="SOL">SOL</option>
                     <option value="USD">USD</option>
+                    <option value="USDC">USDC (stable)</option>
                   </select>
                 </div>
                 <div className="form-group">
@@ -1480,6 +1481,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                   <select className="form-select" value={rCurrency} onChange={e => setRCurrency(e.target.value)}>
                     <option value="SOL">SOL</option>
                     <option value="USD">USD</option>
+                    <option value="USDC">USDC (stable)</option>
                   </select>
                 </div>
               </div>
@@ -1597,6 +1599,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                       <select className="form-select" value={pCurrency} onChange={e => setPCurrency(e.target.value)}>
                         <option value="SOL">SOL</option>
                         <option value="USD">USD</option>
+                        <option value="USDC">USDC (stable)</option>
                       </select>
                     </div>
                   </>

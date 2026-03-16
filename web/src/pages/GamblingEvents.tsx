@@ -451,6 +451,7 @@ export default function GamblingEvents({ guildId, isOwner = true }: Props) {
                 <select className="form-select" value={currency} onChange={e => setCurrency(e.target.value)}>
                   <option value="SOL">SOL</option>
                   <option value="USD">USD</option>
+                  <option value="USDC">USDC (stable)</option>
                 </select>
               </div>
             </div>

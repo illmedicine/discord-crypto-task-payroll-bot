@@ -225,7 +225,7 @@ function buildTableEmbed(table) {
     }).join('\n');
     embed.addFields({ name: '💰 Winners', value: winnerLines, inline: false });
 
-    embed.setFooter({ text: 'Click "Next Hand" to continue or "Leave Table" to cash out.' });
+    embed.setFooter({ text: 'Click "Next Hand" to continue or host can "Close & Pay Out" to end.' });
   } else {
     // Timer footer
     embed.setFooter({ text: `Turn Timer: ${table.turnTimer}s  •  Blinds: $${table.smallBlind}/$${table.bigBlind}` });
@@ -281,10 +281,6 @@ function buildAnteButtons(table) {
       .setCustomId(`poker_fold_${table.id}`)
       .setLabel('🚫 Fold')
       .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId(`poker_leave_${table.id}`)
-      .setLabel('🚪 Leave Table')
-      .setStyle(ButtonStyle.Secondary),
   );
   rows.push(row1);
   return rows;
@@ -299,10 +295,6 @@ function buildGameButtons(table) {
         .setCustomId(`poker_nexthand_${table.id}`)
         .setLabel('▶️ Next Hand')
         .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`poker_leave_${table.id}`)
-        .setLabel('🚪 Leave Table')
-        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`poker_viewcards_${table.id}`)
         .setLabel('👀 View My Cards')

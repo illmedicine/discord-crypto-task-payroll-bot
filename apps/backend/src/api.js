@@ -2338,6 +2338,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         components.push(new ActionRowBuilder().addComponents(...slotButtons.slice(i, i + 5)))
       }
 
+      // Add Start Race Now button (host/admin only)
+      if (components.length < 5) {
+        const startRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`gamble_start_${eventId}`)
+            .setLabel('🏁 Start Race Now')
+            .setStyle(ButtonStyle.Danger)
+        )
+        components.push(startRow)
+      }
+
       console.log(`[gambling-event] sending message to channel ${channel.id} with ${components.length} action rows, ${slotButtons.length} buttons`)
       const msg = await channel.send({ embeds: [mainEmbed], components })
       console.log(`[gambling-event] message sent, msg.id=${msg?.id}`)
@@ -2571,7 +2582,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (hasBuyIn) {
         desc += `2️⃣ Pay the buy-in: **${buyIn} ${event.currency}** from your wallet\n`
         desc += '3️⃣ Play Texas Hold\'em — bet, bluff, and win chips!\n'
-        desc += '4️⃣ When the table closes, chip stacks convert to SOL payouts 💰\n'
+        desc += '4️⃣ When the table closes, chip stacks convert to crypto payouts 💰\n'
       } else {
         desc += '2️⃣ Play Texas Hold\'em — bet, bluff, and win chips!\n'
         desc += '3️⃣ Casual play — no real money involved\n'

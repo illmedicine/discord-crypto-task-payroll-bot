@@ -106,13 +106,22 @@ const processVoteEvent = async (eventId, client, reason = 'time', deps = {}) => 
         console.log(`[VoteEventProcessor] No treasury wallet configured for guild ${event.guild_id}, skipping payments`);
       } else {
         const connection = new Connection(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed');
+        const isUsdc = event.currency === 'USDC';
 
         for (const userId of winnerUserIds) {
           try {
             const userData = await db.getUser(userId);
             if (userData && userData.solana_address) {
-              // Use crypto.sendSol if available for easier testing, otherwise fall back to on-chain tx
-              if (typeof crypto.sendSol === 'function') {
+              if (isUsdc && typeof crypto.sendUsdcFrom === 'function') {
+                // USDC payout: send from guild wallet using SPL token transfer
+                const res = await crypto.sendUsdcFrom(guildWallet.wallet_secret, userData.solana_address, prizePerWinner);
+                if (res && res.success) {
+                  await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, res.signature||res.signature);
+                  paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature: res.signature });
+                } else {
+                  paymentResults.push({ userId, success: false, reason: res.error || 'USDC payment failed' });
+                }
+              } else if (typeof crypto.sendSol === 'function') {
                 const res = await crypto.sendSol(userData.solana_address, prizePerWinner);
                 if (res && res.success) {
                   await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, res.signature||res.signature);
