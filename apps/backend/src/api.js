@@ -1784,7 +1784,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/vote-events', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const {
       channel_id,
       title,
@@ -1867,7 +1867,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(event)
   })
 
-  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/vote-events/:eventId/publish', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
@@ -1998,7 +1998,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Vote Event Delete ----
-  app.delete('/api/admin/guilds/:guildId/vote-events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/vote-events/:eventId', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
@@ -2167,7 +2167,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const {
       channel_id, title, description, mode, prize_amount, currency,
       entry_fee, min_players, max_players, duration_minutes, slots,
@@ -2217,7 +2217,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(event)
   })
 
-  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/gambling-events/:eventId/publish', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       console.log(`[gambling-event] publish requested for event #${eventId}, guild=${req.guild.id}, clientUser=${!!discordClient.user}`)
@@ -2362,7 +2362,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.delete('/api/admin/guilds/:guildId/gambling-events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/gambling-events/:eventId', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
@@ -2527,7 +2527,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   /* ---- Create poker event ---- */
-  app.post('/api/admin/guilds/:guildId/poker-events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/poker-events', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const {
       channel_id, title, description, mode, buy_in, currency,
       small_blind, big_blind, starting_chips, max_players, turn_timer,
@@ -2563,7 +2563,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   /* ---- Publish poker event to Discord ---- */
-  app.post('/api/admin/guilds/:guildId/poker-events/:eventId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/poker-events/:eventId/publish', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])
@@ -2651,7 +2651,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   /* ---- Delete poker event ---- */
-  app.delete('/api/admin/guilds/:guildId/poker-events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/poker-events/:eventId', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])

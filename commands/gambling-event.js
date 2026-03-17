@@ -417,6 +417,15 @@ module.exports = {
     const sub = interaction.options.getSubcommand();
 
     if (sub === 'create') {
+      // Only server owner can create events
+      const guild = interaction.guild || await interaction.client.guilds.fetch(interaction.guildId);
+      if (!guild || !guild.ownerId) {
+        return interaction.reply({ content: '❌ Unable to determine server owner. Please try again later.', ephemeral: true });
+      }
+      if (interaction.user.id !== guild.ownerId) {
+        return interaction.reply({ content: '❌ Only the server owner can create horse race events.', ephemeral: true });
+      }
+
       let title = interaction.options.getString('title');
       let description = interaction.options.getString('description');
       const mode = interaction.options.getString('mode') || 'house';
@@ -550,6 +559,12 @@ module.exports = {
     }
 
     if (sub === 'remove') {
+      // Only server owner can remove events
+      const guild = interaction.guild || await interaction.client.guilds.fetch(interaction.guildId);
+      if (interaction.user.id !== guild?.ownerId) {
+        return interaction.reply({ content: '❌ Only the server owner can remove horse race events.', ephemeral: true });
+      }
+
       const eventId = interaction.options.getInteger('event_id');
       const event = await db.getGamblingEvent(eventId);
       if (!event || event.guild_id !== interaction.guildId) {
@@ -573,6 +588,12 @@ module.exports = {
     }
 
     if (sub === 'process') {
+      // Only server owner can manually process events
+      const guild = interaction.guild || await interaction.client.guilds.fetch(interaction.guildId);
+      if (interaction.user.id !== guild?.ownerId) {
+        return interaction.reply({ content: '❌ Only the server owner can manually start horse races.', ephemeral: true });
+      }
+
       const eventId = interaction.options.getInteger('event_id');
       const event = await db.getGamblingEvent(eventId);
       if (!event || event.guild_id !== interaction.guildId) {
