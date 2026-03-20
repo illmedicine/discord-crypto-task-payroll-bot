@@ -475,6 +475,18 @@ module.exports = {
       const msg = await interaction.reply({ embeds: [embed], components, fetchReply: true });
       await db.updateGamblingEventMessageId(eventId, msg.id);
 
+      // Sync new event to backend so it appears on the website
+      try {
+        const { fullSyncEventToBackend } = require('../utils/gamblingEventProcessor');
+        const createdEvent = await db.getGamblingEvent(eventId);
+        if (createdEvent) {
+          const slotRows = slotsToUse.map((s, i) => ({ slot_number: i + 1, label: s.label, color: s.color }));
+          fullSyncEventToBackend(createdEvent, slotRows);
+        }
+      } catch (syncErr) {
+        console.warn(`[GamblingEvent] Backend sync after create failed:`, syncErr.message);
+      }
+
       return;
     }
 

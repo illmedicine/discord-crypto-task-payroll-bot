@@ -3932,6 +3932,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // Bot fetches all gambling events for a guild (used by startup stale-event cleanup)
+  app.get('/api/internal/gambling-events-by-guild/:guildId', requireInternal, async (req, res) => {
+    try {
+      const rows = await db.all('SELECT id, status, title FROM gambling_events WHERE guild_id = ?', [req.params.guildId])
+      res.json(rows || [])
+    } catch (err) {
+      console.error('[internal] gambling-events-by-guild error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // Bot fetches gambling-event data it doesn't have locally (created via web UI)
   app.get('/api/internal/gambling-event/:id', requireInternal, async (req, res) => {
     try {
@@ -3971,10 +3982,38 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           [eventId, userId, username, screenshotUrl || '']
         ).catch(() => {})
       } else if (action === 'status_update' && status) {
-        await db.run(
-          `UPDATE gambling_events SET status = ? WHERE id = ?`,
-          [status, eventId]
-        ).catch(() => {})
+        // Check if event exists; if not, create a stub so the UPDATE works
+        const existing = await db.get('SELECT id FROM gambling_events WHERE id = ?', [eventId])
+        if (!existing) {
+          console.warn(`[internal] gambling-event #${eventId} not found — creating from sync data`)
+          const { title, description, mode, prizeAmount, currency, entryFee, minPlayers, maxPlayers,
+            durationMinutes, numSlots, createdBy, endsAt, channelId, messageId, currentPlayers,
+            qualificationUrl } = req.body || {}
+          await db.run(
+            `INSERT INTO gambling_events (id, guild_id, channel_id, message_id, title, description, mode, prize_amount,
+              currency, entry_fee, min_players, max_players, current_players, duration_minutes, num_slots,
+              winning_slot, created_by, status, ends_at, qualification_url, winner_names)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [eventId, guildId || '', channelId || '', messageId || null,
+             title || `Horse Race #${eventId}`, description || '', mode || 'house',
+             prizeAmount || 0, currency || 'USD', entryFee || 0,
+             minPlayers || 1, maxPlayers || 10, currentPlayers || 0,
+             durationMinutes || null, numSlots || 6, winningSlot || null,
+             createdBy || '', status, endsAt || null, qualificationUrl || null, winnerNames || null]
+          )
+          // Insert slots if provided
+          const syncSlots = req.body?.slots
+          if (Array.isArray(syncSlots)) {
+            for (const s of syncSlots) {
+              await db.run(
+                'INSERT OR REPLACE INTO gambling_event_slots (gambling_event_id, slot_number, label, color) VALUES (?, ?, ?, ?)',
+                [eventId, s.slot_number, s.label || `Slot ${s.slot_number}`, s.color || '#888']
+              ).catch(() => {})
+            }
+          }
+        } else {
+          await db.run(`UPDATE gambling_events SET status = ? WHERE id = ?`, [status, eventId])
+        }
         // Save winner info when completing an event
         if (winningSlot) {
           await db.run(`UPDATE gambling_events SET winning_slot = ? WHERE id = ?`, [winningSlot, eventId]).catch(() => {})
@@ -3983,6 +4022,33 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           await db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, eventId]).catch(() => {})
         }
         console.log(`[internal] gambling-event #${eventId} status → ${status}${winnerNames ? `, winners: ${winnerNames}` : ''}`)
+      } else if (action === 'full_sync' && guildId) {
+        // Full upsert: create or replace entire event + slots
+        const { title, description, mode, prizeAmount, currency, entryFee, minPlayers, maxPlayers,
+          durationMinutes, numSlots, createdBy, endsAt, channelId, messageId, currentPlayers,
+          qualificationUrl } = req.body || {}
+        await db.run(
+          `INSERT OR REPLACE INTO gambling_events (id, guild_id, channel_id, message_id, title, description, mode, prize_amount,
+            currency, entry_fee, min_players, max_players, current_players, duration_minutes, num_slots,
+            winning_slot, created_by, status, ends_at, qualification_url, winner_names)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [eventId, guildId, channelId || '', messageId || null,
+           title || `Horse Race #${eventId}`, description || '', mode || 'house',
+           prizeAmount || 0, currency || 'USD', entryFee || 0,
+           minPlayers || 1, maxPlayers || 10, currentPlayers || 0,
+           durationMinutes || null, numSlots || 6, winningSlot || null,
+           createdBy || '', status || 'active', endsAt || null, qualificationUrl || null, winnerNames || null]
+        )
+        const syncSlots = req.body?.slots
+        if (Array.isArray(syncSlots)) {
+          for (const s of syncSlots) {
+            await db.run(
+              'INSERT OR REPLACE INTO gambling_event_slots (gambling_event_id, slot_number, label, color) VALUES (?, ?, ?, ?)',
+              [eventId, s.slot_number, s.label || `Slot ${s.slot_number}`, s.color || '#888']
+            ).catch(() => {})
+          }
+        }
+        console.log(`[internal] gambling-event #${eventId} full_sync → ${status || 'active'}${winnerNames ? `, winners: ${winnerNames}` : ''}`)
       }
 
       res.json({ ok: true })

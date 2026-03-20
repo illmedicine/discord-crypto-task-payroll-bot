@@ -71,6 +71,7 @@ type GamblingEvent = {
   current_players: number
   num_slots: number
   winning_slot: number | null
+  winner_names: string | null
   status: string
   channel_id: string
   message_id: string | null
@@ -1460,7 +1461,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                       <td>{ev.current_players}/{ev.max_players}</td>
                       <td><span className={badgeClass(ev.status)}>{ev.status}</span></td>
                       <td style={{ fontSize: 12 }}><Countdown endsAt={ev.ends_at} prefix='⏱️ ' endedText='—' /></td>
-                      <td style={{ fontSize: 12 }}>{ev.winning_slot ? `🏆 Horse #${ev.winning_slot}` : '—'}</td>
+                      <td style={{ fontSize: 12 }}>{ev.winner_names ? `🏆 ${ev.winner_names}` : ev.winning_slot ? `🏆 Horse #${ev.winning_slot}` : '—'}</td>
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
                           {isOwner && ev.status === 'active' && !ev.message_id && (

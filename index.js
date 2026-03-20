@@ -371,64 +371,119 @@ client.once('clientReady', async () => {
       console.warn('[EventSync] Skipping startup sync: DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set');
       return;
     }
+    const syncUrl = `${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`;
+    const headers = { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret };
 
     try {
-      // Sync ALL completed/cancelled/ended events to backend (status + winner_names + winning_slot)
-      const rows = await new Promise((resolve, reject) => {
+      // ─── Phase 1: Full-sync ALL events (active + completed + cancelled) to backend ───
+      const allRows = await new Promise((resolve, reject) => {
         db.db.all(
-          `SELECT id, winning_slot, guild_id, status, winner_names FROM gambling_events WHERE status IN ('completed','ended','cancelled')`,
+          `SELECT * FROM gambling_events ORDER BY id DESC`,
           [], (err, r) => err ? reject(err) : resolve(r || [])
         );
       });
-      if (!rows.length) {
-        console.log('[EventSync] No completed/cancelled events to sync');
-        return;
-      }
-      console.log(`[EventSync] Syncing ${rows.length} completed/cancelled event(s) to backend...`);
-
-      for (const ev of rows) {
-        try {
-          // Resolve winner names if missing
-          let winnerNames = ev.winner_names;
-          if (!winnerNames && ev.status !== 'cancelled') {
-            const bets = await db.getGamblingEventBets(ev.id);
-            const winners = bets.filter(b => b.is_winner === 1);
-            if (winners.length === 0) {
-              winnerNames = 'House';
-            } else {
-              const names = [];
-              for (const w of winners) {
-                try {
-                  const u = await client.users.fetch(w.user_id);
-                  names.push(u.displayName || u.username || w.user_id);
-                } catch { names.push(w.user_id); }
+      if (!allRows.length) {
+        console.log('[EventSync] No local events to sync');
+      } else {
+        console.log(`[EventSync] Full-syncing ${allRows.length} event(s) to backend...`);
+        let syncCount = 0;
+        for (const ev of allRows) {
+          try {
+            // Resolve winner names if missing for completed events
+            let winnerNames = ev.winner_names;
+            if (!winnerNames && ev.status !== 'cancelled' && ev.status !== 'active') {
+              const bets = await db.getGamblingEventBets(ev.id);
+              const winners = bets.filter(b => b.is_winner === 1);
+              if (winners.length === 0) {
+                winnerNames = ev.status === 'completed' ? 'House' : null;
+              } else {
+                const names = [];
+                for (const w of winners) {
+                  try {
+                    const u = await client.users.fetch(w.user_id);
+                    names.push(u.displayName || u.username || w.user_id);
+                  } catch { names.push(w.user_id); }
+                }
+                winnerNames = names.join(', ');
               }
-              winnerNames = names.join(', ');
+              if (winnerNames) {
+                await new Promise(r => db.db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, ev.id], r));
+              }
             }
-            // Save locally
-            await new Promise(r => db.db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, ev.id], r));
-          }
 
-          // Sync status + winner data to backend (await so we can log result)
-          const res = await fetch(`${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
-            body: JSON.stringify({
-              eventId: ev.id, action: 'status_update', status: ev.status,
-              guildId: ev.guild_id, winnerNames: winnerNames || null, winningSlot: ev.winning_slot || null,
-            }),
-          });
-          if (res.ok) {
-            console.log(`[EventSync] ✅ #${ev.id}: ${ev.status}${winnerNames ? ` (${winnerNames})` : ''}`);
-          } else {
-            const text = await res.text();
-            console.error(`[EventSync] ❌ #${ev.id}: backend returned ${res.status} — ${text}`);
+            // Get slots for this event
+            const evSlots = await db.getGamblingEventSlots(ev.id);
+
+            const res = await fetch(syncUrl, {
+              method: 'POST', headers,
+              body: JSON.stringify({
+                eventId: ev.id, action: 'full_sync', guildId: ev.guild_id,
+                status: ev.status, title: ev.title, description: ev.description,
+                mode: ev.mode, prizeAmount: ev.prize_amount, currency: ev.currency,
+                entryFee: ev.entry_fee, minPlayers: ev.min_players, maxPlayers: ev.max_players,
+                currentPlayers: ev.current_players || 0, durationMinutes: ev.duration_minutes,
+                numSlots: ev.num_slots, winningSlot: ev.winning_slot || null,
+                winnerNames: winnerNames || null, createdBy: ev.created_by || '',
+                endsAt: ev.ends_at || null, channelId: ev.channel_id,
+                messageId: ev.message_id || null, qualificationUrl: ev.qualification_url || null,
+                slots: evSlots.map(s => ({ slot_number: s.slot_number, label: s.label, color: s.color })),
+              }),
+            });
+            if (res.ok) {
+              syncCount++;
+            } else {
+              const text = await res.text();
+              console.error(`[EventSync] ❌ #${ev.id}: backend returned ${res.status} — ${text}`);
+            }
+          } catch (evErr) {
+            console.warn(`[EventSync] Error on event #${ev.id}:`, evErr.message);
           }
-        } catch (evErr) {
-          console.warn(`[EventSync] Error on event #${ev.id}:`, evErr.message);
         }
+        console.log(`[EventSync] ✅ Full-synced ${syncCount}/${allRows.length} event(s)`);
       }
-      console.log(`[EventSync] ✅ Done syncing ${rows.length} event(s)`);
+
+      // ─── Phase 2: Cancel stale backend events not active in bot DB ───
+      try {
+        // Get all event IDs that are still active locally
+        const localActiveIds = new Set(allRows.filter(r => r.status === 'active').map(r => r.id));
+        // Get all event IDs that exist locally (any status)
+        const localAllIds = new Set(allRows.map(r => r.id));
+
+        // Fetch active events from backend to check for stale ones
+        const guildIds = [...new Set(allRows.map(r => r.guild_id).filter(Boolean))];
+        for (const gid of guildIds) {
+          try {
+            const beRes = await fetch(`${backendUrl.replace(/\/$/, '')}/api/internal/gambling-events-by-guild/${gid}`, {
+              headers: { 'x-dcb-internal-secret': secret },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (!beRes.ok) continue;
+            const backendEvents = await beRes.json();
+            const staleEvents = (backendEvents || []).filter(e =>
+              e.status === 'active' && !localActiveIds.has(e.id)
+            );
+            if (staleEvents.length > 0) {
+              console.log(`[EventSync] Found ${staleEvents.length} stale active event(s) in backend for guild ${gid}`);
+              for (const stale of staleEvents) {
+                // If event exists locally with a non-active status, use that; otherwise cancel it
+                const localEvent = allRows.find(r => r.id === stale.id);
+                const newStatus = localEvent ? localEvent.status : 'cancelled';
+                await fetch(syncUrl, {
+                  method: 'POST', headers,
+                  body: JSON.stringify({ eventId: stale.id, action: 'status_update', status: newStatus, guildId: gid }),
+                });
+                console.log(`[EventSync] 🧹 Stale event #${stale.id} → ${newStatus}`);
+              }
+            }
+          } catch (guildErr) {
+            console.warn(`[EventSync] Stale cleanup error for guild ${gid}:`, guildErr.message);
+          }
+        }
+      } catch (cleanupErr) {
+        console.warn('[EventSync] Stale cleanup error:', cleanupErr.message);
+      }
+
+      console.log('[EventSync] ✅ Startup sync complete');
     } catch (err) {
       console.warn('[EventSync] Error:', err.message);
     }

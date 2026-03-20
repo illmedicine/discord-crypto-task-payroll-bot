@@ -139,7 +139,7 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
   }
 }
 
-/** Sync event status to backend with logging */
+/** Sync event status to backend with logging — includes full event data for upsert */
 function syncStatusToBackend(eventId, status, guildId, extra = {}) {
   try {
     const backendUrl = process.env.DCB_BACKEND_URL;
@@ -158,6 +158,36 @@ function syncStatusToBackend(eventId, status, guildId, extra = {}) {
       else r.text().then(t => console.error(`[SYNC] \u274c Event #${eventId}: backend returned ${r.status} — ${t}`));
     }).catch(err => console.error(`[SYNC] \u274c Event #${eventId} sync failed:`, err.message));
   } catch (e) { console.error(`[SYNC] Error preparing sync for event #${eventId}:`, e.message); }
+}
+
+/** Full-sync an event to the backend (create or replace). Called on event creation. */
+function fullSyncEventToBackend(event, slots = []) {
+  try {
+    const backendUrl = process.env.DCB_BACKEND_URL;
+    const secret = process.env.DCB_INTERNAL_SECRET;
+    if (!backendUrl || !secret) return;
+    const url = `${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
+      body: JSON.stringify({
+        eventId: event.id, action: 'full_sync', guildId: event.guild_id,
+        status: event.status || 'active',
+        title: event.title, description: event.description, mode: event.mode,
+        prizeAmount: event.prize_amount, currency: event.currency, entryFee: event.entry_fee,
+        minPlayers: event.min_players, maxPlayers: event.max_players, currentPlayers: event.current_players || 0,
+        durationMinutes: event.duration_minutes, numSlots: event.num_slots,
+        winningSlot: event.winning_slot || null, winnerNames: event.winner_names || null,
+        createdBy: event.created_by || '', endsAt: event.ends_at || null,
+        channelId: event.channel_id, messageId: event.message_id || null,
+        qualificationUrl: event.qualification_url || null,
+        slots: slots.map(s => ({ slot_number: s.slot_number, label: s.label, color: s.color })),
+      }),
+    }).then(r => {
+      if (r.ok) console.log(`[SYNC] \u2705 Event #${event.id} full_sync OK`);
+      else r.text().then(t => console.error(`[SYNC] \u274c Event #${event.id} full_sync: ${r.status} — ${t}`));
+    }).catch(err => console.error(`[SYNC] \u274c Event #${event.id} full_sync failed:`, err.message));
+  } catch (e) { console.error(`[SYNC] Error preparing full_sync for event #${event.id}:`, e.message); }
 }
 
 /**
@@ -386,7 +416,15 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       }
 
       await db.updateGamblingEventStatus(eventId, 'cancelled');
-      syncStatusToBackend(eventId, 'cancelled', event.guild_id);
+      syncStatusToBackend(eventId, 'cancelled', event.guild_id, {
+        title: event.title, description: event.description, mode: event.mode,
+        prizeAmount: event.prize_amount, currency: event.currency, entryFee: event.entry_fee,
+        minPlayers: event.min_players, maxPlayers: event.max_players,
+        durationMinutes: event.duration_minutes, numSlots: event.num_slots,
+        createdBy: event.created_by || '', endsAt: event.ends_at || null,
+        channelId: event.channel_id, messageId: event.message_id || null,
+        slots: slots.map(s => ({ slot_number: s.slot_number, label: s.label, color: s.color })),
+      });
       return;
     }
 
@@ -717,11 +755,22 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       }
       winnerNames = names.join(', ');
     }
-    syncStatusToBackend(eventId, 'completed', event.guild_id, { winnerNames, winningSlot });
+    // Include full event data so backend can create event if it doesn't exist
+    syncStatusToBackend(eventId, 'completed', event.guild_id, {
+      winnerNames, winningSlot,
+      title: event.title, description: event.description, mode: event.mode,
+      prizeAmount: event.prize_amount, currency: event.currency, entryFee: event.entry_fee,
+      minPlayers: event.min_players, maxPlayers: event.max_players, currentPlayers: event.current_players || 0,
+      durationMinutes: event.duration_minutes, numSlots: event.num_slots,
+      createdBy: event.created_by || '', endsAt: event.ends_at || null,
+      channelId: event.channel_id, messageId: event.message_id || null,
+      qualificationUrl: event.qualification_url || null,
+      slots: slots.map(s => ({ slot_number: s.slot_number, label: s.label, color: s.color })),
+    });
     console.log(`[HorseRace] Event #${eventId} completed with ${winnerUserIds.length} winner(s), house cut: ${houseCut.toFixed(4)}`);
   } catch (error) {
     console.error('[HorseRace] Error processing gambling event:', error);
   }
 };
 
-module.exports = { processGamblingEvent, HORSE_PRESETS };
+module.exports = { processGamblingEvent, fullSyncEventToBackend, HORSE_PRESETS };
