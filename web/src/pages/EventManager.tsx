@@ -234,10 +234,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [pPublishing, setPPublishing] = useState<number | null>(null)
 
   /* ---- filter & collapse state ---- */
-  const [hideCompleted, setHideCompleted] = useState(true)
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed' | 'cancelled'>('active')
   const [vShowAll, setVShowAll] = useState(false)
   const [rShowAll, setRShowAll] = useState(false)
   const [pShowAll, setPShowAll] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   const [showHowItWorks, setShowHowItWorks] = useState(false)
 
   /* ==================================================================
@@ -608,6 +609,28 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
     }
   }
 
+  /* ---- Bulk delete inactive race events ---- */
+  const handleBulkDeleteInactiveRaces = async () => {
+    const staleEvents = raceEvents.filter(e => e.status === 'active' && e.ends_at && new Date(e.ends_at) < new Date())
+    const staleNoTimer = raceEvents.filter(e => e.status === 'active' && !e.ends_at && !e.message_id)
+    const toDelete = [...staleEvents, ...staleNoTimer]
+    if (toDelete.length === 0) {
+      alert('No stale events to clean up.')
+      return
+    }
+    if (!confirm(`Delete ${toDelete.length} stale/expired race event(s)? This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      for (const ev of toDelete) {
+        await api.delete(`/admin/guilds/${guildId}/gambling-events/${ev.id}`)
+      }
+      await load()
+    } catch {
+      alert('Some deletions may have failed.')
+    }
+    setBulkDeleting(false)
+  }
+
   /* ==================================================================
    *  POKER EVENT HANDLERS
    * ================================================================ */
@@ -688,15 +711,29 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const totalVoteActive = voteEvents.filter(e => e.status === 'active').length
   const totalRaceActive = raceEvents.filter(e => e.status === 'active').length
   const totalPokerActive = pokerEvents.filter(e => e.status === 'active').length
+  const totalVoteCompleted = voteEvents.filter(e => e.status === 'completed' || e.status === 'ended').length
+  const totalRaceCompleted = raceEvents.filter(e => e.status === 'completed' || e.status === 'ended').length
+  const totalPokerCompleted = pokerEvents.filter(e => e.status === 'completed' || e.status === 'ended').length
+  const totalVoteCancelled = voteEvents.filter(e => e.status === 'cancelled').length
+  const totalRaceCancelled = raceEvents.filter(e => e.status === 'cancelled').length
+  const totalPokerCancelled = pokerEvents.filter(e => e.status === 'cancelled').length
   const totalEvents = voteEvents.length + raceEvents.length + pokerEvents.length
   const totalActive = totalVoteActive + totalRaceActive + totalPokerActive
-  const totalCompleted = totalEvents - totalActive
+  const totalCompleted = totalVoteCompleted + totalRaceCompleted + totalPokerCompleted
+  const totalCancelled = totalVoteCancelled + totalRaceCancelled + totalPokerCancelled
 
   /* ---- Filtered & sliced event lists ---- */
-  const VISIBLE_LIMIT = 5
-  const vFiltered = hideCompleted ? voteEvents.filter(e => e.status === 'active') : voteEvents
-  const rFiltered = hideCompleted ? raceEvents.filter(e => e.status === 'active') : raceEvents
-  const pFiltered = hideCompleted ? pokerEvents.filter(e => e.status === 'active') : pokerEvents
+  const VISIBLE_LIMIT = 10
+  const filterFn = (e: { status: string }) => {
+    if (statusFilter === 'all') return true
+    if (statusFilter === 'active') return e.status === 'active'
+    if (statusFilter === 'completed') return e.status === 'completed' || e.status === 'ended'
+    if (statusFilter === 'cancelled') return e.status === 'cancelled'
+    return true
+  }
+  const vFiltered = voteEvents.filter(filterFn)
+  const rFiltered = raceEvents.filter(filterFn)
+  const pFiltered = pokerEvents.filter(filterFn)
   const vVisible = vShowAll ? vFiltered : vFiltered.slice(0, VISIBLE_LIMIT)
   const rVisible = rShowAll ? rFiltered : rFiltered.slice(0, VISIBLE_LIMIT)
   const pVisible = pShowAll ? pFiltered : pFiltered.slice(0, VISIBLE_LIMIT)
@@ -732,34 +769,35 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>
           Create and manage all events — photo-voting challenges, horse race betting, and poker tables — from one place.
         </p>
-        <label className="em-toggle">
-          <input type="checkbox" checked={hideCompleted} onChange={e => setHideCompleted(e.target.checked)} />
-          <span className="em-toggle-slider" />
-          <span className="em-toggle-label">Hide completed ({totalCompleted})</span>
-        </label>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Show:</span>
+          <select className="form-select" style={{ width: 160, fontSize: 12 }} value={statusFilter}
+                  onChange={e => setStatusFilter(e.target.value as 'all' | 'active' | 'completed' | 'cancelled')}>
+            <option value="active">🟢 Active ({totalActive})</option>
+            <option value="completed">✅ Completed ({totalCompleted})</option>
+            <option value="cancelled">🚫 Cancelled ({totalCancelled})</option>
+            <option value="all">📋 All Events ({totalEvents})</option>
+          </select>
+        </div>
       </div>
 
       {/* ---- Summary bar ---- */}
       <div className="em-summary-bar">
-        <div className="em-stat">
+        <div className="em-stat" style={{ cursor: 'pointer', opacity: statusFilter === 'all' ? 1 : 0.6 }} onClick={() => setStatusFilter('all')}>
           <span className="em-stat-value">{totalEvents}</span>
-          <span className="em-stat-label">Total Events</span>
+          <span className="em-stat-label">Total</span>
         </div>
-        <div className="em-stat">
+        <div className="em-stat" style={{ cursor: 'pointer', opacity: statusFilter === 'active' ? 1 : 0.6 }} onClick={() => setStatusFilter('active')}>
           <span className="em-stat-value em-stat-active">{totalActive}</span>
-          <span className="em-stat-label">Active</span>
+          <span className="em-stat-label">🟢 Active</span>
         </div>
-        <div className="em-stat">
-          <span className="em-stat-value">{voteEvents.length}</span>
-          <span className="em-stat-label">🗳️ Vote</span>
+        <div className="em-stat" style={{ cursor: 'pointer', opacity: statusFilter === 'completed' ? 1 : 0.6 }} onClick={() => setStatusFilter('completed')}>
+          <span className="em-stat-value" style={{ color: '#27ae60' }}>{totalCompleted}</span>
+          <span className="em-stat-label">✅ Completed</span>
         </div>
-        <div className="em-stat">
-          <span className="em-stat-value">{raceEvents.length}</span>
-          <span className="em-stat-label">🏇 Race</span>
-        </div>
-        <div className="em-stat">
-          <span className="em-stat-value">{pokerEvents.length}</span>
-          <span className="em-stat-label">🃏 Poker</span>
+        <div className="em-stat" style={{ cursor: 'pointer', opacity: statusFilter === 'cancelled' ? 1 : 0.6 }} onClick={() => setStatusFilter('cancelled')}>
+          <span className="em-stat-value" style={{ color: '#888' }}>{totalCancelled}</span>
+          <span className="em-stat-label">🚫 Cancelled</span>
         </div>
       </div>
 
@@ -796,7 +834,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       {/* ============================================================ */}
       {/*  CREATE EVENT FORM (owner only)                               */}
       {/* ============================================================ */}
-      {isOwner && (tab === 'all' || tab === 'vote' || tab === 'race' || tab === 'poker') && (
+      {isOwner && statusFilter === 'active' && (tab === 'all' || tab === 'vote' || tab === 'race' || tab === 'poker') && (
         <div className="card" style={{ marginBottom: 24 }}>
           <div className="card-header">
             <div className="card-title">Create New Event</div>
@@ -1238,7 +1276,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
             <div className="card-title">🗳️ Vote Events
               <span className="em-section-counts">
                 <span className="em-count-active">{totalVoteActive} active</span>
-                {voteEvents.length - totalVoteActive > 0 && <span className="em-count-past">{voteEvents.length - totalVoteActive} past</span>}
+                {totalVoteCompleted > 0 && <span className="em-count-past">{totalVoteCompleted} completed</span>}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1252,7 +1290,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           {vFiltered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">🗳️</div>
-              <div className="empty-state-text">{hideCompleted && voteEvents.length > 0 ? `${voteEvents.length} completed event${voteEvents.length > 1 ? 's' : ''} hidden` : 'No vote events yet. Create one below.'}</div>
+              <div className="empty-state-text">
+                {statusFilter === 'active' && voteEvents.length > 0 ? `No active vote events. ${voteEvents.length} total — change filter to view.` :
+                 statusFilter === 'completed' ? 'No completed vote events yet.' :
+                 statusFilter === 'cancelled' ? 'No cancelled vote events.' :
+                 'No vote events yet. Create one above.'}
+              </div>
             </div>
           ) : (
             <table className="data-table">
@@ -1409,10 +1452,18 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
             <div className="card-title">🏇 Horse Race Events
               <span className="em-section-counts">
                 <span className="em-count-active">{totalRaceActive} active</span>
-                {raceEvents.length - totalRaceActive > 0 && <span className="em-count-past">{raceEvents.length - totalRaceActive} past</span>}
+                {totalRaceCompleted > 0 && <span className="em-count-past">{totalRaceCompleted} completed</span>}
+                {totalRaceCancelled > 0 && <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{totalRaceCancelled} cancelled</span>}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {isOwner && (
+                <button className="btn btn-secondary btn-sm" style={{ fontSize: 11 }}
+                        disabled={bulkDeleting}
+                        onClick={handleBulkDeleteInactiveRaces}>
+                  {bulkDeleting ? '...' : '🧹 Clean Up Stale'}
+                </button>
+              )}
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Publish to:</span>
               <select className="form-select" style={{ width: 160, fontSize: 12 }} value={rPublishChannelId} onChange={e => setRPublishChannelId(e.target.value)}>
                 {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
@@ -1423,7 +1474,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           {rFiltered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">🏇</div>
-              <div className="empty-state-text">{hideCompleted && raceEvents.length > 0 ? `${raceEvents.length} completed event${raceEvents.length > 1 ? 's' : ''} hidden` : 'No horse race events yet. Create one below.'}</div>
+              <div className="empty-state-text">
+                {statusFilter === 'active' && raceEvents.length > 0 ? `No active race events. ${raceEvents.length} total events — change filter to view.` :
+                 statusFilter === 'completed' ? 'No completed race events yet.' :
+                 statusFilter === 'cancelled' ? 'No cancelled race events.' :
+                 'No horse race events yet. Create one above.'}
+              </div>
             </div>
           ) : (
             <table className="data-table">
@@ -1506,7 +1562,8 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                                   <div>Horses: {ev.num_slots}</div>
                                   <div>Min riders: {ev.min_players}</div>
                                   <div>Created: {formatTimeAgo(ev.created_at)}</div>
-                                  {ev.winning_slot && <div style={{ color: 'var(--accent-green)', fontWeight: 600 }}>Winning Horse: #{ev.winning_slot}</div>}
+                                  {ev.winning_slot && <div style={{ color: 'var(--accent-green)', fontWeight: 600 }}>🏆 Winning Horse: #{ev.winning_slot}</div>}
+                                  {ev.winner_names && <div style={{ color: '#f1c40f', fontWeight: 600 }}>🏆 Winner(s): {ev.winner_names}</div>}
                                   {ev.qualification_url && (
                                     <div style={{ marginTop: 4 }}>
                                       🔗 <a href={ev.qualification_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>Qualification URL</a>
@@ -1593,7 +1650,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
             <div className="card-title">🃏 Poker Events
               <span className="em-section-counts">
                 <span className="em-count-active">{totalPokerActive} active</span>
-                {pokerEvents.length - totalPokerActive > 0 && <span className="em-count-past">{pokerEvents.length - totalPokerActive} past</span>}
+                {totalPokerCompleted > 0 && <span className="em-count-past">{totalPokerCompleted} completed</span>}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1607,7 +1664,12 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           {pFiltered.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon">🃏</div>
-              <div className="empty-state-text">{hideCompleted && pokerEvents.length > 0 ? `${pokerEvents.length} completed event${pokerEvents.length > 1 ? 's' : ''} hidden` : 'No poker events yet. Create one below.'}</div>
+              <div className="empty-state-text">
+                {statusFilter === 'active' && pokerEvents.length > 0 ? `No active poker events. ${pokerEvents.length} total — change filter to view.` :
+                 statusFilter === 'completed' ? 'No completed poker events yet.' :
+                 statusFilter === 'cancelled' ? 'No cancelled poker events.' :
+                 'No poker events yet. Create one above.'}
+              </div>
             </div>
           ) : (
             <table className="data-table">
