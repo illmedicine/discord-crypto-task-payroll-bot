@@ -310,6 +310,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
     return () => clearInterval(id)
   }, [guildId])
 
+  /* ---- Sync createType with selected tab ---- */
+  useEffect(() => {
+    if (tab === 'vote' || tab === 'race' || tab === 'poker') setCreateType(tab)
+  }, [tab])
+
   /* ==================================================================
    *  VOTE EVENT HANDLERS
    * ================================================================ */
@@ -788,6 +793,442 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       </div>
 
       {/* ============================================================ */}
+      {/*  CREATE EVENT FORM (owner only)                               */}
+      {/* ============================================================ */}
+      {isOwner && (tab === 'all' || tab === 'vote' || tab === 'race' || tab === 'poker') && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-header">
+            <div className="card-title">Create New Event</div>
+            {tab === 'all' && (
+              <div className="em-create-tabs">
+                <button className={`em-create-tab ${createType === 'vote' ? 'active' : ''}`}
+                        onClick={() => setCreateType('vote')}>
+                  🗳️ Vote Event
+                </button>
+                <button className={`em-create-tab ${createType === 'race' ? 'active' : ''}`}
+                        onClick={() => setCreateType('race')}>
+                  🏇 Horse Race
+                </button>
+                <button className={`em-create-tab ${createType === 'poker' ? 'active' : ''}`}
+                        onClick={() => setCreateType('poker')}>
+                  🃏 Poker
+                </button>
+              </div>
+            )}
+            {tab !== 'all' && (
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                {tab === 'vote' ? '🗳️ Vote Event' : tab === 'race' ? '🏇 Horse Race' : '🃏 Poker'}
+              </span>
+            )}
+          </div>
+          {/* ======================================================== */}
+          {/*  Vote Event Create Form                                    */}
+          {/* ======================================================== */}
+          {createType === 'vote' && (
+            <form onSubmit={handleCreateVote}>
+              {/* Row 1: Title + Channel */}
+              <div className="form-row">
+                <div className="form-group" style={{ flex: 2 }}>
+                  <label className="form-label">Title *</label>
+                  <input className="form-input" value={vTitle} onChange={e => setVTitle(e.target.value)}
+                         placeholder="e.g. Best Meme of the Week" required />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Channel *</label>
+                  <select className="form-select" value={vChannelId} onChange={e => { setVChannelId(e.target.value); setMediaChannelId(e.target.value) }}>
+                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <textarea className="form-textarea" value={vDescription} onChange={e => setVDescription(e.target.value)}
+                          placeholder="Describe the voting challenge..." rows={2} />
+              </div>
+
+              {/* Row 2: Prize, Currency, Min, Max, Duration */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Prize Pool</label>
+                  <input className="form-input" type="number" step="any" min="0" value={vPrizeAmount}
+                         onChange={e => setVPrizeAmount(e.target.value)} placeholder="0" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Currency</label>
+                  <select className="form-select" value={vCurrency} onChange={e => setVCurrency(e.target.value)}>
+                    <option value="SOL">SOL</option>
+                    <option value="USD">USD</option>
+                    <option value="USDC">USDC (stable)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Min Seats</label>
+                  <input className="form-input" type="number" min="1" value={vMinParticipants}
+                         onChange={e => setVMinParticipants(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Max Seats</label>
+                  <input className="form-input" type="number" min="2" value={vMaxParticipants}
+                         onChange={e => setVMaxParticipants(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Duration (min)</label>
+                  <input className="form-input" type="number" min="1" value={vDurationMinutes}
+                         onChange={e => setVDurationMinutes(e.target.value)} placeholder="∞" />
+                </div>
+              </div>
+
+              {/* Qualification URL */}
+              <div className="form-group">
+                <label className="form-label">Qualification URL (optional)</label>
+                <input className="form-input" type="url" value={vQualificationUrl}
+                       onChange={e => setVQualificationUrl(e.target.value)}
+                       placeholder="https://example.com/page-to-visit" />
+                <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '4px 0 0' }}>
+                  If set, participants must visit this URL and submit a screenshot proof before they can join the event.
+                </p>
+              </div>
+
+              {/* Image selection */}
+              <div className="form-group">
+                <label className="form-label">Images * (min 2, max 5)</label>
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 8px' }}>
+                  Upload from your PC or pick images already posted in the selected Discord channel. Click the ⭐ to mark your secret winning pick.
+                </p>
+
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={uploading || images.length >= 5}
+                          onClick={() => fileInputRef.current?.click()}>
+                    {uploading ? 'Uploading...' : '📤 Upload from PC'}
+                  </button>
+                  <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
+                         onChange={handleFileUpload} />
+                  <button type="button" className="btn btn-secondary btn-sm" disabled={images.length >= 5}
+                          onClick={() => { setShowMediaPicker(!showMediaPicker); if (!showMediaPicker) loadMedia() }}>
+                    {showMediaPicker ? '✕ Close Picker' : '🖼️ Pick from Discord'}
+                  </button>
+                </div>
+
+                {/* Discord Media Picker */}
+                {showMediaPicker && (
+                  <div className="card" style={{ marginBottom: 12, padding: 12, background: 'var(--bg-secondary)' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>Discord Channel Media</span>
+                      <select className="form-select" style={{ width: 180, fontSize: 12 }}
+                              value={mediaChannelId} onChange={e => setMediaChannelId(e.target.value)}>
+                        {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                      </select>
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={loadMedia} disabled={mediaLoading}>
+                        {mediaLoading ? <span className="spinner" /> : '🔄 Load'}
+                      </button>
+                    </div>
+                    {discordMedia.length === 0 && !mediaLoading && (
+                      <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No images found. Post images there first, then click Load.</p>
+                    )}
+                    <div className="ve-media-grid">
+                      {discordMedia.map(m => {
+                        const picked = images.some(i => i.id === m.id)
+                        return (
+                          <div key={m.id} className={`ve-media-thumb ${picked ? 've-media-picked' : ''}`}
+                               onClick={() => !picked && pickMedia(m)}
+                               title={`${m.name}\nBy: ${m.authorTag}\n${m.postedAt ? new Date(m.postedAt).toLocaleString() : ''}`}>
+                            <img src={m.proxyURL || m.url} alt={m.name} loading="lazy" />
+                            {picked && <div className="ve-media-check">✓</div>}
+                            <div className="ve-media-label">ID: {m.id.slice(0, 8)}…</div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Selected images with star picker */}
+                {images.length > 0 && (
+                  <div className="ve-selected-images">
+                    {images.map((img, idx) => (
+                      <div key={img.id} className={`ve-img-card ${favoriteIdx === idx ? 've-img-winner' : ''}`}>
+                        <img src={img.url} alt={`Image ${idx + 1}`} className="ve-img-preview" />
+                        <div className="ve-img-overlay">
+                          <span className="ve-img-num">#{idx + 1}</span>
+                          <div className="ve-img-actions">
+                            <button type="button" className={`ve-star-btn ${favoriteIdx === idx ? 'active' : ''}`}
+                                    onClick={() => setFavoriteIdx(favoriteIdx === idx ? null : idx)}
+                                    title="Set as winning image (private)">
+                              {favoriteIdx === idx ? '⭐' : '☆'}
+                            </button>
+                            <button type="button" className="ve-remove-btn" onClick={() => removeImage(idx)} title="Remove image">
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                        <div className="ve-img-meta">
+                          <span className={`ve-img-source ${img.source}`}>
+                            {img.source === 'upload' ? '📤 Uploaded' : img.source === 'discord' ? '🖼️ Discord' : '🔗 URL'}
+                          </span>
+                          {favoriteIdx === idx && <span className="ve-winner-badge">🏆 Winner Pick</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {favoriteIdx === null && images.length >= 2 && (
+                  <p style={{ fontSize: 12, color: '#e67e22', marginTop: 4 }}>⚠️ Click the ⭐ on one image to set it as your secret winning pick.</p>
+                )}
+              </div>
+
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button type="submit" className="btn btn-primary"
+                        disabled={images.length < 2 || favoriteIdx === null || !vTitle}>
+                  Create Vote Event
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {images.length < 2 ? `Need ${2 - images.length} more image(s)` : favoriteIdx === null ? 'Select a winner' : '✅ Ready'}
+                </span>
+              </div>
+            </form>
+          )}
+
+          {/* ======================================================== */}
+          {/*  Horse Race Create Form                                    */}
+          {/* ======================================================== */}
+          {createType === 'race' && (
+            <form onSubmit={handleCreateRace}>
+              {/* Row 1: Title + Channel */}
+              <div className="form-row">
+                <div className="form-group" style={{ flex: 2 }}>
+                  <label className="form-label">Title *</label>
+                  <input className="form-input" value={rTitle} onChange={e => setRTitle(e.target.value)}
+                         placeholder="e.g. Friday Night Derby" required />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Channel *</label>
+                  <select className="form-select" value={rChannelId} onChange={e => setRChannelId(e.target.value)}>
+                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <textarea className="form-textarea" value={rDescription} onChange={e => setRDescription(e.target.value)}
+                          placeholder="Describe the horse race event..." rows={2} />
+              </div>
+
+              {/* Mode + Prize/Fee */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Mode</label>
+                  <select className="form-select" value={rMode} onChange={e => setRMode(e.target.value as 'house' | 'pot')}>
+                    <option value="house">🏠 House-funded (you set prize)</option>
+                    <option value="pot">🏦 Pot Split (entry fees pooled)</option>
+                  </select>
+                </div>
+                {rMode === 'house' ? (
+                  <div className="form-group">
+                    <label className="form-label">Prize Pool</label>
+                    <input className="form-input" type="number" step="any" min="0" value={rPrizeAmount}
+                           onChange={e => setRPrizeAmount(e.target.value)} placeholder="0" />
+                  </div>
+                ) : (
+                  <div className="form-group">
+                    <label className="form-label">Entry Fee</label>
+                    <input className="form-input" type="number" step="any" min="0" value={rEntryFee}
+                           onChange={e => setREntryFee(e.target.value)} placeholder="0.01" />
+                  </div>
+                )}
+                <div className="form-group">
+                  <label className="form-label">Currency</label>
+                  <select className="form-select" value={rCurrency} onChange={e => setRCurrency(e.target.value)}>
+                    <option value="SOL">SOL</option>
+                    <option value="USD">USD</option>
+                    <option value="USDC">USDC (stable)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Players + Duration */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Min Players</label>
+                  <input className="form-input" type="number" min="1" value={rMinPlayers}
+                         onChange={e => setRMinPlayers(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Max Players</label>
+                  <input className="form-input" type="number" min="2" value={rMaxPlayers}
+                         onChange={e => setRMaxPlayers(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Duration (min)</label>
+                  <input className="form-input" type="number" min="1" value={rDurationMinutes}
+                         onChange={e => setRDurationMinutes(e.target.value)} placeholder="∞" />
+                </div>
+              </div>
+
+              {/* Qualification URL */}
+              <div className="form-group">
+                <label className="form-label">Qualification URL <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>(optional)</span></label>
+                <input className="form-input" value={rQualificationUrl}
+                       onChange={e => setRQualificationUrl(e.target.value)}
+                       placeholder="https://... — users must visit this URL and upload a screenshot to qualify" />
+              </div>
+
+              {/* Horse configuration */}
+              <div className="form-group">
+                <label className="form-label">Horses ({numSlots})</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <input className="form-input" type="number" min="2" max="6" value={numSlots}
+                         onChange={e => handleNumSlotsChange(Number(e.target.value))}
+                         style={{ width: 80 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>2–6 horses</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {slots.map((slot, idx) => (
+                    <div key={idx} style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      background: 'var(--bg-secondary)', padding: '6px 10px',
+                      borderRadius: 8, border: '1px solid var(--border-color)',
+                      borderLeft: `4px solid ${slot.color}`,
+                    }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', minWidth: 16 }}>{idx + 1}.</span>
+                      <input className="form-input" value={slot.label}
+                             onChange={e => updateSlotLabel(idx, e.target.value)}
+                             style={{ width: 120, fontSize: 13, padding: '4px 8px' }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button type="submit" className="btn btn-primary"
+                        disabled={slots.length < 2 || !rTitle}>
+                  Create Horse Race
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {!rTitle ? 'Enter a title' : slots.length < 2 ? 'Need at least 2 horses' : '✅ Ready'}
+                </span>
+              </div>
+            </form>
+          )}
+
+          {/* ======================================================== */}
+          {/*  Poker Create Form                                         */}
+          {/* ======================================================== */}
+          {createType === 'poker' && (
+            <form onSubmit={handleCreatePoker}>
+              {/* Row 1: Title + Channel */}
+              <div className="form-row">
+                <div className="form-group" style={{ flex: 2 }}>
+                  <label className="form-label">Title *</label>
+                  <input className="form-input" value={pTitle} onChange={e => setPTitle(e.target.value)}
+                         placeholder="e.g. Friday Night Poker" required />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Channel *</label>
+                  <select className="form-select" value={pChannelId} onChange={e => setPChannelId(e.target.value)}>
+                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <textarea className="form-textarea" value={pDescription} onChange={e => setPDescription(e.target.value)}
+                          placeholder="Describe the poker event..." rows={2} />
+              </div>
+
+              {/* Mode + Buy-in */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Mode</label>
+                  <select className="form-select" value={pMode} onChange={e => setPMode(e.target.value as 'pot' | 'casual')}>
+                    <option value="pot">🏦 Pot (real SOL buy-in)</option>
+                    <option value="casual">🎮 Casual (play money)</option>
+                  </select>
+                </div>
+                {pMode === 'pot' && (
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Buy-in Amount</label>
+                      <input className="form-input" type="number" step="any" min="0" value={pBuyIn}
+                             onChange={e => setPBuyIn(e.target.value)} placeholder="0.1" />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Currency</label>
+                      <select className="form-select" value={pCurrency} onChange={e => setPCurrency(e.target.value)}>
+                        <option value="SOL">SOL</option>
+                        <option value="USD">USD</option>
+                        <option value="USDC">USDC (stable)</option>
+                      </select>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Blinds + Chips */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Small Blind</label>
+                  <input className="form-input" type="number" min="1" value={pSmallBlind}
+                         onChange={e => setPSmallBlind(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Big Blind</label>
+                  <input className="form-input" type="number" min="2" value={pBigBlind}
+                         onChange={e => setPBigBlind(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Starting Chips</label>
+                  <input className="form-input" type="number" min="100" value={pStartingChips}
+                         onChange={e => setPStartingChips(e.target.value)} />
+                </div>
+              </div>
+
+              {/* Players + Timer */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Max Players</label>
+                  <input className="form-input" type="number" min="2" max="8" value={pMaxPlayers}
+                         onChange={e => setPMaxPlayers(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Turn Timer (sec)</label>
+                  <input className="form-input" type="number" min="10" max="120" value={pTurnTimer}
+                         onChange={e => setPTurnTimer(e.target.value)} />
+                </div>
+              </div>
+
+              {/* Chip value preview */}
+              {pMode === 'pot' && Number(pBuyIn) > 0 && Number(pStartingChips) > 0 && (
+                <div style={{
+                  background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 12px',
+                  border: '1px solid var(--border-color)', marginTop: 8, fontSize: 12,
+                  color: 'var(--text-secondary)',
+                }}>
+                  💡 Each chip = <strong>{(Number(pBuyIn) / Number(pStartingChips)).toFixed(6)} {pCurrency}</strong>
+                  {' • '}90% of total pot paid to winners • 10% house cut
+                </div>
+              )}
+
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button type="submit" className="btn btn-primary" disabled={!pTitle}>
+                  Create Poker Event
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {!pTitle ? 'Enter a title' : '✅ Ready'}
+                </span>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+
+      {/* ============================================================ */}
       {/*  VOTE EVENTS TABLE                                            */}
       {/* ============================================================ */}
       {(tab === 'all' || tab === 'vote') && (
@@ -1234,435 +1675,6 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
         </div>
       )}
 
-      {/* ============================================================ */}
-      {/*  CREATE EVENT FORM (owner only)                               */}
-      {/* ============================================================ */}
-      {isOwner && (
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">Create New Event</div>
-            <div className="em-create-tabs">
-              <button className={`em-create-tab ${createType === 'vote' ? 'active' : ''}`}
-                      onClick={() => setCreateType('vote')}>
-                🗳️ Vote Event
-              </button>
-              <button className={`em-create-tab ${createType === 'race' ? 'active' : ''}`}
-                      onClick={() => setCreateType('race')}>
-                🏇 Horse Race
-              </button>
-              <button className={`em-create-tab ${createType === 'poker' ? 'active' : ''}`}
-                      onClick={() => setCreateType('poker')}>
-                🃏 Poker
-              </button>
-            </div>
-          </div>
-
-          {/* ======================================================== */}
-          {/*  Vote Event Create Form                                    */}
-          {/* ======================================================== */}
-          {createType === 'vote' && (
-            <form onSubmit={handleCreateVote}>
-              {/* Row 1: Title + Channel */}
-              <div className="form-row">
-                <div className="form-group" style={{ flex: 2 }}>
-                  <label className="form-label">Title *</label>
-                  <input className="form-input" value={vTitle} onChange={e => setVTitle(e.target.value)}
-                         placeholder="e.g. Best Meme of the Week" required />
-                </div>
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label">Channel *</label>
-                  <select className="form-select" value={vChannelId} onChange={e => { setVChannelId(e.target.value); setMediaChannelId(e.target.value) }}>
-                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-textarea" value={vDescription} onChange={e => setVDescription(e.target.value)}
-                          placeholder="Describe the voting challenge..." rows={2} />
-              </div>
-
-              {/* Row 2: Prize, Currency, Min, Max, Duration */}
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Prize Pool</label>
-                  <input className="form-input" type="number" step="any" min="0" value={vPrizeAmount}
-                         onChange={e => setVPrizeAmount(e.target.value)} placeholder="0" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Currency</label>
-                  <select className="form-select" value={vCurrency} onChange={e => setVCurrency(e.target.value)}>
-                    <option value="SOL">SOL</option>
-                    <option value="USD">USD</option>
-                    <option value="USDC">USDC (stable)</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Min Seats</label>
-                  <input className="form-input" type="number" min="1" value={vMinParticipants}
-                         onChange={e => setVMinParticipants(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Max Seats</label>
-                  <input className="form-input" type="number" min="2" value={vMaxParticipants}
-                         onChange={e => setVMaxParticipants(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Duration (min)</label>
-                  <input className="form-input" type="number" min="1" value={vDurationMinutes}
-                         onChange={e => setVDurationMinutes(e.target.value)} placeholder="∞" />
-                </div>
-              </div>
-
-              {/* Qualification URL */}
-              <div className="form-group">
-                <label className="form-label">Qualification URL (optional)</label>
-                <input className="form-input" type="url" value={vQualificationUrl}
-                       onChange={e => setVQualificationUrl(e.target.value)}
-                       placeholder="https://example.com/page-to-visit" />
-                <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '4px 0 0' }}>
-                  If set, participants must visit this URL and submit a screenshot proof before they can join the event.
-                </p>
-              </div>
-
-              {/* Image selection */}
-              <div className="form-group">
-                <label className="form-label">Images * (min 2, max 5)</label>
-                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 8px' }}>
-                  Upload from your PC or pick images already posted in the selected Discord channel. Click the ⭐ to mark your secret winning pick.
-                </p>
-
-                <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-                  <button type="button" className="btn btn-primary btn-sm" disabled={uploading || images.length >= 5}
-                          onClick={() => fileInputRef.current?.click()}>
-                    {uploading ? 'Uploading...' : '📤 Upload from PC'}
-                  </button>
-                  <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
-                         onChange={handleFileUpload} />
-                  <button type="button" className="btn btn-secondary btn-sm" disabled={images.length >= 5}
-                          onClick={() => { setShowMediaPicker(!showMediaPicker); if (!showMediaPicker) loadMedia() }}>
-                    {showMediaPicker ? '✕ Close Picker' : '🖼️ Pick from Discord'}
-                  </button>
-                </div>
-
-                {/* Discord Media Picker */}
-                {showMediaPicker && (
-                  <div className="card" style={{ marginBottom: 12, padding: 12, background: 'var(--bg-secondary)' }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>Discord Channel Media</span>
-                      <select className="form-select" style={{ width: 180, fontSize: 12 }}
-                              value={mediaChannelId} onChange={e => setMediaChannelId(e.target.value)}>
-                        {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
-                      </select>
-                      <button type="button" className="btn btn-secondary btn-sm" onClick={loadMedia} disabled={mediaLoading}>
-                        {mediaLoading ? <span className="spinner" /> : '🔄 Load'}
-                      </button>
-                    </div>
-                    {discordMedia.length === 0 && !mediaLoading && (
-                      <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No images found. Post images there first, then click Load.</p>
-                    )}
-                    <div className="ve-media-grid">
-                      {discordMedia.map(m => {
-                        const picked = images.some(i => i.id === m.id)
-                        return (
-                          <div key={m.id} className={`ve-media-thumb ${picked ? 've-media-picked' : ''}`}
-                               onClick={() => !picked && pickMedia(m)}
-                               title={`${m.name}\nBy: ${m.authorTag}\n${m.postedAt ? new Date(m.postedAt).toLocaleString() : ''}`}>
-                            <img src={m.proxyURL || m.url} alt={m.name} loading="lazy" />
-                            {picked && <div className="ve-media-check">✓</div>}
-                            <div className="ve-media-label">ID: {m.id.slice(0, 8)}…</div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Selected images with star picker */}
-                {images.length > 0 && (
-                  <div className="ve-selected-images">
-                    {images.map((img, idx) => (
-                      <div key={img.id} className={`ve-img-card ${favoriteIdx === idx ? 've-img-winner' : ''}`}>
-                        <img src={img.url} alt={`Image ${idx + 1}`} className="ve-img-preview" />
-                        <div className="ve-img-overlay">
-                          <span className="ve-img-num">#{idx + 1}</span>
-                          <div className="ve-img-actions">
-                            <button type="button" className={`ve-star-btn ${favoriteIdx === idx ? 'active' : ''}`}
-                                    onClick={() => setFavoriteIdx(favoriteIdx === idx ? null : idx)}
-                                    title="Set as winning image (private)">
-                              {favoriteIdx === idx ? '⭐' : '☆'}
-                            </button>
-                            <button type="button" className="ve-remove-btn" onClick={() => removeImage(idx)} title="Remove image">
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                        <div className="ve-img-meta">
-                          <span className={`ve-img-source ${img.source}`}>
-                            {img.source === 'upload' ? '📤 Uploaded' : img.source === 'discord' ? '🖼️ Discord' : '🔗 URL'}
-                          </span>
-                          {favoriteIdx === idx && <span className="ve-winner-badge">🏆 Winner Pick</span>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {favoriteIdx === null && images.length >= 2 && (
-                  <p style={{ fontSize: 12, color: '#e67e22', marginTop: 4 }}>⚠️ Click the ⭐ on one image to set it as your secret winning pick.</p>
-                )}
-              </div>
-
-              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button type="submit" className="btn btn-primary"
-                        disabled={images.length < 2 || favoriteIdx === null || !vTitle}>
-                  Create Vote Event
-                </button>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {images.length < 2 ? `Need ${2 - images.length} more image(s)` : favoriteIdx === null ? 'Select a winner' : '✅ Ready'}
-                </span>
-              </div>
-            </form>
-          )}
-
-          {/* ======================================================== */}
-          {/*  Horse Race Create Form                                    */}
-          {/* ======================================================== */}
-          {createType === 'race' && (
-            <form onSubmit={handleCreateRace}>
-              {/* Row 1: Title + Channel */}
-              <div className="form-row">
-                <div className="form-group" style={{ flex: 2 }}>
-                  <label className="form-label">Title *</label>
-                  <input className="form-input" value={rTitle} onChange={e => setRTitle(e.target.value)}
-                         placeholder="e.g. Friday Night Derby" required />
-                </div>
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label">Channel *</label>
-                  <select className="form-select" value={rChannelId} onChange={e => setRChannelId(e.target.value)}>
-                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-textarea" value={rDescription} onChange={e => setRDescription(e.target.value)}
-                          placeholder="Describe the horse race event..." rows={2} />
-              </div>
-
-              {/* Mode + Prize/Fee */}
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Mode</label>
-                  <select className="form-select" value={rMode} onChange={e => setRMode(e.target.value as 'house' | 'pot')}>
-                    <option value="house">🏠 House-funded (you set prize)</option>
-                    <option value="pot">🏦 Pot Split (entry fees pooled)</option>
-                  </select>
-                </div>
-                {rMode === 'house' ? (
-                  <div className="form-group">
-                    <label className="form-label">Prize Pool</label>
-                    <input className="form-input" type="number" step="any" min="0" value={rPrizeAmount}
-                           onChange={e => setRPrizeAmount(e.target.value)} placeholder="0" />
-                  </div>
-                ) : (
-                  <div className="form-group">
-                    <label className="form-label">Entry Fee</label>
-                    <input className="form-input" type="number" step="any" min="0" value={rEntryFee}
-                           onChange={e => setREntryFee(e.target.value)} placeholder="0.01" />
-                  </div>
-                )}
-                <div className="form-group">
-                  <label className="form-label">Currency</label>
-                  <select className="form-select" value={rCurrency} onChange={e => setRCurrency(e.target.value)}>
-                    <option value="SOL">SOL</option>
-                    <option value="USD">USD</option>
-                    <option value="USDC">USDC (stable)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Players + Duration */}
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Min Players</label>
-                  <input className="form-input" type="number" min="1" value={rMinPlayers}
-                         onChange={e => setRMinPlayers(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Max Players</label>
-                  <input className="form-input" type="number" min="2" value={rMaxPlayers}
-                         onChange={e => setRMaxPlayers(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Duration (min)</label>
-                  <input className="form-input" type="number" min="1" value={rDurationMinutes}
-                         onChange={e => setRDurationMinutes(e.target.value)} placeholder="∞" />
-                </div>
-              </div>
-
-              {/* Qualification URL */}
-              <div className="form-group">
-                <label className="form-label">Qualification URL <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>(optional)</span></label>
-                <input className="form-input" value={rQualificationUrl}
-                       onChange={e => setRQualificationUrl(e.target.value)}
-                       placeholder="https://... — users must visit this URL and upload a screenshot to qualify" />
-              </div>
-
-              {/* Horse configuration */}
-              <div className="form-group">
-                <label className="form-label">Horses ({numSlots})</label>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                  <input className="form-input" type="number" min="2" max="6" value={numSlots}
-                         onChange={e => handleNumSlotsChange(Number(e.target.value))}
-                         style={{ width: 80 }} />
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>2–6 horses</span>
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {slots.map((slot, idx) => (
-                    <div key={idx} style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      background: 'var(--bg-secondary)', padding: '6px 10px',
-                      borderRadius: 8, border: '1px solid var(--border-color)',
-                      borderLeft: `4px solid ${slot.color}`,
-                    }}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', minWidth: 16 }}>{idx + 1}.</span>
-                      <input className="form-input" value={slot.label}
-                             onChange={e => updateSlotLabel(idx, e.target.value)}
-                             style={{ width: 120, fontSize: 13, padding: '4px 8px' }} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button type="submit" className="btn btn-primary"
-                        disabled={slots.length < 2 || !rTitle}>
-                  Create Horse Race
-                </button>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {!rTitle ? 'Enter a title' : slots.length < 2 ? 'Need at least 2 horses' : '✅ Ready'}
-                </span>
-              </div>
-            </form>
-          )}
-
-          {/* ======================================================== */}
-          {/*  Poker Create Form                                         */}
-          {/* ======================================================== */}
-          {createType === 'poker' && (
-            <form onSubmit={handleCreatePoker}>
-              {/* Row 1: Title + Channel */}
-              <div className="form-row">
-                <div className="form-group" style={{ flex: 2 }}>
-                  <label className="form-label">Title *</label>
-                  <input className="form-input" value={pTitle} onChange={e => setPTitle(e.target.value)}
-                         placeholder="e.g. Friday Night Poker" required />
-                </div>
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label">Channel *</label>
-                  <select className="form-select" value={pChannelId} onChange={e => setPChannelId(e.target.value)}>
-                    {channels.map(c => <option key={c.id} value={c.id}>#{c.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-textarea" value={pDescription} onChange={e => setPDescription(e.target.value)}
-                          placeholder="Describe the poker event..." rows={2} />
-              </div>
-
-              {/* Mode + Buy-in */}
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Mode</label>
-                  <select className="form-select" value={pMode} onChange={e => setPMode(e.target.value as 'pot' | 'casual')}>
-                    <option value="pot">🏦 Pot (real SOL buy-in)</option>
-                    <option value="casual">🎮 Casual (play money)</option>
-                  </select>
-                </div>
-                {pMode === 'pot' && (
-                  <>
-                    <div className="form-group">
-                      <label className="form-label">Buy-in Amount</label>
-                      <input className="form-input" type="number" step="any" min="0" value={pBuyIn}
-                             onChange={e => setPBuyIn(e.target.value)} placeholder="0.1" />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Currency</label>
-                      <select className="form-select" value={pCurrency} onChange={e => setPCurrency(e.target.value)}>
-                        <option value="SOL">SOL</option>
-                        <option value="USD">USD</option>
-                        <option value="USDC">USDC (stable)</option>
-                      </select>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Blinds + Chips */}
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Small Blind</label>
-                  <input className="form-input" type="number" min="1" value={pSmallBlind}
-                         onChange={e => setPSmallBlind(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Big Blind</label>
-                  <input className="form-input" type="number" min="2" value={pBigBlind}
-                         onChange={e => setPBigBlind(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Starting Chips</label>
-                  <input className="form-input" type="number" min="100" value={pStartingChips}
-                         onChange={e => setPStartingChips(e.target.value)} />
-                </div>
-              </div>
-
-              {/* Players + Timer */}
-              <div className="form-row">
-                <div className="form-group">
-                  <label className="form-label">Max Players</label>
-                  <input className="form-input" type="number" min="2" max="8" value={pMaxPlayers}
-                         onChange={e => setPMaxPlayers(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Turn Timer (sec)</label>
-                  <input className="form-input" type="number" min="10" max="120" value={pTurnTimer}
-                         onChange={e => setPTurnTimer(e.target.value)} />
-                </div>
-              </div>
-
-              {/* Chip value preview */}
-              {pMode === 'pot' && Number(pBuyIn) > 0 && Number(pStartingChips) > 0 && (
-                <div style={{
-                  background: 'var(--bg-secondary)', borderRadius: 8, padding: '8px 12px',
-                  border: '1px solid var(--border-color)', marginTop: 8, fontSize: 12,
-                  color: 'var(--text-secondary)',
-                }}>
-                  💡 Each chip = <strong>{(Number(pBuyIn) / Number(pStartingChips)).toFixed(6)} {pCurrency}</strong>
-                  {' • '}90% of total pot paid to winners • 10% house cut
-                </div>
-              )}
-
-              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button type="submit" className="btn btn-primary" disabled={!pTitle}>
-                  Create Poker Event
-                </button>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {!pTitle ? 'Enter a title' : '✅ Ready'}
-                </span>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
 
       {/* ============================================================ */}
       {/*  How Events Work (collapsible)                                */}
