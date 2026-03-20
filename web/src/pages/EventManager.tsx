@@ -1275,8 +1275,8 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           <div className="card-header">
             <div className="card-title">🗳️ Vote Events
               <span className="em-section-counts">
-                <span className="em-count-active">{totalVoteActive} active</span>
-                {totalVoteCompleted > 0 && <span className="em-count-past">{totalVoteCompleted} completed</span>}
+                <span className="em-count-active" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('active')}>{totalVoteActive} active</span>
+                {totalVoteCompleted > 0 && <span className="em-count-past" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('completed')}>{totalVoteCompleted} completed</span>}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1451,9 +1451,9 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           <div className="card-header">
             <div className="card-title">🏇 Horse Race Events
               <span className="em-section-counts">
-                <span className="em-count-active">{totalRaceActive} active</span>
-                {totalRaceCompleted > 0 && <span className="em-count-past">{totalRaceCompleted} completed</span>}
-                {totalRaceCancelled > 0 && <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{totalRaceCancelled} cancelled</span>}
+                <span className="em-count-active" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('active')}>{totalRaceActive} active</span>
+                {totalRaceCompleted > 0 && <span className="em-count-past" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('completed')}>{totalRaceCompleted} completed</span>}
+                {totalRaceCancelled > 0 && <span style={{ fontSize: 11, color: '#888', marginLeft: 8, cursor: 'pointer' }} onClick={() => setStatusFilter('cancelled')}>{totalRaceCancelled} cancelled</span>}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1481,7 +1481,98 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                  'No horse race events yet. Create one above.'}
               </div>
             </div>
+          ) : statusFilter === 'completed' || statusFilter === 'cancelled' ? (
+            /* ── OTB-style results cards for completed/cancelled events ── */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '12px 0' }}>
+              {rVisible.map(ev => (
+                <div key={ev.id} style={{
+                  background: 'var(--bg-secondary)', borderRadius: 10,
+                  border: `1px solid ${ev.status === 'cancelled' ? '#555' : 'var(--accent-green)'}`,
+                  padding: '14px 18px', position: 'relative', overflow: 'hidden',
+                }}>
+                  {/* Status ribbon */}
+                  <div style={{
+                    position: 'absolute', top: 0, right: 0,
+                    background: ev.status === 'cancelled' ? '#555' : '#27ae60',
+                    color: '#fff', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                    padding: '3px 12px', borderBottomLeftRadius: 8,
+                  }}>{ev.status}</div>
+
+                  {/* Top row: ID, title, mode, prize */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>#{ev.id}</span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{ev.title}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{ev.mode === 'pot' ? '🏦 Pot' : '🏠 House'}</span>
+                    <span className="sol-badge" style={{ fontSize: 11 }}>
+                      {ev.mode === 'pot' ? `${ev.entry_fee} ${ev.currency}/bet` : `${ev.prize_amount} ${ev.currency}`}
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>👥 {ev.current_players}/{ev.max_players}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{formatTimeAgo(ev.created_at)}</span>
+                  </div>
+
+                  {/* Winner section — prominent */}
+                  {ev.status !== 'cancelled' && (
+                    <div style={{
+                      background: 'linear-gradient(135deg, rgba(241,196,15,0.12) 0%, rgba(39,174,96,0.10) 100%)',
+                      borderRadius: 8, padding: '10px 14px', marginBottom: 6,
+                      border: '1px solid rgba(241,196,15,0.25)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 22 }}>🏆</span>
+                        <div>
+                          {ev.winner_names ? (
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#f1c40f' }}>
+                              {ev.winner_names}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Winner data not available</div>
+                          )}
+                          {ev.winning_slot && (
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                              Winning Horse: #{ev.winning_slot}
+                            </div>
+                          )}
+                        </div>
+                        {ev.mode === 'pot' && ev.current_players > 0 && (
+                          <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Prize Pool</div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-green)' }}>
+                              {(ev.entry_fee * ev.current_players * 0.9).toFixed(2)} {ev.currency}
+                            </div>
+                          </div>
+                        )}
+                        {ev.mode === 'house' && (
+                          <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Prize</div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-green)' }}>
+                              {ev.prize_amount} {ev.currency}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cancelled reason */}
+                  {ev.status === 'cancelled' && (
+                    <div style={{ fontSize: 12, color: '#888', padding: '6px 0' }}>
+                      🚫 This event was cancelled — {ev.current_players === 0 ? 'no players joined' : 'manually cancelled'}.
+                    </div>
+                  )}
+
+                  {/* Bottom actions */}
+                  {isOwner && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                      <button className="btn btn-danger btn-sm" style={{ fontSize: 11 }} onClick={() => handleDeleteRace(ev.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           ) : (
+            /* ── Active / All management table ── */
             <table className="data-table">
               <thead>
                 <tr>
@@ -1649,8 +1740,8 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
           <div className="card-header">
             <div className="card-title">🃏 Poker Events
               <span className="em-section-counts">
-                <span className="em-count-active">{totalPokerActive} active</span>
-                {totalPokerCompleted > 0 && <span className="em-count-past">{totalPokerCompleted} completed</span>}
+                <span className="em-count-active" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('active')}>{totalPokerActive} active</span>
+                {totalPokerCompleted > 0 && <span className="em-count-past" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('completed')}>{totalPokerCompleted} completed</span>}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

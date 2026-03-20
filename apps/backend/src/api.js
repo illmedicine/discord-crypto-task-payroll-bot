@@ -2789,7 +2789,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           console.error(`[balance] RPC error:`, e.message)
         }
       }
-      res.json({ wallet_address: wallet?.wallet_address || null, wallet, sol_balance, debug })
+      const { wallet_secret: _ws, ...safeWallet } = wallet || {}
+      res.json({ wallet_address: wallet?.wallet_address || null, wallet: wallet ? safeWallet : null, sol_balance, debug })
     } catch (err) {
       res.status(500).json({ error: 'failed_to_get_balance' })
     }
