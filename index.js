@@ -414,6 +414,15 @@ client.once('clientReady', async () => {
             // Get slots for this event
             const evSlots = await db.getGamblingEventSlots(ev.id);
 
+            // Get bets with resolved usernames for participant sync
+            const evBets = await db.getGamblingEventBets(ev.id);
+            const betsForSync = [];
+            for (const b of evBets) {
+              let username = b.user_id;
+              try { const u = await client.users.fetch(b.user_id); username = u.displayName || u.username || b.user_id; } catch {}
+              betsForSync.push({ user_id: b.user_id, username, chosen_slot: b.chosen_slot, bet_amount: b.bet_amount || 0, is_winner: b.is_winner || 0, payment_status: b.payment_status || 'none', wallet_address: b.wallet_address || null, joined_at: b.joined_at || null, guild_id: b.guild_id || ev.guild_id });
+            }
+
             const res = await fetch(syncUrl, {
               method: 'POST', headers,
               body: JSON.stringify({
@@ -427,6 +436,7 @@ client.once('clientReady', async () => {
                 endsAt: ev.ends_at || null, channelId: ev.channel_id,
                 messageId: ev.message_id || null, qualificationUrl: ev.qualification_url || null,
                 slots: evSlots.map(s => ({ slot_number: s.slot_number, label: s.label, color: s.color })),
+                bets: betsForSync,
               }),
             });
             if (res.ok) {

@@ -803,7 +803,7 @@ module.exports = {
 
     // ---- NON-POT MODE: Instant bet (no entry fee) ----
     await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, 0, 'none', null);
-    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount: 0, paymentStatus: 'none', walletAddress: null });
+    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount: 0, paymentStatus: 'none', walletAddress: null, username: interaction.user.displayName || interaction.user.username });
 
     const slots = await db.getGamblingEventSlots(eventId);
     const chosenSlot = slots.find(s => s.slot_number === slotNumber);
@@ -1046,7 +1046,7 @@ module.exports = {
     await db.updateGamblingBetPayment(eventId, interaction.user.id, 'committed', 'entry', transferResult.signature);
     console.log(`[GamblingConfirm] ✅ Bet committed: event #${eventId}, slot ${slotNumber}, user ${interaction.user.id}, amount ${betAmount} ${event.currency}, tx=${transferResult.signature}`);
 
-    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount, paymentStatus: 'committed', walletAddress: userWalletAddress, entryTxSignature: transferResult.signature });
+    syncBetToBackend({ eventId, action: 'bet', userId: interaction.user.id, guildId: interaction.guildId, slotNumber, betAmount, paymentStatus: 'committed', walletAddress: userWalletAddress, entryTxSignature: transferResult.signature, username: interaction.user.displayName || interaction.user.username });
 
     // Record the transaction in history
     try {

@@ -58,6 +58,16 @@ type Qualification = {
 }
 
 /* --- Gambling Event types --- */
+type GamblingEventBet = {
+  user_id: string
+  username: string | null
+  chosen_slot: number
+  bet_amount: number
+  is_winner: number
+  payment_status: string
+  joined_at: string
+}
+
 type GamblingEvent = {
   id: number
   title: string
@@ -78,6 +88,7 @@ type GamblingEvent = {
   qualification_url: string | null
   ends_at: string | null
   created_at: string
+  bets?: GamblingEventBet[]
 }
 
 type SlotEntry = { label: string; color: string }
@@ -1553,6 +1564,31 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                     </div>
                   )}
 
+                  {/* Participants list */}
+                  {ev.bets && ev.bets.length > 0 && (
+                    <div style={{ marginTop: 6, marginBottom: 6 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, fontWeight: 600 }}>
+                        👥 Participants ({ev.bets.length})
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {ev.bets.map((b, i) => (
+                          <span key={i} style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                            fontSize: 11, padding: '3px 8px', borderRadius: 6,
+                            background: b.is_winner ? 'rgba(241,196,15,0.15)' : 'rgba(255,255,255,0.05)',
+                            border: `1px solid ${b.is_winner ? 'rgba(241,196,15,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                            color: b.is_winner ? '#f1c40f' : 'var(--text-secondary)',
+                          }}>
+                            {b.is_winner ? '🏆' : '🏇'}{' '}
+                            <span style={{ fontWeight: b.is_winner ? 700 : 400 }}>{b.username || b.user_id}</span>
+                            <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
+                            {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Cancelled reason */}
                   {ev.status === 'cancelled' && (
                     <div style={{ fontSize: 12, color: '#888', padding: '6px 0' }}>
@@ -1668,6 +1704,29 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                                 </div>
                               </div>
                             </div>
+
+                            {/* Participants */}
+                            {ev.bets && ev.bets.length > 0 && (
+                              <div style={{ marginTop: 12, borderTop: '1px solid var(--border-color)', paddingTop: 10 }}>
+                                <strong style={{ fontSize: 13 }}>👥 Participants ({ev.bets.length})</strong>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                                  {ev.bets.map((b, i) => (
+                                    <span key={i} style={{
+                                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                                      fontSize: 11, padding: '3px 8px', borderRadius: 6,
+                                      background: b.is_winner ? 'rgba(241,196,15,0.15)' : 'rgba(255,255,255,0.05)',
+                                      border: `1px solid ${b.is_winner ? 'rgba(241,196,15,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                                      color: b.is_winner ? '#f1c40f' : 'var(--text-secondary)',
+                                    }}>
+                                      {b.is_winner ? '🏆' : '🏇'}{' '}
+                                      <span style={{ fontWeight: b.is_winner ? 700 : 400 }}>{b.username || b.user_id}</span>
+                                      <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
+                                      {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
 
                             {/* Qualification review for gambling events */}
                             {ev.qualification_url && (

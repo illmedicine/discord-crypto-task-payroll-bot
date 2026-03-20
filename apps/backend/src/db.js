@@ -504,6 +504,7 @@ db.serialize(() => {
   db.run(`ALTER TABLE gambling_event_bets ADD COLUMN entry_tx_signature TEXT`, () => {})
   db.run(`ALTER TABLE gambling_event_bets ADD COLUMN payout_tx_signature TEXT`, () => {})
   db.run(`ALTER TABLE gambling_event_bets ADD COLUMN wallet_address TEXT`, () => {})
+  db.run(`ALTER TABLE gambling_event_bets ADD COLUMN username TEXT`, () => {})
 
   // Gambling Event Qualifications table
   db.run(

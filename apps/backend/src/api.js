@@ -2164,6 +2164,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // ---- Gambling Events ----
   app.get('/api/admin/guilds/:guildId/gambling-events', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM gambling_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
+    // Attach bets/participants for each event (single query, grouped client-side)
+    if (rows.length > 0) {
+      const allBets = await db.all(
+        `SELECT gambling_event_id, user_id, username, chosen_slot, bet_amount, is_winner, payment_status, joined_at
+         FROM gambling_event_bets WHERE guild_id = ? ORDER BY joined_at ASC`,
+        [req.guild.id]
+      )
+      const betsByEvent = {}
+      for (const b of allBets) {
+        if (!betsByEvent[b.gambling_event_id]) betsByEvent[b.gambling_event_id] = []
+        betsByEvent[b.gambling_event_id].push(b)
+      }
+      for (const row of rows) {
+        row.bets = betsByEvent[row.id] || []
+      }
+    }
     res.json(rows)
   })
 
@@ -3967,10 +3983,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const slot = chosenSlot || slotNumber
 
       if (action === 'bet' && userId && guildId) {
+        const username = req.body?.username || null
         await db.run(
-          `INSERT OR IGNORE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [eventId, guildId, userId, slot, betAmount || 0, paymentStatus || 'none', walletAddress || null]
+          `INSERT OR IGNORE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [eventId, guildId, userId, slot, betAmount || 0, paymentStatus || 'none', walletAddress || null, username]
         ).catch(() => {})
+        // Update username if bet already existed
+        if (username) {
+          await db.run(`UPDATE gambling_event_bets SET username = ? WHERE gambling_event_id = ? AND user_id = ?`, [username, eventId, userId]).catch(() => {})
+        }
         await db.run(
           `UPDATE gambling_events SET current_players = (SELECT COUNT(*) FROM gambling_event_bets WHERE gambling_event_id = ?) WHERE id = ?`,
           [eventId, eventId]
@@ -4022,6 +4043,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         if (winnerNames) {
           await db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, eventId]).catch(() => {})
         }
+        // Sync bets/participants if included
+        const syncBets = req.body?.bets
+        if (Array.isArray(syncBets) && syncBets.length > 0) {
+          for (const b of syncBets) {
+            await db.run(
+              `INSERT OR REPLACE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, is_winner, payment_status, wallet_address, joined_at, username)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [eventId, b.guild_id || guildId, b.user_id, b.chosen_slot, b.bet_amount || 0, b.is_winner || 0, b.payment_status || 'none', b.wallet_address || null, b.joined_at || null, b.username || null]
+            ).catch(() => {})
+          }
+        }
         console.log(`[internal] gambling-event #${eventId} status → ${status}${winnerNames ? `, winners: ${winnerNames}` : ''}`)
       } else if (action === 'full_sync' && guildId) {
         // Full upsert: create or replace entire event + slots
@@ -4046,6 +4078,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             await db.run(
               'INSERT OR REPLACE INTO gambling_event_slots (gambling_event_id, slot_number, label, color) VALUES (?, ?, ?, ?)',
               [eventId, s.slot_number, s.label || `Slot ${s.slot_number}`, s.color || '#888']
+            ).catch(() => {})
+          }
+        }
+        // Sync bets/participants if included
+        const fullSyncBets = req.body?.bets
+        if (Array.isArray(fullSyncBets) && fullSyncBets.length > 0) {
+          for (const b of fullSyncBets) {
+            await db.run(
+              `INSERT OR REPLACE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, is_winner, payment_status, wallet_address, joined_at, username)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [eventId, b.guild_id || guildId, b.user_id, b.chosen_slot, b.bet_amount || 0, b.is_winner || 0, b.payment_status || 'none', b.wallet_address || null, b.joined_at || null, b.username || null]
             ).catch(() => {})
           }
         }

@@ -741,7 +741,7 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     await db.updateGamblingEventStatus(eventId, 'completed');
 
-    // Resolve winner display names for backend sync
+    // Resolve winner display names
     let winnerNames = '';
     if (winnerUserIds.length > 0) {
       const names = [];
@@ -754,10 +754,25 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         }
       }
       winnerNames = names.join(', ');
+    } else {
+      winnerNames = 'House wins';
     }
+    // Save winner_names to local DB
+    await new Promise(r => db.db.run('UPDATE gambling_events SET winner_names = ? WHERE id = ?', [winnerNames, eventId], r));
+
+    // Resolve all participant usernames for backend sync
+    const allBets = await db.getGamblingEventBets(eventId);
+    const betsForSync = [];
+    for (const b of allBets) {
+      let username = b.user_id;
+      try { const u = await client.users.fetch(b.user_id); username = u.displayName || u.username || b.user_id; } catch {}
+      betsForSync.push({ user_id: b.user_id, username, chosen_slot: b.chosen_slot, bet_amount: b.bet_amount || 0, is_winner: b.is_winner || 0, payment_status: b.payment_status || 'none', wallet_address: b.wallet_address || null, joined_at: b.joined_at || null, guild_id: b.guild_id || event.guild_id });
+    }
+
     // Include full event data so backend can create event if it doesn't exist
     syncStatusToBackend(eventId, 'completed', event.guild_id, {
       winnerNames, winningSlot,
+      bets: betsForSync,
       title: event.title, description: event.description, mode: event.mode,
       prizeAmount: event.prize_amount, currency: event.currency, entryFee: event.entry_fee,
       minPlayers: event.min_players, maxPlayers: event.max_players, currentPlayers: event.current_players || 0,
