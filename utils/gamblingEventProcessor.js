@@ -139,19 +139,25 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
   }
 }
 
-/** Fire-and-forget sync event status to backend */
+/** Sync event status to backend with logging */
 function syncStatusToBackend(eventId, status, guildId, extra = {}) {
   try {
     const backendUrl = process.env.DCB_BACKEND_URL;
     const secret = process.env.DCB_INTERNAL_SECRET;
-    if (!backendUrl || !secret) return;
+    if (!backendUrl || !secret) {
+      console.warn(`[SYNC] Cannot sync event #${eventId}: DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set`);
+      return;
+    }
     const url = `${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`;
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
       body: JSON.stringify({ eventId, action: 'status_update', status, guildId, ...extra }),
-    }).catch(() => {});
-  } catch (_) {}
+    }).then(r => {
+      if (r.ok) console.log(`[SYNC] \u2705 Event #${eventId} status=${status} synced to backend`);
+      else r.text().then(t => console.error(`[SYNC] \u274c Event #${eventId}: backend returned ${r.status} — ${t}`));
+    }).catch(err => console.error(`[SYNC] \u274c Event #${eventId} sync failed:`, err.message));
+  } catch (e) { console.error(`[SYNC] Error preparing sync for event #${eventId}:`, e.message); }
 }
 
 /**

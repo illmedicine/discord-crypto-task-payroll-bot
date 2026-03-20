@@ -363,53 +363,74 @@ client.once('clientReady', async () => {
     }
   }, 30000); // Check every 30 seconds
 
-  // ─── One-time backfill: populate winner_names for past completed events ───
+  // ─── Startup sync: push completed/cancelled status + winner names to backend ───
   setTimeout(async () => {
+    const backendUrl = process.env.DCB_BACKEND_URL || '';
+    const secret = process.env.DCB_INTERNAL_SECRET || '';
+    if (!backendUrl || !secret) {
+      console.warn('[EventSync] Skipping startup sync: DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set');
+      return;
+    }
+
     try {
+      // Sync ALL completed/cancelled/ended events to backend (status + winner_names + winning_slot)
       const rows = await new Promise((resolve, reject) => {
         db.db.all(
-          `SELECT id, winning_slot, guild_id FROM gambling_events WHERE status IN ('completed','ended') AND winner_names IS NULL`,
+          `SELECT id, winning_slot, guild_id, status, winner_names FROM gambling_events WHERE status IN ('completed','ended','cancelled')`,
           [], (err, r) => err ? reject(err) : resolve(r || [])
         );
       });
-      if (!rows.length) return;
-      console.log(`[WinnerBackfill] Found ${rows.length} completed event(s) without winner names`);
-      const backendUrl = process.env.DCB_BACKEND_URL || '';
-      const secret = process.env.DCB_INTERNAL_SECRET || '';
+      if (!rows.length) {
+        console.log('[EventSync] No completed/cancelled events to sync');
+        return;
+      }
+      console.log(`[EventSync] Syncing ${rows.length} completed/cancelled event(s) to backend...`);
+
       for (const ev of rows) {
         try {
-          const bets = await db.getGamblingEventBets(ev.id);
-          const winners = bets.filter(b => b.is_winner === 1);
-          let winnerNames;
-          if (winners.length === 0) {
-            winnerNames = 'House';
-          } else {
-            const names = [];
-            for (const w of winners) {
-              try {
-                const u = await client.users.fetch(w.user_id);
-                names.push(u.displayName || u.username || w.user_id);
-              } catch { names.push(w.user_id); }
+          // Resolve winner names if missing
+          let winnerNames = ev.winner_names;
+          if (!winnerNames && ev.status !== 'cancelled') {
+            const bets = await db.getGamblingEventBets(ev.id);
+            const winners = bets.filter(b => b.is_winner === 1);
+            if (winners.length === 0) {
+              winnerNames = 'House';
+            } else {
+              const names = [];
+              for (const w of winners) {
+                try {
+                  const u = await client.users.fetch(w.user_id);
+                  names.push(u.displayName || u.username || w.user_id);
+                } catch { names.push(w.user_id); }
+              }
+              winnerNames = names.join(', ');
             }
-            winnerNames = names.join(', ');
+            // Save locally
+            await new Promise(r => db.db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, ev.id], r));
           }
-          await new Promise(r => db.db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, ev.id], r));
-          // Sync to backend
-          if (backendUrl && secret) {
-            fetch(`${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
-              body: JSON.stringify({ eventId: ev.id, action: 'status_update', status: 'completed', winnerNames, winningSlot: ev.winning_slot }),
-            }).catch(() => {});
+
+          // Sync status + winner data to backend (await so we can log result)
+          const res = await fetch(`${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
+            body: JSON.stringify({
+              eventId: ev.id, action: 'status_update', status: ev.status,
+              guildId: ev.guild_id, winnerNames: winnerNames || null, winningSlot: ev.winning_slot || null,
+            }),
+          });
+          if (res.ok) {
+            console.log(`[EventSync] ✅ #${ev.id}: ${ev.status}${winnerNames ? ` (${winnerNames})` : ''}`);
+          } else {
+            const text = await res.text();
+            console.error(`[EventSync] ❌ #${ev.id}: backend returned ${res.status} — ${text}`);
           }
-          console.log(`[WinnerBackfill] Event #${ev.id}: ${winnerNames}`);
         } catch (evErr) {
-          console.warn(`[WinnerBackfill] Error on event #${ev.id}:`, evErr.message);
+          console.warn(`[EventSync] Error on event #${ev.id}:`, evErr.message);
         }
       }
-      console.log(`[WinnerBackfill] ✅ Done backfilling ${rows.length} event(s)`);
+      console.log(`[EventSync] ✅ Done syncing ${rows.length} event(s)`);
     } catch (err) {
-      console.warn('[WinnerBackfill] Error:', err.message);
+      console.warn('[EventSync] Error:', err.message);
     }
   }, 15000); // Run 15s after startup (after Discord cache is warm)
 
