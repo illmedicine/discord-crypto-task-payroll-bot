@@ -284,7 +284,7 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
               <div key={a.id} className="activity-item">
                 <div className={`activity-dot ${a.type}`} />
                 <div className="activity-text">
-                  <strong>{a.title}</strong> {a.user_tag || ''}
+                  <strong>{a.title}</strong>{a.type === 'payroll' && a.description ? <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 4 }}>by {a.user_tag}</span> : ` ${a.user_tag || ''}`}
                 </div>
                 {a.amount ? (
                   <span className={`activity-amount ${a.amount >= 0 ? 'positive' : 'negative'}`}>

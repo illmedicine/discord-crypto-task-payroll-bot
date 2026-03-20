@@ -3625,9 +3625,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         )
 
         // 10. Log in activity_feed
+        const recipientName = worker.username || req.params.discordId
         await db.run(
           'INSERT INTO activity_feed (guild_id, type, title, description, user_tag, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [req.guild.id, 'payroll', 'Staff Paid', `Paid ${worker.username || req.params.discordId} $${amountUsd.toFixed(2)} (◎${amountSol.toFixed(4)})${memo ? ': ' + memo : ''}`, `@${req.user.username}`, amountUsd, 'USD']
+          [req.guild.id, 'payroll', `Staff Paid @${recipientName}`, `Paid ${recipientName} $${amountUsd.toFixed(2)} (◎${amountSol.toFixed(4)})${memo ? ': ' + memo : ''}`, `@${req.user.username}`, amountUsd, 'USD']
         )
 
         // 11. Record transaction
@@ -3948,7 +3949,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // Bot pushes gambling bet/status back to keep backend DB in sync
   app.post('/api/internal/gambling-event-sync', requireInternal, async (req, res) => {
     try {
-      const { eventId, action, userId, guildId, chosenSlot, slotNumber, betAmount, paymentStatus, walletAddress, status } = req.body || {}
+      const { eventId, action, userId, guildId, chosenSlot, slotNumber, betAmount, paymentStatus, walletAddress, status, winnerNames, winningSlot } = req.body || {}
       if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
       // Accept both chosenSlot and slotNumber (bot sends slotNumber)
       const slot = chosenSlot || slotNumber
@@ -3974,7 +3975,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           `UPDATE gambling_events SET status = ? WHERE id = ?`,
           [status, eventId]
         ).catch(() => {})
-        console.log(`[internal] gambling-event #${eventId} status → ${status}`)
+        // Save winner info when completing an event
+        if (winningSlot) {
+          await db.run(`UPDATE gambling_events SET winning_slot = ? WHERE id = ?`, [winningSlot, eventId]).catch(() => {})
+        }
+        if (winnerNames) {
+          await db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, eventId]).catch(() => {})
+        }
+        console.log(`[internal] gambling-event #${eventId} status → ${status}${winnerNames ? `, winners: ${winnerNames}` : ''}`)
       }
 
       res.json({ ok: true })

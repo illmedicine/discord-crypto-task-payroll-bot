@@ -524,6 +524,8 @@ db.serialize(() => {
 
   // Migration: add qualification_url to gambling_events
   db.run(`ALTER TABLE gambling_events ADD COLUMN qualification_url TEXT`, () => {})
+  // Migration: add winner_names to gambling_events (comma-separated display names)
+  db.run(`ALTER TABLE gambling_events ADD COLUMN winner_names TEXT`, () => {})
 
   // ---- Poker Events tables ----
   db.run(

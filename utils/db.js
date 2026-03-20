@@ -454,6 +454,8 @@ const initDb = () => {
 
     // Migration: add qualification_url to gambling_events
     db.run(`ALTER TABLE gambling_events ADD COLUMN qualification_url TEXT`, () => {});
+    // Migration: add winner_names to gambling_events (comma-separated display names)
+    db.run(`ALTER TABLE gambling_events ADD COLUMN winner_names TEXT`, () => {});
 
     // ---- Poker Events tables ----
     db.run(`
@@ -2016,40 +2018,62 @@ const joinGamblingEvent = (eventId, guildId, userId, chosenSlot, betAmount, paym
   return new Promise((resolve, reject) => {
     db.serialize(() => {
       db.run('BEGIN TRANSACTION');
-      db.run(`UPDATE gambling_events SET current_players = current_players + 1 WHERE id = ?`, [eventId], (err) => {
-        if (err) { db.run('ROLLBACK'); return reject(err); }
-      });
-      // Try INSERT with payment columns; fall back to basic INSERT if columns don't exist yet
-      const fullSql = `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-      const fullParams = [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null];
-      const fallbackSql = `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`;
-      const fallbackParams = [eventId, guildId, userId, chosenSlot, betAmount || 0];
 
-      db.run(fullSql, fullParams, function (err) {
-        if (err && err.message && err.message.includes('has no column')) {
-          // Columns not yet migrated — fall back
-          console.warn('[DB] joinGamblingEvent: payment columns missing, using fallback INSERT');
-          db.run(fallbackSql, fallbackParams, function (err2) {
-            if (err2) { db.run('ROLLBACK'); return reject(err2); }
-            const id = this.lastID;
-            db.run('COMMIT', (commitErr) => {
-              if (commitErr) reject(commitErr);
-              else resolve(id);
-            });
-          });
-        } else if (err) {
-          db.run('ROLLBACK'); return reject(err);
-        } else {
-          const id = this.lastID;
-          db.run('COMMIT', (commitErr) => {
-            if (commitErr) reject(commitErr);
-            else resolve(id);
-          });
-        }
-      });
+      // Atomic guard: verify event is still active before allowing the join.
+      // This prevents late joins after processGamblingEvent has already started.
+      const isLateJoinRefund = paymentStatus === 'late_join_refund_pending';
+      if (!isLateJoinRefund) {
+        db.get(`SELECT status FROM gambling_events WHERE id = ?`, [eventId], (err, row) => {
+          if (err) { db.run('ROLLBACK'); return reject(err); }
+          if (!row || row.status !== 'active') {
+            db.run('ROLLBACK');
+            return reject(new Error(`Event #${eventId} is no longer active (status=${row?.status}). Join rejected to prevent trapped funds.`));
+          }
+
+          // Event is still active — proceed with the join
+          _doJoinInsert(eventId, guildId, userId, chosenSlot, betAmount, paymentStatus, walletAddress, resolve, reject);
+        });
+      } else {
+        // late_join_refund_pending: allow insert regardless of status (for tracking purposes)
+        _doJoinInsert(eventId, guildId, userId, chosenSlot, betAmount, paymentStatus, walletAddress, resolve, reject);
+      }
     });
   });
 };
+
+function _doJoinInsert(eventId, guildId, userId, chosenSlot, betAmount, paymentStatus, walletAddress, resolve, reject) {
+  db.run(`UPDATE gambling_events SET current_players = current_players + 1 WHERE id = ?`, [eventId], (err) => {
+    if (err) { db.run('ROLLBACK'); return reject(err); }
+  });
+  // Try INSERT with payment columns; fall back to basic INSERT if columns don't exist yet
+  const fullSql = `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, payment_status, wallet_address) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  const fullParams = [eventId, guildId, userId, chosenSlot, betAmount || 0, paymentStatus || 'none', walletAddress || null];
+  const fallbackSql = `INSERT INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount) VALUES (?, ?, ?, ?, ?)`;
+  const fallbackParams = [eventId, guildId, userId, chosenSlot, betAmount || 0];
+
+  db.run(fullSql, fullParams, function (err) {
+    if (err && err.message && err.message.includes('has no column')) {
+      // Columns not yet migrated — fall back
+      console.warn('[DB] joinGamblingEvent: payment columns missing, using fallback INSERT');
+      db.run(fallbackSql, fallbackParams, function (err2) {
+        if (err2) { db.run('ROLLBACK'); return reject(err2); }
+        const id = this.lastID;
+        db.run('COMMIT', (commitErr) => {
+          if (commitErr) reject(commitErr);
+          else resolve(id);
+        });
+      });
+    } else if (err) {
+      db.run('ROLLBACK'); return reject(err);
+    } else {
+      const id = this.lastID;
+      db.run('COMMIT', (commitErr) => {
+        if (commitErr) reject(commitErr);
+        else resolve(id);
+      });
+    }
+  });
+}
 
 const getGamblingEventBet = (eventId, userId) => {
   return new Promise((resolve, reject) => {

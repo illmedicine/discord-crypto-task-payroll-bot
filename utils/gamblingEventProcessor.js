@@ -140,7 +140,7 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
 }
 
 /** Fire-and-forget sync event status to backend */
-function syncStatusToBackend(eventId, status, guildId) {
+function syncStatusToBackend(eventId, status, guildId, extra = {}) {
   try {
     const backendUrl = process.env.DCB_BACKEND_URL;
     const secret = process.env.DCB_INTERNAL_SECRET;
@@ -149,7 +149,7 @@ function syncStatusToBackend(eventId, status, guildId) {
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
-      body: JSON.stringify({ eventId, action: 'status_update', status, guildId }),
+      body: JSON.stringify({ eventId, action: 'status_update', status, guildId, ...extra }),
     }).catch(() => {});
   } catch (_) {}
 }
@@ -696,7 +696,22 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
     }
 
     await db.updateGamblingEventStatus(eventId, 'completed');
-    syncStatusToBackend(eventId, 'completed', event.guild_id);
+
+    // Resolve winner display names for backend sync
+    let winnerNames = '';
+    if (winnerUserIds.length > 0) {
+      const names = [];
+      for (const uid of winnerUserIds) {
+        try {
+          const user = await client.users.fetch(uid);
+          names.push(user.displayName || user.username || uid);
+        } catch (_) {
+          names.push(uid);
+        }
+      }
+      winnerNames = names.join(', ');
+    }
+    syncStatusToBackend(eventId, 'completed', event.guild_id, { winnerNames, winningSlot });
     console.log(`[HorseRace] Event #${eventId} completed with ${winnerUserIds.length} winner(s), house cut: ${houseCut.toFixed(4)}`);
   } catch (error) {
     console.error('[HorseRace] Error processing gambling event:', error);

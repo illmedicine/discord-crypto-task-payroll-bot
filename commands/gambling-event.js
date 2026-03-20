@@ -905,7 +905,17 @@ module.exports = {
       });
     }
 
-    // 5. Execute the transfer: user's wallet → treasury
+    // 5. FINAL pre-payment status check — last chance to abort before blockchain transfer
+    const prePayCheck = await db.getGamblingEvent(eventId);
+    if (!prePayCheck || prePayCheck.status !== 'active') {
+      console.log(`[GamblingConfirm] ⚠️ Pre-payment check: event #${eventId} status=${prePayCheck?.status} — aborting payment for user ${interaction.user.id}`);
+      return interaction.editReply({
+        content: '❌ This horse race has already ended or started. Your funds were **not** charged.',
+        embeds: [], components: []
+      });
+    }
+
+    // 6. Execute the transfer: user's wallet → treasury
     let transferResult;
     if (isUsdc) {
       console.log(`[GamblingConfirm] Transferring ${entryFee.toFixed(2)} USDC from ${userData.solana_address.slice(0,8)}... to ${guildWallet.wallet_address.slice(0,8)}...`);
@@ -933,11 +943,93 @@ module.exports = {
 
     console.log(`[GamblingConfirm] ✅ Transfer successful: ${transferResult.signature}`);
 
-    // 6. Save bet as committed with tx signature
+    // 7. POST-PAYMENT race condition check — if event ended while payment was processing,
+    //    the player paid but the race already calculated the pot without them.
+    //    We must refund immediately to prevent trapped funds.
+    const postPayCheck = await db.getGamblingEvent(eventId);
+    if (!postPayCheck || postPayCheck.status !== 'active') {
+      console.warn(`[GamblingConfirm] ⚠️ RACE CONDITION DETECTED: event #${eventId} status=${postPayCheck?.status} after payment succeeded for user ${interaction.user.id}. Initiating auto-refund.`);
+
+      // Auto-refund: send the entry fee back from treasury to player
+      let refundResult = { success: false, error: 'No treasury key' };
+      if (guildWallet && guildWallet.wallet_secret) {
+        try {
+          const treasuryKeypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
+          if (treasuryKeypair) {
+            if (isUsdc) {
+              refundResult = await crypto.sendUsdcFrom(treasuryKeypair, userData.solana_address, entryFee);
+            } else {
+              refundResult = await crypto.sendSolFrom(treasuryKeypair, userData.solana_address, solAmount);
+            }
+          }
+        } catch (refundErr) {
+          console.error(`[GamblingConfirm] Auto-refund transfer error for user ${interaction.user.id}:`, refundErr.message);
+          refundResult = { success: false, error: refundErr.message };
+        }
+      }
+
+      if (refundResult.success) {
+        console.log(`[GamblingConfirm] ✅ Auto-refund successful for user ${interaction.user.id}: tx=${refundResult.signature}`);
+        try { await db.recordTransaction(interaction.guildId, guildWallet.wallet_address, userData.solana_address, solAmount, refundResult.signature); } catch (_) {}
+        return interaction.editReply({
+          content: `⚠️ **Race Already Started!**\n\nThe race ended while your payment was processing. Your entry fee has been **automatically refunded**.\n\n🔗 [Entry TX](https://solscan.io/tx/${transferResult.signature})\n🔗 [Refund TX](https://solscan.io/tx/${refundResult.signature})`,
+          embeds: [], components: []
+        });
+      } else {
+        console.error(`[GamblingConfirm] ❌ Auto-refund FAILED for user ${interaction.user.id}: ${refundResult.error}`);
+        // Record as a failed late-join so admins can manually refund
+        try {
+          await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, entryFee, 'late_join_refund_pending', userData.solana_address);
+          await db.updateGamblingBetPayment(eventId, interaction.user.id, 'late_join_refund_pending', 'entry', transferResult.signature);
+        } catch (_) {}
+        return interaction.editReply({
+          content: `⚠️ **Race Already Started — Refund Pending!**\n\nThe race ended while your payment was processing. Automatic refund failed.\n\n💰 Entry TX: [View](https://solscan.io/tx/${transferResult.signature})\n🔧 A server admin will need to manually refund your **${entryFee} ${event.currency}** to \`${userData.solana_address}\`.\n\nRefund error: ${refundResult.error}`,
+          embeds: [], components: []
+        });
+      }
+    }
+
+    // 8. Save bet as committed with tx signature (atomic — checks event is still active)
     const betAmount = entryFee;
     const userWalletAddress = userData.solana_address;
 
-    await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, 'committed', userWalletAddress);
+    let joinResult;
+    try {
+      joinResult = await db.joinGamblingEvent(eventId, interaction.guildId, interaction.user.id, slotNumber, betAmount, 'committed', userWalletAddress);
+    } catch (joinErr) {
+      // If atomic join failed because event is no longer active, refund
+      if (joinErr.message && joinErr.message.includes('no longer active')) {
+        console.warn(`[GamblingConfirm] ⚠️ Atomic join rejected for event #${eventId} — event ended. Initiating refund.`);
+        let refundResult = { success: false, error: 'No treasury key' };
+        if (guildWallet && guildWallet.wallet_secret) {
+          try {
+            const treasuryKeypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
+            if (treasuryKeypair) {
+              if (isUsdc) {
+                refundResult = await crypto.sendUsdcFrom(treasuryKeypair, userData.solana_address, entryFee);
+              } else {
+                refundResult = await crypto.sendSolFrom(treasuryKeypair, userData.solana_address, solAmount);
+              }
+            }
+          } catch (refundErr) {
+            refundResult = { success: false, error: refundErr.message };
+          }
+        }
+        if (refundResult.success) {
+          try { await db.recordTransaction(interaction.guildId, guildWallet.wallet_address, userData.solana_address, solAmount, refundResult.signature); } catch (_) {}
+          return interaction.editReply({
+            content: `⚠️ **Race Already Started!**\n\nYour entry fee has been **automatically refunded**.\n🔗 [Refund TX](https://solscan.io/tx/${refundResult.signature})`,
+            embeds: [], components: []
+          });
+        } else {
+          return interaction.editReply({
+            content: `⚠️ **Race Already Started — Refund Pending!**\n\nAutomatic refund failed. A server admin will need to manually refund your **${entryFee} ${event.currency}** to \`${userData.solana_address}\`.`,
+            embeds: [], components: []
+          });
+        }
+      }
+      throw joinErr; // Re-throw other errors
+    }
     // Store the entry tx signature
     await db.updateGamblingBetPayment(eventId, interaction.user.id, 'committed', 'entry', transferResult.signature);
     console.log(`[GamblingConfirm] ✅ Bet committed: event #${eventId}, slot ${slotNumber}, user ${interaction.user.id}, amount ${betAmount} ${event.currency}, tx=${transferResult.signature}`);

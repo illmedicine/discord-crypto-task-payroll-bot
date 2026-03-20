@@ -14,6 +14,7 @@ type Props = {
     current_players?: number
     max_players?: number
     winning_slot?: number | null
+    winner_names?: string | null
   }
 }
 
@@ -41,7 +42,7 @@ function GamblingEventRow({ event, style }: Props & { style?: React.CSSPropertie
         <Countdown endsAt={event.ends_at} prefix='⏱️ ' endedText='—' />
       </td>
       <td>
-        {event.winning_slot ? `🏆 Horse #${event.winning_slot}` : '—'}
+        {event.winner_names ? `🏆 ${event.winner_names}` : event.winning_slot ? `🏆 Horse #${event.winning_slot}` : '—'}
       </td>
     </tr>
   )
