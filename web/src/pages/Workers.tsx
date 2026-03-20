@@ -100,6 +100,8 @@ export default function Workers({ guildId, userRole }: Props) {
 
   // Auto-pay wallet status per worker
   const [walletStatuses, setWalletStatuses] = useState<Record<string, { has_wallet: boolean; has_key: boolean; auto_pay_capable: boolean }>>({})
+  // Prestige badges per worker
+  const [prestigeMap, setPrestigeMap] = useState<Record<string, { score: number; tier: string; config: { emoji: string; title: string; color: string } }>>({})
 
   const isOwner = userRole === 'owner'
   const isServerOwner = userRole === 'owner'
@@ -137,6 +139,24 @@ export default function Workers({ guildId, userRole }: Props) {
       const map: typeof walletStatuses = {}
       for (const r of results) map[r.id] = r
       setWalletStatuses(map)
+    })
+    return () => ac.abort()
+  }, [workers])
+
+  // Fetch prestige badges for all workers
+  useEffect(() => {
+    if (!workers.length) return
+    const ac = new AbortController()
+    Promise.all(
+      workers.map(w =>
+        api.get(`/user/prestige/${w.discord_id}`, { signal: ac.signal })
+          .then(r => ({ id: w.discord_id, ...r.data }))
+          .catch(() => ({ id: w.discord_id, score: 0, tier: 'D', config: { emoji: '🔹', title: 'Debut', color: '#94a3b8' } }))
+      )
+    ).then(results => {
+      const map: typeof prestigeMap = {}
+      for (const r of results) map[r.id] = r
+      setPrestigeMap(map)
     })
     return () => ac.abort()
   }, [workers])
@@ -307,7 +327,7 @@ export default function Workers({ guildId, userRole }: Props) {
               <>
                 <div className="workers-section-label"><span className="role-dot role-dot-admin" /> DCB Admins ({admins.length})</div>
                 {admins.map(w => (
-                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} walletStatus={walletStatuses[w.discord_id]} />
+                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} walletStatus={walletStatuses[w.discord_id]} prestige={prestigeMap[w.discord_id]} />
                 ))}
               </>
             )}
@@ -315,7 +335,7 @@ export default function Workers({ guildId, userRole }: Props) {
               <>
                 <div className="workers-section-label"><span className="role-dot role-dot-staff" /> DCB Staff ({staff.length})</div>
                 {staff.map(w => (
-                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} walletStatus={walletStatuses[w.discord_id]} />
+                  <WorkerCard key={w.discord_id} worker={w} onSelect={openDetail} selected={selectedWorker?.discord_id === w.discord_id} walletStatus={walletStatuses[w.discord_id]} prestige={prestigeMap[w.discord_id]} />
                 ))}
               </>
             )}
@@ -331,6 +351,7 @@ export default function Workers({ guildId, userRole }: Props) {
                 onRoleChange={isServerOwner ? handleRoleChange : undefined}
                 onRemove={isServerOwner ? handleRemove : undefined}
                 onPay={isServerOwner ? openPayModal : undefined}
+                prestige={prestigeMap[selectedWorker.discord_id]}
               />
             ) : (
               <div className="workers-detail-placeholder">
@@ -539,7 +560,7 @@ export default function Workers({ guildId, userRole }: Props) {
 
 // ---- Sub-components ----
 
-function WorkerCard({ worker, onSelect, selected, walletStatus }: { worker: Worker; onSelect: (id: string) => void; selected: boolean; walletStatus?: { has_wallet: boolean; has_key: boolean; auto_pay_capable: boolean } }) {
+function WorkerCard({ worker, onSelect, selected, walletStatus, prestige }: { worker: Worker; onSelect: (id: string) => void; selected: boolean; walletStatus?: { has_wallet: boolean; has_key: boolean; auto_pay_capable: boolean }; prestige?: { score: number; tier: string; config: { emoji: string; title: string; color: string } } }) {
   return (
     <div className={`worker-card ${selected ? 'worker-card-selected' : ''}`} onClick={() => onSelect(worker.discord_id)}>
       <div className="worker-card-left">
@@ -555,6 +576,11 @@ function WorkerCard({ worker, onSelect, selected, walletStatus }: { worker: Work
           <div className="worker-card-name">
             {worker.display_name || worker.username}
             <span className={`worker-role-badge worker-role-badge-${worker.role}`}>{worker.role === 'admin' ? '🔴 Admin' : '🔵 Staff'}</span>
+            {prestige && prestige.score > 0 && (
+              <span className={`prestige-badge prestige-badge-${prestige.tier.toLowerCase()}`}>
+                <span className="prestige-shield">{prestige.config.emoji}</span> {prestige.tier}
+              </span>
+            )}
             {walletStatus?.auto_pay_capable && (
               <span className="worker-autopay-badge">⚡ Auto-Pay</span>
             )}
@@ -578,7 +604,7 @@ function WorkerCard({ worker, onSelect, selected, walletStatus }: { worker: Work
   )
 }
 
-function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay }: { worker: WorkerDetail; onRoleChange?: (id: string, role: 'staff' | 'admin') => void; onRemove?: (id: string) => void; onPay?: (worker: WorkerDetail) => void }) {
+function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay, prestige }: { worker: WorkerDetail; onRoleChange?: (id: string, role: 'staff' | 'admin') => void; onRemove?: (id: string) => void; onPay?: (worker: WorkerDetail) => void; prestige?: { score: number; tier: string; config: { emoji: string; title: string; color: string } } }) {
   return (
     <div className="worker-detail-content">
       <div className="worker-detail-header">
@@ -593,6 +619,11 @@ function WorkerDetailPanel({ worker, onRoleChange, onRemove, onPay }: { worker: 
         <div>
           <h3 className="worker-detail-name">{worker.display_name || worker.username}</h3>
           <span className={`worker-role-badge worker-role-badge-${worker.role}`}>{worker.role === 'admin' ? '🔴 DCB Admin' : '🔵 DCB Staff'}</span>
+          {prestige && (
+            <span className={`prestige-badge prestige-badge-${prestige.tier.toLowerCase()}`}>
+              <span className="prestige-shield">{prestige.config.emoji}</span> {prestige.tier} — {prestige.config.title} ({prestige.score})
+            </span>
+          )}
         </div>
         <div className="worker-detail-actions">
           {onPay && (

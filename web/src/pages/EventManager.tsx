@@ -252,6 +252,9 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [showHowItWorks, setShowHowItWorks] = useState(false)
 
+  /* ---- Prestige badges ---- */
+  const [prestigeMap, setPrestigeMap] = useState<Record<string, { score: number; tier: string; config: { emoji: string; title: string; color: string } }>>({})
+
   /* ==================================================================
    *  DATA LOADING
    * ================================================================ */
@@ -321,6 +324,18 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
       }).catch(() => {})
     }, 15000)
     return () => clearInterval(id)
+  }, [guildId])
+
+  /* ---- Load prestige leaderboard for participant badges ---- */
+  useEffect(() => {
+    if (!guildId) return
+    api.get(`/admin/guilds/${guildId}/prestige-leaderboard`)
+      .then(r => {
+        const map: typeof prestigeMap = {}
+        for (const u of (r.data || [])) map[u.user_id] = u
+        setPrestigeMap(map)
+      })
+      .catch(() => {})
   }, [guildId])
 
   /* ---- Sync createType with selected tab ---- */
@@ -1581,6 +1596,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                           }}>
                             {b.is_winner ? '🏆' : '🏇'}{' '}
                             <span style={{ fontWeight: b.is_winner ? 700 : 400 }}>{b.username || b.user_id}</span>
+                            {prestigeMap[b.user_id] && (
+                              <span className={`prestige-chip prestige-badge-${prestigeMap[b.user_id].tier.toLowerCase()}`}>
+                                {prestigeMap[b.user_id].config.emoji}{prestigeMap[b.user_id].tier}
+                              </span>
+                            )}
                             <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
                             {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
                           </span>
@@ -1720,6 +1740,11 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                                     }}>
                                       {b.is_winner ? '🏆' : '🏇'}{' '}
                                       <span style={{ fontWeight: b.is_winner ? 700 : 400 }}>{b.username || b.user_id}</span>
+                                      {prestigeMap[b.user_id] && (
+                                        <span className={`prestige-chip prestige-badge-${prestigeMap[b.user_id].tier.toLowerCase()}`}>
+                                          {prestigeMap[b.user_id].config.emoji}{prestigeMap[b.user_id].tier}
+                                        </span>
+                                      )}
                                       <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
                                       {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
                                     </span>

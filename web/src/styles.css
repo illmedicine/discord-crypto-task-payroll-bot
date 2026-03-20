@@ -3555,6 +3555,65 @@ h3 {
 .tier-critical { background: rgba(239, 68, 68, 0.25); color: #f87171; }
 .tier-medium { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
 .tier-low { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+/* ── Prestige Badge System ── */
+.prestige-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  margin-left: 6px;
+  border: 1px solid transparent;
+}
+.prestige-badge-s {
+  background: linear-gradient(135deg, rgba(241,196,15,0.25) 0%, rgba(243,156,18,0.15) 100%);
+  color: #f1c40f;
+  border-color: rgba(241,196,15,0.4);
+  text-shadow: 0 0 6px rgba(241,196,15,0.3);
+}
+.prestige-badge-a {
+  background: linear-gradient(135deg, rgba(192,132,252,0.2) 0%, rgba(168,85,247,0.15) 100%);
+  color: #c084fc;
+  border-color: rgba(192,132,252,0.3);
+}
+.prestige-badge-b {
+  background: rgba(96,165,250,0.15);
+  color: #60a5fa;
+  border-color: rgba(96,165,250,0.25);
+}
+.prestige-badge-c {
+  background: rgba(52,211,153,0.12);
+  color: #34d399;
+  border-color: rgba(52,211,153,0.2);
+}
+.prestige-badge-d {
+  background: rgba(148,163,184,0.1);
+  color: #94a3b8;
+  border-color: rgba(148,163,184,0.15);
+}
+/* Prestige shield icon - inspired by IRI badge shape */
+.prestige-badge .prestige-shield {
+  font-size: 13px;
+  line-height: 1;
+}
+/* Inline prestige chip for participant lists */
+.prestige-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  margin-left: 3px;
+  vertical-align: middle;
+}
+
 /* Trust checklist */
 .wallet-trust-checklist {
   display: flex;

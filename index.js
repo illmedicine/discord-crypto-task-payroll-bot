@@ -32,6 +32,7 @@ const crypto = require('./utils/crypto');
 const db = require('./utils/db');
 const { validateEncryptionEnv } = require('./utils/encryption');
 const { ANCHOR_GUILD_ID, prefixLine, getTrustRisk } = require('./utils/trustRisk');
+const { gatherPrestigeStats, calcPrestige, prestigeLine } = require('./utils/prestige');
 
 // Validate encryption env vars at startup
 validateEncryptionEnv();
@@ -634,7 +635,16 @@ client.on('interactionCreate', async interaction => {
         guildAnchorMember: anchorMember
       });
 
-      const prefix = prefixLine(score.trust, score.risk);
+      // Gather prestige score
+      let prestigeResult;
+      try {
+        const pStats = await gatherPrestigeStats(db, interaction.user.id);
+        prestigeResult = calcPrestige(pStats);
+      } catch (_) {
+        prestigeResult = { score: 0, tier: 'D', config: { emoji: '🔹', title: 'Debut' } };
+      }
+
+      const prefix = `${prefixLine(score.trust, score.risk)} | ${prestigeLine(prestigeResult.score)}`;
 
       // Log command audit locally
       await db.logCommandAudit(interaction.user.id, interaction.guildId, interaction.commandName).catch(() => {});
@@ -669,6 +679,7 @@ client.on('interactionCreate', async interaction => {
 
       // Expose score to commands that want it
       interaction.dcbTrustRisk = score;
+      interaction.dcbPrestige = prestigeResult;
       // --------------------------------------------------------
 
       console.log(`⚡ About to execute: ${interaction.commandName} (Trust: ${score.trust}, Risk: ${score.risk})`);

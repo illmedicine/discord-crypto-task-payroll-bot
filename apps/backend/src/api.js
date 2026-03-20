@@ -1154,6 +1154,124 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ── Prestige Badge System ──
+
+  // Tier thresholds (must match utils/prestige.js)
+  function prestigeTier(s) { return s >= 90 ? 'S' : s >= 65 ? 'A' : s >= 40 ? 'B' : s >= 20 ? 'C' : 'D' }
+  const PRESTIGE_CFG = {
+    S: { emoji: '👑', title: 'Sovereign', color: '#f1c40f' },
+    A: { emoji: '💎', title: 'Ace', color: '#c084fc' },
+    B: { emoji: '⚡', title: 'Bold', color: '#60a5fa' },
+    C: { emoji: '🔷', title: 'Contender', color: '#34d399' },
+    D: { emoji: '🔹', title: 'Debut', color: '#94a3b8' },
+  }
+  function scoreStep(val, thresholds) {
+    for (const [min, pts] of thresholds) if (val >= min) return pts
+    return 0
+  }
+
+  async function calcPrestigeForUser(discordId) {
+    const safe = (p) => p.catch(() => ({ c: 0 }))
+    const [raceBets, raceWins, voteJoins, pokerPlayed, eventsCreated, walletRow] = await Promise.all([
+      safe(db.get('SELECT COUNT(*) as c FROM gambling_event_bets WHERE user_id = ?', [discordId])),
+      safe(db.get('SELECT COUNT(*) as c FROM gambling_event_bets WHERE user_id = ? AND is_winner = 1', [discordId])),
+      safe(db.get('SELECT COUNT(*) as c FROM vote_event_participants WHERE user_id = ?', [discordId])),
+      safe(db.get('SELECT COUNT(*) as c FROM poker_event_players WHERE user_id = ?', [discordId])),
+      safe(db.get(
+        `SELECT (SELECT COUNT(*) FROM gambling_events WHERE created_by = ?) +
+                (SELECT COUNT(*) FROM vote_events WHERE created_by = ?) +
+                (SELECT COUNT(*) FROM poker_events WHERE created_by = ?) +
+                (SELECT COUNT(*) FROM contests WHERE created_by = ?) as c`,
+        [discordId, discordId, discordId, discordId])),
+      db.get('SELECT solana_address, wallet_secret FROM user_wallets WHERE discord_id = ?', [discordId]).catch(() => null),
+    ])
+    // Tenure: earliest bet/join/entry across tables
+    const dates = await Promise.all([
+      db.get('SELECT MIN(joined_at) as d FROM gambling_event_bets WHERE user_id = ?', [discordId]).catch(() => null),
+      db.get('SELECT MIN(joined_at) as d FROM vote_event_participants WHERE user_id = ?', [discordId]).catch(() => null),
+      db.get('SELECT MIN(joined_at) as d FROM poker_event_players WHERE user_id = ?', [discordId]).catch(() => null),
+    ])
+    const earliest = dates.map(r => r?.d).filter(Boolean).sort()[0]
+    const tenureDays = earliest ? Math.max(0, Math.floor((Date.now() - new Date(earliest).getTime()) / 86400000)) : 0
+
+    const hasWallet = !!(walletRow?.solana_address)
+    const hasKey = !!(walletRow?.wallet_secret && decryptSecret(walletRow.wallet_secret))
+
+    const breakdown = {
+      raceBets:      scoreStep(raceBets?.c || 0, [[30,20],[15,14],[5,8],[1,3]]),
+      raceWins:      scoreStep(raceWins?.c || 0, [[10,10],[5,7],[2,4],[1,2]]),
+      voteJoins:     scoreStep(voteJoins?.c || 0, [[20,10],[10,7],[3,4],[1,2]]),
+      pokerPlayed:   scoreStep(pokerPlayed?.c || 0, [[15,10],[5,7],[2,4],[1,2]]),
+      eventsCreated: scoreStep(eventsCreated?.c || 0, [[10,10],[5,7],[2,4],[1,2]]),
+      commands:      0, // not tracked in backend DB
+      tenure:        scoreStep(tenureDays, [[180,15],[90,12],[30,8],[7,4],[1,1]]),
+      wallet:        (hasWallet ? 5 : 0) + (hasKey ? 5 : 0),
+    }
+    const raw = Object.values(breakdown).reduce((a, b) => a + b, 0)
+    const score = Math.min(100, Math.max(0, raw))
+    const tier = prestigeTier(score)
+    return {
+      score, tier, config: PRESTIGE_CFG[tier], breakdown,
+      stats: {
+        raceBets: raceBets?.c || 0, raceWins: raceWins?.c || 0,
+        voteJoins: voteJoins?.c || 0, pokerPlayed: pokerPlayed?.c || 0,
+        eventsCreated: eventsCreated?.c || 0, tenureDays,
+        hasWallet, hasAutoPayKey: hasKey,
+      }
+    }
+  }
+
+  // GET /api/user/prestige — prestige for the authenticated user
+  app.get('/api/user/prestige', requireAuth, async (req, res) => {
+    try {
+      const discordId = await resolveCanonicalUserId(req.user)
+      if (!discordId) return res.json({ score: 0, tier: 'D', config: PRESTIGE_CFG.D, breakdown: {}, stats: {} })
+      const result = await calcPrestigeForUser(discordId)
+      res.json(result)
+    } catch (err) {
+      console.error('[user/prestige] error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // GET /api/user/prestige/:discordId — prestige for any user (public)
+  app.get('/api/user/prestige/:discordId', requireAuth, async (req, res) => {
+    try {
+      const result = await calcPrestigeForUser(req.params.discordId)
+      res.json(result)
+    } catch (err) {
+      console.error('[user/prestige] error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // GET /api/admin/guilds/:guildId/prestige-leaderboard — top prestige users for a guild
+  app.get('/api/admin/guilds/:guildId/prestige-leaderboard', requireAuth, requireGuildMember, async (req, res) => {
+    try {
+      // Gather all unique user_ids with activity in this guild
+      const userRows = await db.all(
+        `SELECT DISTINCT user_id FROM (
+           SELECT user_id FROM gambling_event_bets WHERE guild_id = ?
+           UNION SELECT user_id FROM vote_event_participants WHERE guild_id = ?
+           UNION SELECT user_id FROM poker_event_players WHERE guild_id = ?
+         )`, [req.guild.id, req.guild.id, req.guild.id]
+      )
+      const results = []
+      for (const { user_id } of userRows.slice(0, 100)) {
+        const p = await calcPrestigeForUser(user_id)
+        // Get username from any available source
+        const bet = await db.get('SELECT username FROM gambling_event_bets WHERE user_id = ? AND username IS NOT NULL LIMIT 1', [user_id]).catch(() => null)
+        const wallet = await db.get('SELECT username FROM user_wallets WHERE discord_id = ?', [user_id]).catch(() => null)
+        results.push({ user_id, username: bet?.username || wallet?.username || user_id, ...p })
+      }
+      results.sort((a, b) => b.score - a.score)
+      res.json(results)
+    } catch (err) {
+      console.error('[prestige-leaderboard] error:', err?.message)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   // GET /api/user/wallet/status/:discordId — public-facing wallet/key status for other users (no secrets)
   app.get('/api/user/wallet/status/:discordId', requireAuth, async (req, res) => {
     try {
