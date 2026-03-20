@@ -280,11 +280,18 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
                 <div className="empty-state-text">No recent activity</div>
               </div>
             )}
-            {activity.map(a => (
+            {activity.map(a => {
+              // For payroll entries, extract recipient name from description if title is generic
+              let displayTitle = a.title
+              if (a.type === 'payroll' && a.title === 'Staff Paid' && a.description) {
+                const m = a.description.match(/^Paid\s+(.+?)\s+\$/)
+                if (m) displayTitle = `Staff Paid @${m[1]}`
+              }
+              return (
               <div key={a.id} className="activity-item">
                 <div className={`activity-dot ${a.type}`} />
                 <div className="activity-text">
-                  <strong>{a.title}</strong>{a.type === 'payroll' && a.description ? <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 4 }}>by {a.user_tag}</span> : ` ${a.user_tag || ''}`}
+                  <strong>{displayTitle}</strong>{a.type === 'payroll' ? <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 4 }}>by {a.user_tag}</span> : ` ${a.user_tag || ''}`}
                 </div>
                 {a.amount ? (
                   <span className={`activity-amount ${a.amount >= 0 ? 'positive' : 'negative'}`}>
@@ -293,7 +300,8 @@ export default function Dashboard({ guildId, onNavigate }: Props) {
                 ) : null}
                 <span className="activity-time">{formatTimeAgo(a.created_at)}</span>
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
 

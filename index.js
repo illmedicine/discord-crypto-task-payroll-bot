@@ -363,6 +363,56 @@ client.once('clientReady', async () => {
     }
   }, 30000); // Check every 30 seconds
 
+  // ─── One-time backfill: populate winner_names for past completed events ───
+  setTimeout(async () => {
+    try {
+      const rows = await new Promise((resolve, reject) => {
+        db.db.all(
+          `SELECT id, winning_slot, guild_id FROM gambling_events WHERE status IN ('completed','ended') AND winner_names IS NULL`,
+          [], (err, r) => err ? reject(err) : resolve(r || [])
+        );
+      });
+      if (!rows.length) return;
+      console.log(`[WinnerBackfill] Found ${rows.length} completed event(s) without winner names`);
+      const backendUrl = process.env.DCB_BACKEND_URL || '';
+      const secret = process.env.DCB_INTERNAL_SECRET || '';
+      for (const ev of rows) {
+        try {
+          const bets = await db.getGamblingEventBets(ev.id);
+          const winners = bets.filter(b => b.is_winner === 1);
+          let winnerNames;
+          if (winners.length === 0) {
+            winnerNames = 'House';
+          } else {
+            const names = [];
+            for (const w of winners) {
+              try {
+                const u = await client.users.fetch(w.user_id);
+                names.push(u.displayName || u.username || w.user_id);
+              } catch { names.push(w.user_id); }
+            }
+            winnerNames = names.join(', ');
+          }
+          await new Promise(r => db.db.run(`UPDATE gambling_events SET winner_names = ? WHERE id = ?`, [winnerNames, ev.id], r));
+          // Sync to backend
+          if (backendUrl && secret) {
+            fetch(`${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
+              body: JSON.stringify({ eventId: ev.id, action: 'status_update', status: 'completed', winnerNames, winningSlot: ev.winning_slot }),
+            }).catch(() => {});
+          }
+          console.log(`[WinnerBackfill] Event #${ev.id}: ${winnerNames}`);
+        } catch (evErr) {
+          console.warn(`[WinnerBackfill] Error on event #${ev.id}:`, evErr.message);
+        }
+      }
+      console.log(`[WinnerBackfill] ✅ Done backfilling ${rows.length} event(s)`);
+    } catch (err) {
+      console.warn('[WinnerBackfill] Error:', err.message);
+    }
+  }, 15000); // Run 15s after startup (after Discord cache is warm)
+
   // Gambling Event end checker + active event sync - runs every 30 seconds
   const { processGamblingEvent } = require('./utils/gamblingEventProcessor');
   console.log('🎰 Starting gambling event end checker + sync...');
