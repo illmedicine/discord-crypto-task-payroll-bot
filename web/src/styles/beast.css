@@ -1,0 +1,2077 @@
+/* ══════════════════════════════════════════════════
+   illy Beast Gaming – Full Portal Styles
+   Dark theme casino/sports portal inspired by Yeet
+   ══════════════════════════════════════════════════ */
+
+/* ─── VARIABLES ─── */
+:root {
+  --beast-bg: #0d0d1a;
+  --beast-bg-secondary: #151528;
+  --beast-bg-card: #1a1a35;
+  --beast-bg-hover: #222245;
+  --beast-border: #2a2a50;
+  --beast-text: #e8e8f0;
+  --beast-text-muted: #8888aa;
+  --beast-accent: #c026d3;
+  --beast-accent-light: #d946ef;
+  --beast-accent-green: #22c55e;
+  --beast-accent-teal: #14b8a6;
+  --beast-accent-gold: #eab308;
+  --beast-accent-red: #ef4444;
+  --beast-accent-blue: #3b82f6;
+  --beast-gradient: linear-gradient(135deg, #c026d3 0%, #9333ea 50%, #6366f1 100%);
+  --beast-gradient-gold: linear-gradient(135deg, #eab308 0%, #f97316 100%);
+  --beast-gradient-green: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
+  --beast-radius: 12px;
+  --beast-radius-sm: 8px;
+  --beast-radius-lg: 16px;
+}
+
+/* ─── PORTAL CONTAINER ─── */
+.beast-portal {
+  background: var(--beast-bg);
+  color: var(--beast-text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── TOP BAR ─── */
+.beast-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--beast-bg-secondary);
+  border-bottom: 1px solid var(--beast-border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  gap: 16px;
+}
+
+.beast-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.beast-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.beast-logo-icon {
+  font-size: 28px;
+  filter: drop-shadow(0 0 8px rgba(192, 38, 211, 0.5));
+}
+
+.beast-logo-text {
+  font-size: 22px;
+  font-weight: 800;
+  background: var(--beast-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.5px;
+}
+
+.beast-main-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--beast-bg);
+  padding: 4px;
+  border-radius: 20px;
+}
+
+.beast-main-tab {
+  padding: 8px 24px;
+  border-radius: 16px;
+  border: none;
+  background: transparent;
+  color: var(--beast-text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.beast-main-tab.active {
+  background: var(--beast-accent);
+  color: white;
+  box-shadow: 0 2px 12px rgba(192, 38, 211, 0.4);
+}
+
+.beast-main-tab:hover:not(.active) {
+  color: var(--beast-text);
+}
+
+.beast-topbar-center {
+  flex: 1;
+  max-width: 400px;
+}
+
+.beast-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  border-radius: 20px;
+  padding: 8px 16px;
+}
+
+.beast-search-icon {
+  font-size: 14px;
+  opacity: 0.6;
+}
+
+.beast-search-input {
+  background: none;
+  border: none;
+  color: var(--beast-text);
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+}
+
+.beast-search-input::placeholder {
+  color: var(--beast-text-muted);
+}
+
+.beast-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.beast-vip-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--beast-bg);
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--beast-border);
+}
+
+.beast-vip-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--beast-accent-gold);
+}
+
+.beast-vip-bar {
+  width: 80px;
+  height: 6px;
+  background: var(--beast-bg-card);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.beast-vip-fill {
+  height: 100%;
+  background: var(--beast-gradient-gold);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.beast-vip-pct {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+}
+
+.beast-balance-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  border-radius: 20px;
+  padding: 8px 16px;
+  color: var(--beast-text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.beast-balance-btn:hover {
+  border-color: var(--beast-accent);
+}
+
+.beast-cashier-btn {
+  background: var(--beast-accent);
+  color: white;
+  border: none;
+  padding: 8px 24px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.2s;
+  box-shadow: 0 2px 12px rgba(192, 38, 211, 0.3);
+}
+
+.beast-cashier-btn:hover {
+  background: var(--beast-accent-light);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(192, 38, 211, 0.5);
+}
+
+/* ─── LIVE WINS TICKER ─── */
+.beast-live-wins {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: rgba(21, 21, 40, 0.8);
+  border-bottom: 1px solid var(--beast-border);
+  overflow: hidden;
+}
+
+.beast-live-wins-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--beast-accent-gold);
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+}
+
+.beast-live-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--beast-accent-red);
+  border-radius: 50%;
+  display: inline-block;
+  animation: beast-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes beast-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.beast-live-wins-scroll {
+  display: flex;
+  gap: 16px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.beast-live-win-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--beast-bg-card);
+  border-radius: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.beast-live-win-game {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+}
+
+.beast-live-win-user {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--beast-text);
+}
+
+.beast-live-win-amount {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--beast-accent-green);
+}
+
+.beast-live-win-amount.big {
+  color: var(--beast-accent-gold);
+}
+
+.beast-live-win-multi {
+  font-size: 10px;
+  background: var(--beast-accent-gold);
+  color: #000;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+/* ─── CASINO LAYOUT ─── */
+.beast-casino {
+  display: flex;
+  flex: 1;
+}
+
+.beast-sidebar-cats {
+  width: 220px;
+  flex-shrink: 0;
+  padding: 16px 12px;
+  background: var(--beast-bg-secondary);
+  border-right: 1px solid var(--beast-border);
+  overflow-y: auto;
+}
+
+.beast-cat-section {
+  margin-bottom: 20px;
+}
+
+.beast-cat-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--beast-text-muted);
+  letter-spacing: 1px;
+  padding: 0 12px;
+  margin-bottom: 8px;
+}
+
+.beast-cat-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--beast-text-muted);
+  font-size: 14px;
+  border-radius: var(--beast-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.beast-cat-btn:hover {
+  background: var(--beast-bg-hover);
+  color: var(--beast-text);
+}
+
+.beast-cat-btn.active {
+  background: rgba(192, 38, 211, 0.15);
+  color: var(--beast-accent-light);
+}
+
+/* ─── MAIN AREA ─── */
+.beast-main-area {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* ─── HERO BANNER ─── */
+.beast-hero {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.beast-hero-balance {
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-lg);
+  padding: 28px;
+}
+
+.beast-hero-balance h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--beast-text-muted);
+  letter-spacing: 1px;
+  margin: 0 0 8px;
+}
+
+.beast-hero-total {
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--beast-text);
+  margin-bottom: 16px;
+}
+
+.beast-hero-currencies {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.beast-hero-currencies span {
+  font-size: 13px;
+  color: var(--beast-text-muted);
+}
+
+.beast-hero-currencies strong {
+  display: block;
+  font-size: 15px;
+  color: var(--beast-text);
+  margin-top: 2px;
+}
+
+.beast-hero-btns {
+  display: flex;
+  gap: 12px;
+}
+
+.beast-deposit-btn {
+  flex: 1;
+  padding: 12px 20px;
+  background: var(--beast-accent-teal);
+  color: white;
+  border: none;
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.2s;
+}
+
+.beast-deposit-btn:hover {
+  background: #0ea38e;
+  transform: translateY(-1px);
+}
+
+.beast-buy-btn {
+  flex: 1;
+  padding: 12px 20px;
+  background: var(--beast-accent);
+  color: white;
+  border: none;
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.2s;
+}
+
+.beast-buy-btn:hover {
+  background: var(--beast-accent-light);
+  transform: translateY(-1px);
+}
+
+.beast-hero-promo {
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-lg);
+  padding: 28px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(135deg, rgba(192, 38, 211, 0.1) 0%, rgba(99, 102, 241, 0.1) 100%);
+}
+
+.beast-hero-mascot {
+  font-size: 80px;
+  filter: drop-shadow(0 0 20px rgba(192, 38, 211, 0.5));
+}
+
+.beast-hero-promo-text h2 {
+  font-size: 32px;
+  font-weight: 800;
+  margin: 8px 0 16px;
+  line-height: 1.1;
+}
+
+.beast-new-badge {
+  display: inline-block;
+  background: var(--beast-accent-green);
+  color: #000;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.beast-play-now-btn {
+  background: var(--beast-accent);
+  color: white;
+  border: none;
+  padding: 12px 32px;
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 16px rgba(192, 38, 211, 0.4);
+}
+
+.beast-play-now-btn:hover {
+  background: var(--beast-accent-light);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(192, 38, 211, 0.6);
+}
+
+/* ─── SECTIONS ─── */
+.beast-section {
+  margin-bottom: 32px;
+}
+
+.beast-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.beast-section-header h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.beast-see-all {
+  background: none;
+  border: none;
+  color: var(--beast-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: color 0.2s;
+}
+
+.beast-see-all:hover {
+  color: var(--beast-accent-light);
+}
+
+/* ─── GAME SCROLL (horizontal) ─── */
+.beast-game-scroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scroll-snap-type: x mandatory;
+}
+
+.beast-game-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.beast-game-scroll::-webkit-scrollbar-track {
+  background: var(--beast-bg-secondary);
+  border-radius: 2px;
+}
+
+.beast-game-scroll::-webkit-scrollbar-thumb {
+  background: var(--beast-border);
+  border-radius: 2px;
+}
+
+/* ─── GAME GRID ─── */
+.beast-game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+/* ─── GAME CARD ─── */
+.beast-game-card {
+  width: 180px;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  border-radius: var(--beast-radius);
+  overflow: hidden;
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.beast-game-grid .beast-game-card {
+  width: auto;
+}
+
+.beast-game-card:hover {
+  border-color: var(--beast-accent);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 32px rgba(192, 38, 211, 0.2);
+}
+
+.beast-game-card-img {
+  aspect-ratio: 3 / 4;
+  background: linear-gradient(135deg, var(--beast-bg-hover) 0%, var(--beast-bg) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.beast-game-card-emoji {
+  font-size: 60px;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3));
+  transition: transform 0.3s;
+}
+
+.beast-game-card:hover .beast-game-card-emoji {
+  transform: scale(1.15);
+}
+
+.beast-game-card-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.beast-game-card-badge.originals {
+  background: var(--beast-accent);
+  color: white;
+}
+
+.beast-game-card-badge.live {
+  background: var(--beast-accent-red);
+  color: white;
+}
+
+.beast-game-card-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.beast-game-card:hover .beast-game-card-overlay {
+  opacity: 1;
+}
+
+.beast-card-play-btn {
+  background: var(--beast-accent);
+  color: white;
+  border: none;
+  padding: 10px 28px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.beast-card-play-btn:hover {
+  background: var(--beast-accent-light);
+  transform: scale(1.05);
+}
+
+.beast-game-card-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.beast-game-card:hover .beast-game-card-actions {
+  opacity: 1;
+}
+
+.beast-card-fav, .beast-card-share {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--beast-text);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.beast-card-fav:hover, .beast-card-share:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.beast-card-fav.active {
+  color: var(--beast-accent-gold);
+}
+
+.beast-game-card-info {
+  padding: 12px;
+}
+
+.beast-game-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.beast-game-card-desc {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+  margin-bottom: 6px;
+}
+
+.beast-game-card-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--beast-text-muted);
+}
+
+.beast-game-card-bet {
+  color: var(--beast-accent-teal);
+}
+
+.beast-game-card-edge {
+  color: var(--beast-accent-gold);
+}
+
+.beast-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--beast-text-muted);
+  font-size: 15px;
+}
+
+/* ─── GAME PLAYER ─── */
+.beast-game-active {
+  background: var(--beast-bg);
+  min-height: 100vh;
+  color: var(--beast-text);
+}
+
+.beast-game-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--beast-bg-secondary);
+  border-bottom: 1px solid var(--beast-border);
+}
+
+.beast-game-header h2 {
+  flex: 1;
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.beast-back-btn {
+  padding: 8px 16px;
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.beast-back-btn:hover {
+  background: var(--beast-bg-hover);
+  border-color: var(--beast-accent);
+}
+
+.beast-game-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.beast-share-btn, .beast-fav-btn {
+  padding: 8px 14px;
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+
+.beast-share-btn:hover, .beast-fav-btn:hover {
+  background: var(--beast-bg-hover);
+  border-color: var(--beast-accent);
+}
+
+.beast-fav-btn.active {
+  color: var(--beast-accent-gold);
+  border-color: var(--beast-accent-gold);
+}
+
+.beast-player {
+  padding: 20px;
+}
+
+.beast-player-layout {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.beast-player-canvas {
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-lg);
+  overflow: hidden;
+}
+
+.beast-game-visual {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  min-height: 300px;
+}
+
+.beast-game-big-emoji {
+  font-size: 80px;
+  margin-bottom: 16px;
+  filter: drop-shadow(0 8px 24px rgba(192, 38, 211, 0.3));
+}
+
+.beast-game-visual h2 {
+  font-size: 28px;
+  font-weight: 800;
+  margin: 0 0 12px;
+}
+
+.beast-game-desc {
+  color: var(--beast-text-muted);
+  font-size: 14px;
+}
+
+.beast-result {
+  text-align: center;
+  padding: 20px;
+  border-radius: var(--beast-radius);
+  margin-top: 16px;
+}
+
+.beast-result.win {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.beast-result.loss {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.beast-result-label {
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.beast-result.win .beast-result-label { color: var(--beast-accent-green); }
+.beast-result.loss .beast-result-label { color: var(--beast-accent-red); }
+
+.beast-result-payout {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--beast-accent-green);
+  margin-top: 4px;
+}
+
+.beast-result-multi {
+  font-size: 16px;
+  color: var(--beast-accent-gold);
+  font-weight: 700;
+}
+
+.beast-result-detail {
+  font-size: 14px;
+  color: var(--beast-text-muted);
+  margin-top: 4px;
+}
+
+.beast-playing-anim {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--beast-text-muted);
+}
+
+.beast-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--beast-border);
+  border-top: 3px solid var(--beast-accent);
+  border-radius: 50%;
+  animation: beast-spin 0.8s linear infinite;
+}
+
+@keyframes beast-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Game-specific controls */
+.beast-game-control {
+  padding: 20px 24px;
+  border-top: 1px solid var(--beast-border);
+}
+
+.beast-game-control label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--beast-text);
+  margin-bottom: 8px;
+}
+
+.beast-game-control input[type="range"] {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  background: var(--beast-bg);
+  border-radius: 3px;
+  outline: none;
+}
+
+.beast-game-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--beast-accent);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(192, 38, 211, 0.5);
+}
+
+.beast-control-info {
+  font-size: 12px;
+  color: var(--beast-text-muted);
+  margin-top: 8px;
+}
+
+.beast-coin-sides {
+  display: flex;
+  gap: 8px;
+}
+
+.beast-coin-side {
+  flex: 1;
+  padding: 12px;
+  border: 2px solid var(--beast-border);
+  border-radius: var(--beast-radius-sm);
+  background: var(--beast-bg);
+  color: var(--beast-text);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.beast-coin-side.active {
+  border-color: var(--beast-accent);
+  background: rgba(192, 38, 211, 0.15);
+  color: var(--beast-accent-light);
+}
+
+/* Right side bet controls */
+.beast-player-controls {
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-lg);
+  padding: 20px;
+}
+
+.beast-bet-section {
+  margin-bottom: 16px;
+}
+
+.beast-bet-section label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--beast-text-muted);
+  margin-bottom: 6px;
+  letter-spacing: 0.3px;
+}
+
+.beast-bet-select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-sm);
+  color: var(--beast-text);
+  font-size: 14px;
+  outline: none;
+}
+
+.beast-bet-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.beast-bet-input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-sm);
+  color: var(--beast-text);
+  font-size: 16px;
+  font-weight: 700;
+  outline: none;
+}
+
+.beast-bet-input:focus {
+  border-color: var(--beast-accent);
+}
+
+.beast-bet-shortcuts {
+  display: flex;
+  gap: 4px;
+}
+
+.beast-bet-shortcuts button {
+  padding: 8px 12px;
+  background: var(--beast-bg-hover);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-sm);
+  color: var(--beast-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.beast-bet-shortcuts button:hover {
+  background: var(--beast-bg-card);
+  color: var(--beast-text);
+  border-color: var(--beast-accent);
+}
+
+.beast-bet-range {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+  margin-top: 4px;
+}
+
+.beast-play-btn {
+  width: 100%;
+  padding: 14px;
+  background: var(--beast-accent-green);
+  color: white;
+  border: none;
+  border-radius: var(--beast-radius-sm);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 16px rgba(34, 197, 94, 0.3);
+  margin-bottom: 16px;
+}
+
+.beast-play-btn:hover:not(:disabled) {
+  background: #16a34a;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(34, 197, 94, 0.4);
+}
+
+.beast-play-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.beast-bet-history {
+  margin-top: 12px;
+  border-top: 1px solid var(--beast-border);
+  padding-top: 12px;
+}
+
+.beast-bet-history h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--beast-text-muted);
+}
+
+.beast-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.beast-history-row.win { color: var(--beast-accent-green); }
+.beast-history-row.loss { opacity: 0.6; }
+
+.beast-win-amount { color: var(--beast-accent-green); font-weight: 600; }
+.beast-loss-amount { color: var(--beast-accent-red); font-weight: 600; }
+
+.beast-game-info {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--beast-border);
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--beast-text-muted);
+}
+
+.beast-provably-fair {
+  color: var(--beast-accent-green);
+  font-weight: 600;
+}
+
+/* ─── WALLET / CASHIER MODAL ─── */
+.beast-wallet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.beast-wallet-modal {
+  background: var(--beast-bg-secondary);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-lg);
+  width: 90%;
+  max-width: 500px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.beast-wallet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--beast-border);
+}
+
+.beast-wallet-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 1px;
+}
+
+.beast-wallet-close {
+  background: none;
+  border: none;
+  color: var(--beast-text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.beast-wallet-close:hover {
+  color: var(--beast-text);
+}
+
+.beast-wallet-balance {
+  padding: 24px;
+  background: var(--beast-bg-card);
+  margin: 16px;
+  border-radius: var(--beast-radius);
+}
+
+.beast-wallet-balance-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--beast-text-muted);
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+
+.beast-wallet-balance-total {
+  font-size: 32px;
+  font-weight: 800;
+}
+
+.beast-wallet-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 16px;
+  overflow-x: auto;
+}
+
+.beast-wallet-tab {
+  padding: 8px 14px;
+  border: 1px solid var(--beast-border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--beast-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.beast-wallet-tab.active {
+  background: var(--beast-accent);
+  color: white;
+  border-color: var(--beast-accent);
+}
+
+.beast-wallet-tab:hover:not(.active) {
+  border-color: var(--beast-accent);
+  color: var(--beast-text);
+}
+
+.beast-wallet-msg {
+  margin: 12px 16px;
+  padding: 10px 14px;
+  border-radius: var(--beast-radius-sm);
+  font-size: 13px;
+}
+
+.beast-wallet-msg.success {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--beast-accent-green);
+}
+
+.beast-wallet-msg.error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--beast-accent-red);
+}
+
+.beast-wallet-content {
+  padding: 20px 24px;
+}
+
+.beast-wallet-field {
+  margin-bottom: 16px;
+}
+
+.beast-wallet-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--beast-text-muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.beast-wallet-currency-select {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.beast-wallet-currency-select select {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  outline: none;
+}
+
+.beast-wallet-curr-balance {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--beast-text-muted);
+}
+
+.beast-wallet-address-row {
+  display: flex;
+  gap: 8px;
+}
+
+.beast-wallet-address {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 13px;
+  font-family: monospace;
+  outline: none;
+}
+
+.beast-wallet-copy-btn {
+  padding: 10px 14px;
+  background: var(--beast-bg-hover);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 14px;
+}
+
+.beast-wallet-copy-btn:hover {
+  background: var(--beast-bg-card);
+  border-color: var(--beast-accent);
+}
+
+.beast-wallet-note {
+  font-size: 12px;
+  color: var(--beast-text-muted);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.beast-wallet-note strong {
+  color: var(--beast-accent-light);
+}
+
+.beast-wallet-input, .beast-wallet-select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.beast-wallet-input:focus, .beast-wallet-select:focus {
+  border-color: var(--beast-accent);
+}
+
+.beast-wallet-avail {
+  font-size: 12px;
+  color: var(--beast-text-muted);
+  margin-top: 4px;
+}
+
+.beast-wallet-action-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--beast-accent);
+  color: white;
+  border: none;
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 12px;
+}
+
+.beast-wallet-action-btn:hover:not(:disabled) {
+  background: var(--beast-accent-light);
+  transform: translateY(-1px);
+}
+
+.beast-wallet-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.beast-wallet-danger-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--beast-accent-red);
+  color: white;
+  border: none;
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 12px;
+  transition: all 0.2s;
+}
+
+.beast-wallet-danger-btn:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.beast-wallet-buy-info {
+  text-align: center;
+}
+
+.beast-wallet-buy-info p {
+  color: var(--beast-text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Link DCB Tab */
+.beast-wallet-link-info h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
+.beast-wallet-link-info p {
+  font-size: 13px;
+  color: var(--beast-text-muted);
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.beast-wallet-compat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.beast-compat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--beast-bg);
+  border-radius: var(--beast-radius-sm);
+  font-size: 13px;
+}
+
+.beast-compat-arrow {
+  color: var(--beast-accent);
+  font-weight: 700;
+}
+
+.beast-compat-ok {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--beast-accent-green);
+  font-weight: 600;
+}
+
+.beast-wallet-linked {
+  margin-top: 16px;
+}
+
+.beast-linked-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--beast-accent-green);
+  margin-bottom: 8px;
+}
+
+.beast-linked-address {
+  font-size: 13px;
+  color: var(--beast-text-muted);
+  margin-bottom: 12px;
+}
+
+.beast-linked-address code {
+  color: var(--beast-accent-light);
+  background: var(--beast-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.beast-wallet-link-status {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--beast-text-muted);
+  text-align: center;
+}
+
+/* ─── DISCORD SHARE MODAL ─── */
+.beast-share-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.beast-share-modal {
+  background: var(--beast-bg-secondary);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-lg);
+  width: 90%;
+  max-width: 460px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+.beast-share-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--beast-border);
+}
+
+.beast-share-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.beast-share-close {
+  background: none;
+  border: none;
+  color: var(--beast-text-muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.beast-share-content {
+  padding: 20px;
+}
+
+.beast-share-preview {
+  margin-bottom: 16px;
+}
+
+.beast-share-preview-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--beast-bg);
+  border-radius: var(--beast-radius-sm);
+  border-left: 3px solid var(--beast-accent);
+}
+
+.beast-share-game-emoji {
+  font-size: 28px;
+}
+
+.beast-share-field {
+  margin-bottom: 14px;
+}
+
+.beast-share-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--beast-text-muted);
+  margin-bottom: 6px;
+}
+
+.beast-share-types {
+  display: flex;
+  gap: 8px;
+}
+
+.beast-share-type {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-sm);
+  background: transparent;
+  color: var(--beast-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.beast-share-type.active {
+  border-color: var(--beast-accent);
+  color: var(--beast-accent-light);
+  background: rgba(192, 38, 211, 0.1);
+}
+
+.beast-share-select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  outline: none;
+}
+
+.beast-share-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.beast-share-charcount {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+  text-align: right;
+  margin-top: 4px;
+}
+
+.beast-share-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--beast-accent-red);
+  padding: 8px 12px;
+  border-radius: var(--beast-radius-sm);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.beast-share-success {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.beast-share-success-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.beast-share-success h3 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+
+.beast-share-success p {
+  color: var(--beast-text-muted);
+  margin: 0 0 20px;
+}
+
+/* ─── SPORTS BETTING ─── */
+.beast-sports {
+  display: flex;
+  flex: 1;
+}
+
+.beast-sports-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  padding: 16px 12px;
+  background: var(--beast-bg-secondary);
+  border-right: 1px solid var(--beast-border);
+}
+
+.beast-sport-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--beast-text-muted);
+  font-size: 14px;
+  border-radius: var(--beast-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.beast-sport-btn:hover {
+  background: var(--beast-bg-hover);
+  color: var(--beast-text);
+}
+
+.beast-sport-btn.active {
+  background: rgba(192, 38, 211, 0.15);
+  color: var(--beast-accent-light);
+}
+
+.beast-sports-main {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.beast-sports-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.beast-sports-tab {
+  padding: 8px 20px;
+  border: 1px solid var(--beast-border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--beast-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s;
+}
+
+.beast-sports-tab.active {
+  background: var(--beast-accent);
+  color: white;
+  border-color: var(--beast-accent);
+}
+
+.beast-loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--beast-text-muted);
+}
+
+.beast-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.beast-event-card {
+  background: var(--beast-bg-card);
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius);
+  padding: 16px 20px;
+  transition: all 0.2s;
+}
+
+.beast-event-card:hover {
+  border-color: var(--beast-accent);
+}
+
+.beast-event-card.live {
+  border-left: 3px solid var(--beast-accent-red);
+}
+
+.beast-event-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.beast-event-league {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--beast-text-muted);
+  letter-spacing: 0.5px;
+}
+
+.beast-event-time {
+  font-size: 12px;
+  color: var(--beast-text-muted);
+}
+
+.beast-event-live {
+  color: var(--beast-accent-red);
+  font-weight: 700;
+}
+
+.beast-event-matchup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+
+.beast-event-team {
+  font-size: 16px;
+  font-weight: 700;
+  flex: 1;
+  text-align: center;
+}
+
+.beast-event-vs {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--beast-text-muted);
+}
+
+.beast-event-score {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--beast-accent-gold);
+}
+
+.beast-event-odds {
+  display: flex;
+  gap: 8px;
+}
+
+.beast-odds-btn {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--beast-border);
+  border-radius: var(--beast-radius-sm);
+  background: var(--beast-bg);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.beast-odds-btn:hover {
+  border-color: var(--beast-accent);
+  background: rgba(192, 38, 211, 0.08);
+}
+
+.beast-odds-btn.selected {
+  border-color: var(--beast-accent);
+  background: rgba(192, 38, 211, 0.2);
+}
+
+.beast-odds-label {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+}
+
+.beast-odds-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--beast-text);
+}
+
+.beast-odds-btn.selected .beast-odds-value {
+  color: var(--beast-accent-light);
+}
+
+/* Bet Slip */
+.beast-betslip {
+  width: 280px;
+  flex-shrink: 0;
+  padding: 16px;
+  background: var(--beast-bg-secondary);
+  border-left: 1px solid var(--beast-border);
+}
+
+.beast-betslip h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
+.beast-betslip-empty {
+  font-size: 13px;
+  color: var(--beast-text-muted);
+  text-align: center;
+  padding: 20px 0;
+}
+
+.beast-betslip-item {
+  padding: 10px 12px;
+  background: var(--beast-bg-card);
+  border-radius: var(--beast-radius-sm);
+  margin-bottom: 8px;
+  position: relative;
+}
+
+.beast-betslip-match {
+  font-size: 12px;
+  color: var(--beast-text-muted);
+  margin-bottom: 4px;
+}
+
+.beast-betslip-pick {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.beast-betslip-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--beast-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.beast-betslip-remove:hover {
+  color: var(--beast-accent-red);
+}
+
+.beast-betslip-total {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  border-top: 1px solid var(--beast-border);
+  margin-top: 8px;
+}
+
+.beast-betslip-amount {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.beast-betslip-amount select {
+  width: 80px;
+  padding: 8px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 13px;
+}
+
+.beast-betslip-amount input {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--beast-bg);
+  border: 1px solid var(--beast-border);
+  color: var(--beast-text);
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  outline: none;
+}
+
+.beast-betslip-payout {
+  font-size: 14px;
+  text-align: center;
+  padding: 8px 0;
+  color: var(--beast-accent-green);
+}
+
+.beast-place-bet-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--beast-accent-green);
+  color: white;
+  border: none;
+  border-radius: var(--beast-radius-sm);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.beast-place-bet-btn:hover:not(:disabled) {
+  background: #16a34a;
+}
+
+.beast-place-bet-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.beast-betslip-result {
+  margin-top: 10px;
+  font-size: 13px;
+  text-align: center;
+  color: var(--beast-text-muted);
+}
+
+/* ─── FOOTER ─── */
+.beast-footer {
+  padding: 20px 24px;
+  background: var(--beast-bg-secondary);
+  border-top: 1px solid var(--beast-border);
+  text-align: center;
+}
+
+.beast-footer-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--beast-text-muted);
+  margin-bottom: 6px;
+}
+
+.beast-footer-powered {
+  font-size: 11px;
+  color: var(--beast-text-muted);
+  opacity: 0.6;
+}
+
+/* ─── RESPONSIVE ─── */
+@media (max-width: 1024px) {
+  .beast-sidebar-cats {
+    width: 60px;
+    padding: 12px 4px;
+  }
+  .beast-cat-header {
+    display: none;
+  }
+  .beast-cat-btn {
+    justify-content: center;
+    padding: 10px;
+    font-size: 18px;
+  }
+  .beast-cat-btn span ~ * {
+    display: none;
+  }
+  .beast-betslip {
+    width: 240px;
+  }
+  .beast-sports-sidebar {
+    width: 60px;
+    padding: 12px 4px;
+  }
+  .beast-sport-btn {
+    justify-content: center;
+    padding: 10px;
+    font-size: 18px;
+  }
+  .beast-sport-btn span ~ * {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .beast-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .beast-topbar-center {
+    order: 3;
+    max-width: 100%;
+    width: 100%;
+  }
+  .beast-vip-badge {
+    display: none;
+  }
+  .beast-hero {
+    grid-template-columns: 1fr;
+  }
+  .beast-hero-promo {
+    display: none;
+  }
+  .beast-player-layout {
+    grid-template-columns: 1fr;
+  }
+  .beast-game-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .beast-game-card {
+    width: 140px;
+  }
+  .beast-sidebar-cats, .beast-sports-sidebar {
+    display: none;
+  }
+  .beast-betslip {
+    display: none;
+  }
+}

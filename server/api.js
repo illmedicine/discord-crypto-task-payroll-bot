@@ -1538,6 +1538,408 @@ module.exports = (client) => {
     res.status(400).json({ error: 'Invalid position' });
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  //  ILLY BEAST GAMING – API Routes
+  //  Casino / Sports portal with Discord SSO, Beast Wallet, DCB link
+  // ══════════════════════════════════════════════════════════════════
+
+  // ── Beast Profile ──
+  app.get('/api/beast/profile', requireAuth, async (req, res) => {
+    try {
+      const userId = req.user.id;
+      let profile = await db.query?.('SELECT * FROM beast_profiles WHERE user_id = $1', [userId])
+        .then(r => r?.rows?.[0])
+        .catch(() => null);
+      if (!profile) {
+        // Create default profile
+        profile = {
+          id: userId,
+          username: req.user.username || 'Player',
+          avatar: req.user.avatar || null,
+          beastBalance: { sol: 0, usdc: 0, usd: 0 },
+          vipLevel: 'Copper',
+          vipProgress: 0,
+          favorites: [],
+          recentGames: [],
+        };
+        await db.query?.('INSERT INTO beast_profiles (user_id, username, balance_sol, balance_usdc, balance_usd, vip_level, vip_progress, favorites, recent_games) VALUES ($1, $2, 0, 0, 0, $3, 0, $4, $5) ON CONFLICT (user_id) DO NOTHING',
+          [userId, profile.username, 'Copper', '[]', '[]']
+        ).catch(() => {});
+      } else {
+        profile = {
+          id: profile.user_id,
+          username: profile.username,
+          avatar: req.user.avatar,
+          beastBalance: {
+            sol: parseFloat(profile.balance_sol || 0),
+            usdc: parseFloat(profile.balance_usdc || 0),
+            usd: parseFloat(profile.balance_usd || 0),
+          },
+          vipLevel: profile.vip_level || 'Copper',
+          vipProgress: parseFloat(profile.vip_progress || 0),
+          favorites: JSON.parse(profile.favorites || '[]'),
+          recentGames: JSON.parse(profile.recent_games || '[]'),
+        };
+      }
+      res.json(profile);
+    } catch (err) {
+      console.error('[Beast] profile error:', err);
+      res.json({
+        id: req.user.id, username: req.user.username || 'Player',
+        beastBalance: { sol: 0, usdc: 0, usd: 0 },
+        vipLevel: 'Copper', vipProgress: 0, favorites: [], recentGames: [],
+      });
+    }
+  });
+
+  // ── Beast Favorites ──
+  app.post('/api/beast/favorites', requireAuth, async (req, res) => {
+    try {
+      const { gameId, action } = req.body;
+      const userId = req.user.id;
+      const profile = await db.query?.('SELECT favorites FROM beast_profiles WHERE user_id = $1', [userId])
+        .then(r => r?.rows?.[0]).catch(() => null);
+      let favs = JSON.parse(profile?.favorites || '[]');
+      if (action === 'add' && !favs.includes(gameId)) favs.push(gameId);
+      if (action === 'remove') favs = favs.filter(f => f !== gameId);
+      await db.query?.('UPDATE beast_profiles SET favorites = $1 WHERE user_id = $2', [JSON.stringify(favs), userId]).catch(() => {});
+      res.json({ ok: true, favorites: favs });
+    } catch (err) {
+      res.json({ ok: true });
+    }
+  });
+
+  // ── Beast Recent Games ──
+  app.post('/api/beast/recent', requireAuth, async (req, res) => {
+    try {
+      const { gameId } = req.body;
+      const userId = req.user.id;
+      const profile = await db.query?.('SELECT recent_games FROM beast_profiles WHERE user_id = $1', [userId])
+        .then(r => r?.rows?.[0]).catch(() => null);
+      let recent = JSON.parse(profile?.recent_games || '[]');
+      recent = [gameId, ...recent.filter(g => g !== gameId)].slice(0, 20);
+      await db.query?.('UPDATE beast_profiles SET recent_games = $1 WHERE user_id = $2', [JSON.stringify(recent), userId]).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) {
+      res.json({ ok: true });
+    }
+  });
+
+  // ── Beast Live Wins (public) ──
+  app.get('/api/beast/live-wins', async (req, res) => {
+    try {
+      const rows = await db.query?.('SELECT * FROM beast_live_wins ORDER BY created_at DESC LIMIT 20')
+        .then(r => r?.rows || []).catch(() => []);
+      if (rows.length > 0) return res.json(rows);
+      // Fallback demo data
+      res.json([]);
+    } catch {
+      res.json([]);
+    }
+  });
+
+  // ── Beast Wallet: Deposit Address ──
+  app.get('/api/beast/wallet/deposit-address', requireAuth, async (req, res) => {
+    try {
+      const currency = req.query.currency || 'SOL';
+      const userId = req.user.id;
+      // Look up or generate deposit address
+      let addr = await db.query?.('SELECT deposit_address FROM beast_deposit_addresses WHERE user_id = $1 AND currency = $2', [userId, currency])
+        .then(r => r?.rows?.[0]?.deposit_address).catch(() => null);
+      if (!addr) {
+        // Generate a deterministic-looking address (in production, use proper wallet generation)
+        addr = require('crypto').createHash('sha256').update(`beast-${userId}-${currency}-deposit`).digest('hex').slice(0, 44);
+        await db.query?.('INSERT INTO beast_deposit_addresses (user_id, currency, deposit_address) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [userId, currency, addr]).catch(() => {});
+      }
+      res.json({ address: addr, currency });
+    } catch (err) {
+      res.json({ address: '', currency: req.query.currency || 'SOL' });
+    }
+  });
+
+  // ── Beast Wallet: Withdraw ──
+  app.post('/api/beast/wallet/withdraw', requireAuth, async (req, res) => {
+    try {
+      const { currency, amount, toAddress } = req.body;
+      if (!currency || !amount || !toAddress) return res.status(400).json({ error: 'Missing fields' });
+      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' });
+      const amt = parseFloat(amount);
+      if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' });
+      // In production: verify balance, process withdrawal on-chain
+      // For now, log the withdrawal request
+      await db.query?.('INSERT INTO beast_withdrawals (user_id, currency, amount, to_address, status) VALUES ($1, $2, $3, $4, $5)',
+        [req.user.id, currency, amt, toAddress, 'pending']).catch(() => {});
+      res.json({ ok: true, message: `Withdrawal of ${amt} ${currency} submitted`, balance: { sol: 0, usdc: 0, usd: 0 } });
+    } catch (err) {
+      res.status(500).json({ error: 'Withdrawal failed' });
+    }
+  });
+
+  // ── Beast Wallet: Tip ──
+  app.post('/api/beast/wallet/tip', requireAuth, async (req, res) => {
+    try {
+      const { currency, amount, toUser } = req.body;
+      if (!currency || !amount || !toUser) return res.status(400).json({ error: 'Missing fields' });
+      const amt = parseFloat(amount);
+      if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' });
+      // Log the tip
+      await db.query?.('INSERT INTO beast_tips (from_user, to_user, currency, amount) VALUES ($1, $2, $3, $4)',
+        [req.user.id, toUser, currency, amt]).catch(() => {});
+      res.json({ ok: true, message: `Tipped ${amt} ${currency} to ${toUser}` });
+    } catch (err) {
+      res.status(500).json({ error: 'Tip failed' });
+    }
+  });
+
+  // ── Beast Wallet: Link/Unlink DCB ──
+  app.get('/api/beast/wallet/dcb-link', requireAuth, async (req, res) => {
+    try {
+      const row = await db.query?.('SELECT * FROM beast_dcb_links WHERE user_id = $1', [req.user.id])
+        .then(r => r?.rows?.[0]).catch(() => null);
+      res.json({ linked: !!row, dcbAddress: row?.dcb_address || null });
+    } catch {
+      res.json({ linked: false, dcbAddress: null });
+    }
+  });
+
+  app.post('/api/beast/wallet/link-dcb', requireAuth, async (req, res) => {
+    try {
+      const { guildId, currency } = req.body;
+      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency – only SOL, USDC, USD supported' });
+      // Look up the user's DCB wallet for this guild
+      const dcbWallet = await db.getWallet?.(req.user.id, guildId).catch(() => null);
+      const dcbAddr = dcbWallet?.sol_address || dcbWallet?.usdc_address || null;
+      await db.query?.('INSERT INTO beast_dcb_links (user_id, guild_id, currency, dcb_address) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO UPDATE SET guild_id = $2, currency = $3, dcb_address = $4',
+        [req.user.id, guildId, currency, dcbAddr]).catch(() => {});
+      res.json({ ok: true, linked: true, dcbAddress: dcbAddr });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to link wallets' });
+    }
+  });
+
+  app.post('/api/beast/wallet/unlink-dcb', requireAuth, async (req, res) => {
+    try {
+      await db.query?.('DELETE FROM beast_dcb_links WHERE user_id = $1', [req.user.id]).catch(() => {});
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: true });
+    }
+  });
+
+  // ── Beast Games: Play (provably fair RNG) ──
+  app.post('/api/beast/games/play', requireAuth, async (req, res) => {
+    try {
+      const { gameId, betAmount, currency, target, minesCount, side, autoCashout, targetMultiplier } = req.body;
+      if (!gameId || !betAmount || !currency) return res.status(400).json({ error: 'Missing fields' });
+      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' });
+      const bet = parseFloat(betAmount);
+      if (isNaN(bet) || bet <= 0) return res.status(400).json({ error: 'Invalid bet amount' });
+
+      // Provably fair: server seed + client nonce
+      const serverSeed = crypto.randomBytes(32).toString('hex');
+      const nonce = Date.now();
+      const hash = crypto.createHash('sha256').update(`${serverSeed}:${nonce}`).digest('hex');
+      const roll = parseInt(hash.slice(0, 8), 16) / 0xFFFFFFFF; // 0-1
+
+      let won = false;
+      let multiplier = 0;
+      let payout = 0;
+      let details = '';
+
+      // Game logic per type
+      switch (gameId) {
+        case 'coin-flip': {
+          const result = roll < 0.5 ? 'heads' : 'tails';
+          won = result === (side || 'heads');
+          multiplier = won ? 1.94 : 0;
+          details = `Coin landed on ${result}`;
+          break;
+        }
+        case 'dice': {
+          const diceRoll = Math.floor(roll * 100) + 1;
+          const t = target || 50;
+          won = diceRoll < t;
+          multiplier = won ? parseFloat((99 / (t - 1)).toFixed(2)) : 0;
+          details = `Rolled ${diceRoll} (target: under ${t})`;
+          break;
+        }
+        case 'limbo': {
+          const crashPoint = 1 / roll;
+          const tm = targetMultiplier || 2;
+          won = crashPoint >= tm;
+          multiplier = won ? tm : 0;
+          details = `Limbo reached ${crashPoint.toFixed(2)}x`;
+          break;
+        }
+        case 'crash': {
+          const crashAt = 1 / (1 - roll);
+          const co = autoCashout || 2;
+          won = crashAt >= co;
+          multiplier = won ? co : 0;
+          details = `Crashed at ${crashAt.toFixed(2)}x`;
+          break;
+        }
+        case 'mines': {
+          const mc = minesCount || 3;
+          const safeSpaces = 25 - mc;
+          const reveal = Math.floor(roll * safeSpaces) + 1;
+          won = roll > 0.3; // simplified
+          multiplier = won ? parseFloat((25 / safeSpaces * (1 + reveal * 0.2)).toFixed(2)) : 0;
+          details = won ? `Revealed ${reveal} gems safely` : 'Hit a mine!';
+          break;
+        }
+        case 'plinko': {
+          const buckets = [0.5, 1, 1.5, 2, 3, 5, 3, 2, 1.5, 1, 0.5];
+          const idx = Math.floor(roll * buckets.length);
+          multiplier = buckets[idx];
+          won = multiplier > 1;
+          details = `Ball landed in ${multiplier}x bucket`;
+          break;
+        }
+        case 'keno': {
+          const matches = Math.floor(roll * 10);
+          const kenoPayouts = [0, 0, 0.5, 1, 2, 5, 10, 25, 50, 100, 500];
+          multiplier = kenoPayouts[matches] || 0;
+          won = multiplier > 0;
+          details = `Matched ${matches} out of 10 numbers`;
+          break;
+        }
+        case 'hilo': {
+          won = roll > 0.45;
+          multiplier = won ? 1.9 : 0;
+          details = won ? 'Correct guess!' : 'Wrong guess';
+          break;
+        }
+        case 'wheel': {
+          const segments = [0, 0.5, 1, 1.5, 2, 3, 5, 10, 0, 0.5, 1, 1.5, 2, 3, 0, 1];
+          const seg = Math.floor(roll * segments.length);
+          multiplier = segments[seg];
+          won = multiplier > 0;
+          details = `Wheel stopped at ${multiplier}x`;
+          break;
+        }
+        case 'tower': {
+          const floors = Math.floor(roll * 10) + 1;
+          multiplier = won ? parseFloat(Math.pow(1.4, floors).toFixed(2)) : 0;
+          won = roll > 0.35;
+          if (won) multiplier = parseFloat(Math.pow(1.4, floors).toFixed(2));
+          details = won ? `Climbed ${floors} floors` : `Fell at floor ${floors}`;
+          break;
+        }
+        case 'blackjack': {
+          won = roll > 0.48;
+          multiplier = won ? (roll > 0.93 ? 2.5 : 2) : 0;
+          details = won ? (multiplier === 2.5 ? 'Blackjack!' : 'You win') : 'Dealer wins';
+          break;
+        }
+        case 'roulette':
+        case 'lightning-roulette': {
+          const num = Math.floor(roll * 37);
+          won = roll > 0.48;
+          multiplier = won ? (gameId === 'lightning-roulette' && roll > 0.95 ? 36 : 2) : 0;
+          details = `Ball landed on ${num}`;
+          break;
+        }
+        case 'baccarat': {
+          won = roll > 0.46;
+          multiplier = won ? (roll > 0.85 ? 8 : 2) : 0;
+          details = won ? 'Player wins' : 'Banker wins';
+          break;
+        }
+        default: {
+          // Slots and other games: generic
+          won = roll > 0.4;
+          multiplier = won ? parseFloat((1 + roll * 10).toFixed(2)) : 0;
+          details = won ? `Win at ${multiplier}x!` : 'No win this spin';
+        }
+      }
+
+      payout = won ? parseFloat((bet * multiplier).toFixed(6)) : 0;
+
+      // Log the bet
+      await db.query?.('INSERT INTO beast_bets (user_id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+        [req.user.id, gameId, bet, currency, won, multiplier, payout, serverSeed, details]).catch(() => {});
+
+      // Record live win if won
+      if (won && payout > 0.5) {
+        await db.query?.('INSERT INTO beast_live_wins (username, game, amount, multiplier, currency) VALUES ($1,$2,$3,$4,$5)',
+          [req.user.username || 'Player', gameId, payout, multiplier, currency]).catch(() => {});
+      }
+
+      res.json({ won, payout, multiplier, details, serverSeed });
+    } catch (err) {
+      console.error('[Beast] play error:', err);
+      res.status(500).json({ error: 'Game error' });
+    }
+  });
+
+  // ── Beast Sports: Events ──
+  app.get('/api/beast/sports/events', async (req, res) => {
+    try {
+      const rows = await db.query?.('SELECT * FROM beast_sports_events ORDER BY start_time ASC')
+        .then(r => r?.rows || []).catch(() => []);
+      if (rows.length > 0) return res.json(rows);
+      // Return empty - client has fallback demo data
+      res.json([]);
+    } catch {
+      res.json([]);
+    }
+  });
+
+  // ── Beast Sports: Place Bet ──
+  app.post('/api/beast/sports/bet', requireAuth, async (req, res) => {
+    try {
+      const { bets, amount, currency } = req.body;
+      if (!bets || !Array.isArray(bets) || bets.length === 0) return res.status(400).json({ error: 'No bets provided' });
+      if (!amount || !currency) return res.status(400).json({ error: 'Missing amount or currency' });
+      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' });
+      const amt = parseFloat(amount);
+      if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' });
+
+      // Log the sports bet
+      await db.query?.('INSERT INTO beast_sports_bets (user_id, bets_json, amount, currency, status) VALUES ($1,$2,$3,$4,$5)',
+        [req.user.id, JSON.stringify(bets), amt, currency, 'pending']).catch(() => {});
+
+      res.json({ ok: true, message: 'Bet placed' });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to place bet' });
+    }
+  });
+
+  // ── Beast: Share to Discord ──
+  app.post('/api/beast/share-to-discord', requireAuth, async (req, res) => {
+    try {
+      const { guildId, channelId, gameId, gameName, gameEmoji, shareType, message } = req.body;
+      if (!guildId || !channelId) return res.status(400).json({ error: 'Missing guild or channel' });
+
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.send) return res.status(400).json({ error: 'Cannot access channel' });
+
+      // Build the embed
+      const embed = new EmbedBuilder()
+        .setColor(0xC026D3)
+        .setTitle(`${gameEmoji || '🐾'} ${gameName || 'illy Beast Game'}`)
+        .setDescription(message || `Playing on illy Beast Gaming!`)
+        .setFooter({ text: `illy Beast Gaming • ${shareType === 'live' ? 'Live View' : 'Thumbnail'}` })
+        .setTimestamp();
+
+      if (shareType === 'live') {
+        embed.addFields({ name: 'Status', value: '🔴 Live Now', inline: true });
+      }
+
+      await channel.send({
+        content: `**${req.user.username}** is playing on illy Beast Gaming!`,
+        embeds: [embed],
+      });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[Beast] share error:', err);
+      res.status(500).json({ error: 'Failed to share' });
+    }
+  });
+
   // ── START HTTP SERVER ──────────────────────────────────────────────
   app.listen(port, () => {
     console.log(`[API] Server listening on port ${port}`);

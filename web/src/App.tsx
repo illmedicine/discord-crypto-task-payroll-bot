@@ -7,13 +7,14 @@ import Workers from './pages/Workers'
 import QualifyPage from './pages/QualifyPage'
 import ServerMusic from './pages/ServerMusic'
 
+import IllyBeastGaming from './pages/IllyBeastGaming'
 import PerformanceMonitor from './components/PerformanceMonitor'
 import ProfilerLogger from './components/ProfilerLogger'
 import EventTicker from './components/EventTicker'
 import WalletSettings from './components/WalletSettings'
 import api, { API_BASE, getAuthUrl, getGoogleAuthUrl, getGoogleLinkUrl, getDiscordLinkUrl } from './api'
 
-type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify' | 'wallet' | 'music'
+type Page = 'dashboard' | 'events' | 'history' | 'treasury' | 'workers' | 'qualify' | 'wallet' | 'music' | 'beast'
 
 const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Home', icon: '📊' },
@@ -22,6 +23,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: string }[] = [
   { id: 'music', label: 'Server Music', icon: '🎵' },
   { id: 'workers', label: 'Workers', icon: '👥' },
   { id: 'history', label: 'History', icon: '📜' },
+  { id: 'beast', label: 'illy Beast Gaming', icon: '🐾' },
 ]
 
 // Detect Capacitor / mobile environment
@@ -409,6 +411,7 @@ export default function App() {
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
             {page === 'music' && <ServerMusic guildId={guildId} />}
             {page === 'wallet' && <WalletSettings />}
+            {page === 'beast' && <IllyBeastGaming guildId={guildId} />}
           </ProfilerLogger>
         </main>
 
@@ -595,6 +598,7 @@ export default function App() {
             {page === 'workers' && <Workers guildId={guildId} isOwner={isOwner} userRole={userRole} />}
             {page === 'music' && <ServerMusic guildId={guildId} />}
             {page === 'wallet' && <WalletSettings />}
+            {page === 'beast' && <IllyBeastGaming guildId={guildId} />}
           </ProfilerLogger>
         </main>
 
