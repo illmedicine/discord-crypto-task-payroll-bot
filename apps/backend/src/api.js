@@ -5281,8 +5281,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const row = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (row) {
-        const dcbUser = await db.get('SELECT solana_address, custodial_address FROM users WHERE discord_id = ?', [req.user.id])
-        res.json({ linked: true, dcbAddress: row.dcb_address || null, dcbSolAddress: dcbUser?.solana_address || null })
+        const dcbUser = await db.get('SELECT * FROM users WHERE discord_id = ?', [req.user.id])
+        res.json({ linked: true, dcbAddress: row.dcb_address || null, dcbSolAddress: dcbUser?.solana_address || dcbUser?.wallet_address || null })
       } else {
         res.json({ linked: false, dcbAddress: null })
       }
@@ -5295,8 +5295,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const { guildId, currency } = req.body
       if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency – only SOL, USDC, USD supported' })
-      const dcbUser = await db.get('SELECT solana_address, custodial_address FROM users WHERE discord_id = ?', [req.user.id])
-      const dcbAddr = dcbUser?.solana_address || dcbUser?.custodial_address || null
+      // Use SELECT * to avoid column name mismatch across schema versions
+      const dcbUser = await db.get('SELECT * FROM users WHERE discord_id = ?', [req.user.id])
+      const dcbAddr = dcbUser?.solana_address || dcbUser?.wallet_address || null
       if (!dcbAddr) return res.status(400).json({ error: 'No DCB wallet found. Connect a wallet in DCB Event Manager first.' })
       await db.run(
         `INSERT INTO beast_dcb_links (user_id, guild_id, currency, dcb_address)
@@ -5307,7 +5308,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.json({ ok: true, linked: true, dcbAddress: dcbAddr })
     } catch (err) {
       console.error('[Beast] link-dcb error:', err)
-      res.status(500).json({ error: 'Failed to link wallets' })
+      res.status(500).json({ error: 'Failed to link wallets: ' + (err?.message || 'unknown') })
     }
   })
 
