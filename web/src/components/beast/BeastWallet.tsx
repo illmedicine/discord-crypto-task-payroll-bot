@@ -26,6 +26,7 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [solPrice, setSolPrice] = useState(0)
+  const [dcbAvailable, setDcbAvailable] = useState<{ onChain: number; deposited: number; available: number } | null>(null)
 
   // Fetch SOL price on mount
   useEffect(() => {
@@ -141,15 +142,26 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
       setMessage({ type: 'error', text: 'Enter a valid amount' })
       return
     }
+    // Client-side check: if we know DCB available balance, validate first
+    if (dcbAvailable && currency === 'SOL' && amt > dcbAvailable.available + 0.000001) {
+      setMessage({ type: 'error', text: `Exceeds DCB wallet available: ${dcbAvailable.available.toFixed(6)} SOL` })
+      return
+    }
     setLoading(true)
     setMessage(null)
     try {
       const r = await api.post('/beast/wallet/deposit-from-dcb', { currency, amount: amt })
       setMessage({ type: 'success', text: r.data?.message || `Deposited ${amt} ${currency} from DCB wallet` })
       if (r.data?.balance) onBalanceChange(r.data.balance)
+      if (r.data?.dcbBalance) setDcbAvailable(r.data.dcbBalance)
       setDcbDepositAmount('')
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.response?.data?.error || 'Transfer failed' })
+      const errData = err?.response?.data
+      setMessage({ type: 'error', text: errData?.error || 'Transfer failed' })
+      // Update available balance from error response if present
+      if (errData?.available !== undefined) {
+        setDcbAvailable({ onChain: errData.onChainBalance || 0, deposited: errData.alreadyDeposited || 0, available: errData.available || 0 })
+      }
     } finally {
       setLoading(false)
     }
@@ -262,6 +274,13 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                     {loading ? 'Transferring...' : `Deposit ${currency}`}
                   </button>
                 </div>
+                {dcbAvailable && (
+                  <div style={{ fontSize: '0.78rem', color: '#a78bfa', marginTop: 6, padding: '6px 8px', background: 'rgba(167,139,250,0.08)', borderRadius: 6 }}>
+                    DCB Wallet: <strong>{dcbAvailable.onChain.toFixed(6)} SOL</strong> on-chain
+                    {dcbAvailable.deposited > 0 && <span style={{ color: '#f59e0b' }}> | {dcbAvailable.deposited.toFixed(6)} already deposited</span>}
+                    {' '}| Available: <strong style={{ color: '#22c55e' }}>{dcbAvailable.available.toFixed(6)} SOL</strong>
+                  </div>
+                )}
                 {dcbDepositAmount && parseFloat(dcbDepositAmount) > 0 && currency !== 'SOL' && solPrice > 0 && (
                   <div style={{ fontSize: '0.8rem', color: '#10b981', marginTop: 4 }}>
                     ≈ {(parseFloat(dcbDepositAmount) / solPrice).toFixed(6)} SOL @ ${solPrice.toFixed(2)}/SOL
@@ -274,6 +293,7 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                 )}
                 <p className="beast-wallet-note" style={{ marginTop: 4 }}>
                   Transfer funds from your connected DCB wallet into your Beast wallet instantly.
+                  Balance is verified on-chain before each deposit.
                   {currency !== 'SOL' && ' USD/USDC amounts are auto-converted to SOL.'}
                 </p>
               </div>

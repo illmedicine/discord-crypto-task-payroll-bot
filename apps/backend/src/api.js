@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken')
 const axios = require('axios')
 const crypto = require('crypto')
 const helmet = require('helmet')
+const { Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js')
 const rateLimit = require('express-rate-limit')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
@@ -5128,9 +5129,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         balance_after REAL,
         bet_id INTEGER,
         user_id TEXT,
+        username TEXT,
         details TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`)
+      // Migration: add username column if missing
+      await db.run(`ALTER TABLE beast_treasury_txns ADD COLUMN username TEXT`).catch(() => {})
       console.log('[Beast] Tables initialized (with treasury)')
     } catch (err) {
       console.error('[Beast] Table init error:', err)
@@ -5374,7 +5378,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
       const link = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (!link) return res.status(400).json({ error: 'Link your DCB wallet first' })
-      // Check user_wallets first, then guild_wallets (same fix as link-dcb routes)
+      // Check user_wallets first, then guild_wallets
       let dcbAddress = null
       const uw = await db.get('SELECT solana_address FROM user_wallets WHERE discord_id = ?', [req.user.id])
       if (uw && uw.solana_address) { dcbAddress = uw.solana_address }
@@ -5383,6 +5387,18 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         if (gw && gw.wallet_address) dcbAddress = gw.wallet_address
       }
       if (!dcbAddress) return res.status(400).json({ error: 'No DCB wallet found' })
+
+      // ── Verify on-chain SOL balance of linked DCB wallet ──
+      let onChainSol = 0
+      try {
+        const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+        const conn = new Connection(rpcUrl, 'confirmed')
+        const lamports = await conn.getBalance(new PublicKey(dcbAddress))
+        onChainSol = lamports / LAMPORTS_PER_SOL
+      } catch (rpcErr) {
+        console.error('[Beast] Solana RPC balance check failed:', rpcErr.message)
+        return res.status(400).json({ error: 'Unable to verify DCB wallet balance. Try again later.' })
+      }
 
       // Convert USD/USDC amounts to SOL equivalent for balance storage
       let solAmt = amt
@@ -5393,6 +5409,24 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         solAmt = parseFloat((amt / solPrice).toFixed(9))
       }
 
+      // Check total already deposited vs on-chain balance
+      const totalDeposited = await db.get(
+        `SELECT COALESCE(SUM(amount), 0) as total FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`,
+        [req.user.id]
+      )
+      const alreadyDepositedSol = parseFloat(totalDeposited?.total || 0)
+      const availableSol = Math.max(0, onChainSol - alreadyDepositedSol)
+
+      if (solAmt > availableSol + 0.000001) {
+        const availDisplay = currency === 'SOL' ? `${availableSol.toFixed(6)} SOL` : `$${(availableSol * (solPrice || await getSolPrice())).toFixed(2)} ${currency}`
+        return res.status(400).json({
+          error: `Insufficient DCB wallet balance. Available: ${availDisplay} (on-chain: ${onChainSol.toFixed(6)} SOL, already deposited: ${alreadyDepositedSol.toFixed(6)} SOL)`,
+          onChainBalance: onChainSol,
+          alreadyDeposited: alreadyDepositedSol,
+          available: availableSol
+        })
+      }
+
       await db.run(
         `INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING`,
         [req.user.id, req.user.username || 'Player']
@@ -5400,13 +5434,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Always credit balance_sol (all deposits convert to SOL)
       await db.run(`UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?`, [solAmt, req.user.id])
       await db.run('INSERT INTO beast_dcb_transfers (user_id, currency, amount, direction) VALUES (?, ?, ?, ?)',
-        [req.user.id, currency, amt, 'dcb_to_beast'])
+        [req.user.id, currency, solAmt, 'dcb_to_beast'])
+
+      // ── Record in treasury ledger ──
+      await db.run(
+        `INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details) VALUES (?,?,?,?,?,?)`,
+        ['deposit_from_dcb', 'SOL', solAmt, req.user.id, req.user.username || 'Player',
+         `DCB→Beast deposit: ${solAmt.toFixed(6)} SOL${currency !== 'SOL' ? ` (from ${amt} ${currency} @ $${solPrice})` : ''} | wallet: ${dcbAddress.slice(0,8)}...`]
+      )
+
       const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
-      const conversionNote = (currency !== 'SOL' && solPrice) ? ` (${amt} ${currency} ≈ ${solAmt} SOL @ $${solPrice})` : ''
+      const conversionNote = (currency !== 'SOL' && solPrice) ? ` (${amt} ${currency} ≈ ${solAmt.toFixed(6)} SOL @ $${solPrice})` : ''
       res.json({
-        ok: true, message: `Deposited ${solAmt} SOL from DCB wallet to Beast wallet${conversionNote}`,
+        ok: true, message: `Deposited ${solAmt.toFixed(6)} SOL from DCB wallet to Beast wallet${conversionNote}`,
         balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
         conversion: solPrice ? { inputAmount: amt, inputCurrency: currency, solAmount: solAmt, solPrice } : undefined,
+        dcbBalance: { onChain: onChainSol, deposited: alreadyDepositedSol + solAmt, available: availableSol - solAmt }
       })
     } catch (err) {
       console.error('[Beast] deposit-from-dcb error:', err)
@@ -5505,8 +5548,28 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         await db.run(`UPDATE beast_treasury SET ${treasuryBalCol} = ${treasuryBalCol} - ?, total_payouts = total_payouts + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [payout, payout])
       }
 
-      await db.run('INSERT INTO beast_bets (user_id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details) VALUES (?,?,?,?,?,?,?,?,?)',
+      // Record bet in beast_bets
+      const betInsert = await db.run('INSERT INTO beast_bets (user_id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details) VALUES (?,?,?,?,?,?,?,?,?)',
         [req.user.id, gameId, bet, currency, won ? 1 : 0, multiplier, payout, serverSeed, details])
+      const betRowId = betInsert?.lastID || null
+
+      // ── Treasury ledger: wager collected ──
+      const tAfter = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
+      const tBalAfter = parseFloat(tAfter?.[treasuryBalCol] || 0)
+      const uname = req.user.username || 'Player'
+      await db.run(
+        `INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, bet_id, user_id, username, details) VALUES (?,?,?,?,?,?,?,?)`,
+        ['wager_in', currency, bet, tBalAfter + (payout > 0 ? payout : 0), betRowId, req.user.id, uname,
+         `Wager: ${bet} ${currency} on ${gameId}`]
+      )
+      if (payout > 0) {
+        await db.run(
+          `INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, bet_id, user_id, username, details) VALUES (?,?,?,?,?,?,?,?)`,
+          ['payout', currency, payout, tBalAfter, betRowId, req.user.id, uname,
+           `Payout: ${payout} ${currency} (${multiplier}x) on ${gameId}`]
+        )
+      }
+
       if (won && payout > 0.5) {
         await db.run('INSERT INTO beast_live_wins (username, game, amount, multiplier, currency) VALUES (?,?,?,?,?)',
           [req.user.username || 'Player', gameId, payout, multiplier, currency])
@@ -5745,10 +5808,62 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
       const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
-      const txns = await db.all('SELECT * FROM beast_treasury_txns ORDER BY created_at DESC LIMIT 50')
+      const txns = await db.all('SELECT * FROM beast_treasury_txns ORDER BY created_at DESC LIMIT 200')
       res.json({ treasury, transactions: txns || [] })
     } catch (err) {
       res.status(500).json({ error: 'Failed to load treasury' })
+    }
+  })
+
+  // GET /api/beast/treasury/ledger - owner only: full audit ledger with filters
+  app.get('/api/beast/treasury/ledger', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const { type, limit, offset } = req.query
+      const lim = Math.min(parseInt(limit) || 100, 500)
+      const off = parseInt(offset) || 0
+
+      let whereClause = ''
+      const params = []
+      if (type && type !== 'all') {
+        whereClause = 'WHERE type = ?'
+        params.push(type)
+      }
+
+      const total = await db.get(`SELECT COUNT(*) as count FROM beast_treasury_txns ${whereClause}`, params)
+      const rows = await db.all(
+        `SELECT * FROM beast_treasury_txns ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+        [...params, lim, off]
+      )
+
+      // Also get summary stats
+      const stats = await db.get(`SELECT
+        COUNT(*) as total_txns,
+        SUM(CASE WHEN type = 'wager_in' THEN amount ELSE 0 END) as total_wagers,
+        SUM(CASE WHEN type = 'payout' THEN amount ELSE 0 END) as total_payouts,
+        SUM(CASE WHEN type = 'deposit_from_dcb' THEN amount ELSE 0 END) as total_deposits,
+        SUM(CASE WHEN type = 'load' THEN amount ELSE 0 END) as total_loaded,
+        SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END) as total_withdrawals
+      FROM beast_treasury_txns`)
+
+      // Get all DCB transfers for audit
+      const dcbTransfers = await db.all(
+        `SELECT t.*, bp.username FROM beast_dcb_transfers t
+         LEFT JOIN beast_profiles bp ON t.user_id = bp.user_id
+         ORDER BY t.created_at DESC LIMIT ?`, [lim]
+      )
+
+      res.json({
+        transactions: rows || [],
+        total: total?.count || 0,
+        stats: stats || {},
+        dcbTransfers: dcbTransfers || [],
+        limit: lim,
+        offset: off
+      })
+    } catch (err) {
+      console.error('[Beast] ledger error:', err)
+      res.status(500).json({ error: 'Failed to load ledger' })
     }
   })
 
@@ -5763,8 +5878,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const tBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
       await db.run(`UPDATE beast_treasury SET ${tBalCol} = ${tBalCol} + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [amt])
       const updated = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
-      await db.run('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, details) VALUES (?,?,?,?,?,?)',
-        ['load', currency, amt, parseFloat(updated?.[tBalCol] || 0), req.user.id, `Owner loaded ${amt} ${currency}`])
+      await db.run('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details) VALUES (?,?,?,?,?,?,?)',
+        ['load', currency, amt, parseFloat(updated?.[tBalCol] || 0), req.user.id, req.user.username || 'Owner', `Owner loaded ${amt} ${currency}`])
       res.json({ ok: true, treasury: updated })
     } catch (err) {
       res.status(500).json({ error: 'Failed to load treasury' })

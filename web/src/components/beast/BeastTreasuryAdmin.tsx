@@ -5,15 +5,23 @@ interface Props {
   onClose: () => void
 }
 
+type LedgerTab = 'overview' | 'ledger' | 'deposits' | 'load'
+type TxnFilter = 'all' | 'wager_in' | 'payout' | 'deposit_from_dcb' | 'load' | 'withdrawal'
+
 export default function BeastTreasuryAdmin({ onClose }: Props) {
   const [treasury, setTreasury] = useState<any>(null)
   const [transactions, setTransactions] = useState<any[]>([])
+  const [ledgerData, setLedgerData] = useState<any>(null)
+  const [ledgerFilter, setLedgerFilter] = useState<TxnFilter>('all')
+  const [ledgerPage, setLedgerPage] = useState(0)
+  const [tab, setTab] = useState<LedgerTab>('overview')
   const [loadCurrency, setLoadCurrency] = useState<'SOL' | 'USDC' | 'USD'>('USD')
   const [loadAmount, setLoadAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => { fetchTreasury() }, [])
+  useEffect(() => { if (tab === 'ledger' || tab === 'deposits') fetchLedger() }, [tab, ledgerFilter, ledgerPage])
 
   const fetchTreasury = async () => {
     try {
@@ -22,6 +30,17 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
       setTransactions(r.data?.transactions || [])
     } catch {
       setMessage({ type: 'error', text: 'Failed to load treasury data' })
+    }
+  }
+
+  const fetchLedger = async () => {
+    try {
+      const r = await api.get('/beast/treasury/ledger', {
+        params: { type: ledgerFilter, limit: 100, offset: ledgerPage * 100 }
+      })
+      setLedgerData(r.data)
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to load ledger' })
     }
   }
 
@@ -50,9 +69,30 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
     ? parseFloat(treasury.total_collected || 0) - parseFloat(treasury.total_payouts || 0)
     : 0
 
+  const txnTypeLabel = (type: string) => {
+    switch (type) {
+      case 'wager_in': return '🎰 Wager'
+      case 'payout': return '💸 Payout'
+      case 'deposit_from_dcb': return '📥 DCB Deposit'
+      case 'load': return '🏦 Treasury Load'
+      case 'withdrawal': return '📤 Withdrawal'
+      default: return type
+    }
+  }
+  const txnTypeColor = (type: string) => {
+    switch (type) {
+      case 'wager_in': return '#22c55e'
+      case 'payout': return '#ef4444'
+      case 'deposit_from_dcb': return '#3b82f6'
+      case 'load': return '#f59e0b'
+      case 'withdrawal': return '#a855f7'
+      default: return '#888'
+    }
+  }
+
   return (
     <div className="beast-wallet-overlay" onClick={onClose}>
-        <div className="beast-wallet-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480, overflow: 'hidden' }}>
+      <div className="beast-wallet-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 660, maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div className="beast-wallet-header">
           <h2>BEAST TREASURY</h2>
           <button className="beast-wallet-close" onClick={onClose}>✕</button>
@@ -60,46 +100,184 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
 
         {message && <div className={`beast-wallet-msg ${message.type}`}>{message.text}</div>}
 
-        {treasury ? (
-          <>
-            <div className="beast-wallet-balance" style={{ marginBottom: 16 }}>
-              <div className="beast-wallet-balance-label">TREASURY BALANCE</div>
-              <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#a78bfa' }}>SOL</div>
-                  <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{parseFloat(treasury.balance_sol || 0).toFixed(4)}</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#a78bfa' }}>USDC</div>
-                  <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{parseFloat(treasury.balance_usdc || 0).toFixed(2)}</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#a78bfa' }}>USD</div>
-                  <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{parseFloat(treasury.balance_usd || 0).toFixed(2)}</div>
-                </div>
-              </div>
-            </div>
+        {/* Tabs */}
+        <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)', padding: '0 16px' }}>
+          {(['overview', 'ledger', 'deposits', 'load'] as LedgerTab[]).map(t => (
+            <button key={t} onClick={() => setTab(t)} style={{
+              padding: '10px 16px', background: 'none', border: 'none', color: tab === t ? '#a78bfa' : '#888',
+              borderBottom: tab === t ? '2px solid #a78bfa' : '2px solid transparent',
+              cursor: 'pointer', fontWeight: tab === t ? 700 : 400, fontSize: '0.85rem', textTransform: 'uppercase'
+            }}>{t === 'overview' ? '📊 Overview' : t === 'ledger' ? '📒 Ledger' : t === 'deposits' ? '📥 Deposits' : '🏦 Load'}</button>
+          ))}
+        </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 16, padding: '0 16px' }}>
-              <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.7rem', color: '#888' }}>WAGERED</div>
-                <div style={{ fontWeight: 700, color: '#f59e0b' }}>${parseFloat(treasury.total_wagered || 0).toFixed(2)}</div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+          {/* ─── OVERVIEW TAB ─── */}
+          {tab === 'overview' && treasury && (
+            <>
+              <div className="beast-wallet-balance" style={{ marginBottom: 16 }}>
+                <div className="beast-wallet-balance-label">TREASURY BALANCE</div>
+                <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                  {(['SOL', 'USDC', 'USD'] as const).map(c => (
+                    <div key={c} style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#a78bfa' }}>{c}</div>
+                      <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                        {parseFloat(treasury[`balance_${c.toLowerCase()}`] || 0).toFixed(c === 'SOL' ? 6 : 2)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.7rem', color: '#888' }}>PAYOUTS</div>
-                <div style={{ fontWeight: 700, color: '#ef4444' }}>${parseFloat(treasury.total_payouts || 0).toFixed(2)}</div>
-              </div>
-              <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.7rem', color: '#888' }}>PROFIT</div>
-                <div style={{ fontWeight: 700, color: profit >= 0 ? '#22c55e' : '#ef4444' }}>${profit.toFixed(2)}</div>
-              </div>
-            </div>
 
-            <div className="beast-wallet-content" style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
+                <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>WAGERED</div>
+                  <div style={{ fontWeight: 700, color: '#f59e0b' }}>{parseFloat(treasury.total_wagered || 0).toFixed(4)}</div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>PAYOUTS</div>
+                  <div style={{ fontWeight: 700, color: '#ef4444' }}>{parseFloat(treasury.total_payouts || 0).toFixed(4)}</div>
+                </div>
+                <div style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: '8px 12px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.7rem', color: '#888' }}>PROFIT</div>
+                  <div style={{ fontWeight: 700, color: profit >= 0 ? '#22c55e' : '#ef4444' }}>{profit.toFixed(4)}</div>
+                </div>
+              </div>
+
+              {/* Ledger summary stats */}
+              {ledgerData?.stats && (
+                <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+                  <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 8 }}>AUDIT SUMMARY</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: '0.8rem' }}>
+                    <div>Total Transactions: <strong>{ledgerData.stats.total_txns || 0}</strong></div>
+                    <div>Total Wagers: <strong style={{ color: '#22c55e' }}>{parseFloat(ledgerData.stats.total_wagers || 0).toFixed(4)}</strong></div>
+                    <div>Total Payouts: <strong style={{ color: '#ef4444' }}>{parseFloat(ledgerData.stats.total_payouts || 0).toFixed(4)}</strong></div>
+                    <div>DCB Deposits: <strong style={{ color: '#3b82f6' }}>{parseFloat(ledgerData.stats.total_deposits || 0).toFixed(4)}</strong></div>
+                    <div>Treasury Loaded: <strong style={{ color: '#f59e0b' }}>{parseFloat(ledgerData.stats.total_loaded || 0).toFixed(4)}</strong></div>
+                    <div>Withdrawals: <strong style={{ color: '#a855f7' }}>{parseFloat(ledgerData.stats.total_withdrawals || 0).toFixed(4)}</strong></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Recent activity */}
+              {transactions.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 8 }}>RECENT ACTIVITY (last 10)</div>
+                  {transactions.slice(0, 10).map((tx: any) => (
+                    <div key={tx.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span style={{ color: txnTypeColor(tx.type), minWidth: 110 }}>{txnTypeLabel(tx.type)}</span>
+                      <span style={{ flex: 1, color: '#ccc', marginLeft: 8 }}>{tx.username || tx.user_id?.slice(0, 8) || '—'}</span>
+                      <span style={{ fontWeight: 600, minWidth: 80, textAlign: 'right' }}>{parseFloat(tx.amount || 0).toFixed(4)} {tx.currency}</span>
+                      <span style={{ color: '#666', marginLeft: 8, fontSize: '0.7rem', minWidth: 90, textAlign: 'right' }}>{new Date(tx.created_at).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ─── FULL LEDGER TAB ─── */}
+          {tab === 'ledger' && (
+            <>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+                {(['all', 'wager_in', 'payout', 'deposit_from_dcb', 'load', 'withdrawal'] as TxnFilter[]).map(f => (
+                  <button key={f} onClick={() => { setLedgerFilter(f); setLedgerPage(0) }} style={{
+                    padding: '4px 10px', borderRadius: 6, border: 'none', fontSize: '0.75rem', cursor: 'pointer',
+                    background: ledgerFilter === f ? '#a78bfa' : 'rgba(255,255,255,0.08)',
+                    color: ledgerFilter === f ? '#000' : '#ccc', fontWeight: ledgerFilter === f ? 700 : 400
+                  }}>{f === 'all' ? 'All' : txnTypeLabel(f)}</button>
+                ))}
+              </div>
+
+              {ledgerData?.total !== undefined && (
+                <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 8 }}>
+                  Showing {ledgerData.transactions?.length || 0} of {ledgerData.total} records
+                </div>
+              )}
+
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: '#888' }}>
+                      <th style={{ padding: '6px 4px', textAlign: 'left' }}>Type</th>
+                      <th style={{ padding: '6px 4px', textAlign: 'left' }}>User</th>
+                      <th style={{ padding: '6px 4px', textAlign: 'right' }}>Amount</th>
+                      <th style={{ padding: '6px 4px', textAlign: 'left' }}>Currency</th>
+                      <th style={{ padding: '6px 4px', textAlign: 'left' }}>Details</th>
+                      <th style={{ padding: '6px 4px', textAlign: 'right' }}>Date/Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(ledgerData?.transactions || []).map((tx: any) => (
+                      <tr key={tx.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '5px 4px', color: txnTypeColor(tx.type), whiteSpace: 'nowrap' }}>{txnTypeLabel(tx.type)}</td>
+                        <td style={{ padding: '5px 4px', color: '#ddd', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis' }}>{tx.username || tx.user_id?.slice(0, 10) || '—'}</td>
+                        <td style={{ padding: '5px 4px', textAlign: 'right', fontWeight: 600, color: tx.type === 'payout' || tx.type === 'withdrawal' ? '#ef4444' : '#22c55e' }}>
+                          {tx.type === 'payout' || tx.type === 'withdrawal' ? '-' : '+'}{parseFloat(tx.amount || 0).toFixed(6)}
+                        </td>
+                        <td style={{ padding: '5px 4px', color: '#a78bfa' }}>{tx.currency}</td>
+                        <td style={{ padding: '5px 4px', color: '#999', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tx.details}>{tx.details || '—'}</td>
+                        <td style={{ padding: '5px 4px', textAlign: 'right', color: '#666', whiteSpace: 'nowrap', fontSize: '0.72rem' }}>{new Date(tx.created_at).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {ledgerData && ledgerData.total > 100 && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
+                  <button onClick={() => setLedgerPage(p => Math.max(0, p - 1))} disabled={ledgerPage === 0}
+                    style={{ padding: '4px 12px', borderRadius: 4, border: 'none', background: 'rgba(255,255,255,0.08)', color: '#ccc', cursor: 'pointer' }}>← Prev</button>
+                  <span style={{ padding: '4px 8px', color: '#888', fontSize: '0.8rem' }}>Page {ledgerPage + 1}</span>
+                  <button onClick={() => setLedgerPage(p => p + 1)} disabled={(ledgerPage + 1) * 100 >= ledgerData.total}
+                    style={{ padding: '4px 12px', borderRadius: 4, border: 'none', background: 'rgba(255,255,255,0.08)', color: '#ccc', cursor: 'pointer' }}>Next →</button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ─── DCB DEPOSITS TAB ─── */}
+          {tab === 'deposits' && (
+            <>
+              <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 12 }}>
+                DCB → BEAST WALLET TRANSFERS (audit trail for all user deposits)
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.15)', color: '#888' }}>
+                    <th style={{ padding: '6px 4px', textAlign: 'left' }}>User</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'right' }}>Amount</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'left' }}>Currency</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'left' }}>Direction</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'right' }}>Date/Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(ledgerData?.dcbTransfers || []).map((tx: any, i: number) => (
+                    <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <td style={{ padding: '5px 4px', color: '#ddd' }}>{tx.username || tx.user_id?.slice(0, 12) || '—'}</td>
+                      <td style={{ padding: '5px 4px', textAlign: 'right', fontWeight: 600, color: '#3b82f6' }}>{parseFloat(tx.amount || 0).toFixed(6)}</td>
+                      <td style={{ padding: '5px 4px', color: '#a78bfa' }}>{tx.currency}</td>
+                      <td style={{ padding: '5px 4px', color: tx.direction === 'dcb_to_beast' ? '#22c55e' : '#ef4444' }}>{tx.direction === 'dcb_to_beast' ? '📥 DCB → Beast' : '📤 Beast → DCB'}</td>
+                      <td style={{ padding: '5px 4px', textAlign: 'right', color: '#666', fontSize: '0.72rem' }}>{new Date(tx.created_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {(!ledgerData?.dcbTransfers || ledgerData.dcbTransfers.length === 0) && (
+                    <tr><td colSpan={5} style={{ padding: 16, textAlign: 'center', color: '#666' }}>No DCB transfers recorded yet</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {/* ─── LOAD FUNDS TAB ─── */}
+          {tab === 'load' && (
+            <div style={{ maxWidth: 360, margin: '0 auto' }}>
               <div className="beast-wallet-field">
                 <label>LOAD FUNDS INTO TREASURY</label>
-                <div className="beast-treasury-load-row">
-                  <select value={loadCurrency} onChange={e => setLoadCurrency(e.target.value as any)} className="beast-wallet-select">
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <select value={loadCurrency} onChange={e => setLoadCurrency(e.target.value as any)} className="beast-wallet-select" style={{ flex: '0 0 80px' }}>
                     <option value="SOL">SOL</option>
                     <option value="USDC">USDC</option>
                     <option value="USD">USD</option>
@@ -112,30 +290,20 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                     step="0.01"
                     min="0"
                     className="beast-wallet-input"
+                    style={{ flex: 1 }}
                   />
-                  <button className="beast-wallet-action-btn" onClick={handleLoad} disabled={loading}>
+                  <button className="beast-wallet-action-btn" onClick={handleLoad} disabled={loading} style={{ flex: '0 0 70px' }}>
                     {loading ? '...' : 'Load'}
                   </button>
                 </div>
               </div>
             </div>
+          )}
 
-            {transactions.length > 0 && (
-              <div style={{ maxHeight: 200, overflowY: 'auto', margin: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 12 }}>
-                <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 8 }}>RECENT TRANSACTIONS</div>
-                {transactions.map((tx: any) => (
-                  <div key={tx.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span style={{ color: '#a78bfa' }}>{tx.type}</span>
-                    <span>{tx.amount} {tx.currency}</span>
-                    <span style={{ color: '#666' }}>{new Date(tx.created_at).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        ) : (
-          <div style={{ padding: 32, textAlign: 'center', color: '#888' }}>Loading treasury...</div>
-        )}
+          {!treasury && tab === 'overview' && (
+            <div style={{ padding: 32, textAlign: 'center', color: '#888' }}>Loading treasury...</div>
+          )}
+        </div>
       </div>
     </div>
   )
