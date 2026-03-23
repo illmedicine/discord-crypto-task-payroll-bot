@@ -3636,6 +3636,28 @@ h3 {
 .wallet-trust-check.check-fail {
   color: #64748b;
 }
+/* Illy Beast Gamer Badge */
+.wallet-beast-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(99, 102, 241, 0.15));
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+.wallet-beast-badge-icon {
+  font-size: 22px;
+}
+.wallet-beast-badge-text {
+  font-size: 14px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #c084fc, #818cf8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 0.03em;
+}
 /* Loading */
 .wallet-loading {
   display: flex;

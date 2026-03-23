@@ -1183,17 +1183,23 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (stats?.commands_total > 0) trust += 10
       if (stats?.commands_total > 10) trust += 10
       if (stats?.commands_total > 50) trust += 15
+      // Illy Beast Gaming link bonus
+      const beastLink = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id]).catch(() => null)
+      const hasBeastLink = !!beastLink
+      if (hasBeastLink) trust += 10  // Beast Gaming linked = +10 trust
       let risk = 50
       if (hasWallet) risk -= 10
       if (hasKey) risk -= 20
       if (stats?.commands_total > 10) risk -= 10
       if (stats?.commands_total > 50) risk -= 10
+      if (hasBeastLink) risk -= 5  // Beast Gaming linked = -5 risk
       return res.json({
         trust: Math.min(100, Math.max(0, trust)),
         risk: Math.min(100, Math.max(0, risk)),
         wallet: hasWallet,
         key: hasKey,
         auto_pay_capable: hasWallet && hasKey,
+        beast_linked: hasBeastLink,
       })
     } catch (err) {
       console.error('[user/wallet/trust] error:', err?.message)

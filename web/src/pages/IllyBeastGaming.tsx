@@ -74,6 +74,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
   const [showTreasury, setShowTreasury] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
+  const [solPrice, setSolPrice] = useState(0)
 
   // Swap favicon to beast logo when on this page
   useEffect(() => {
@@ -87,13 +88,13 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
     }
   }, [])
 
-  // Load beast user profile
+  // Load beast user profile + SOL price
   useEffect(() => {
     setLoading(true)
+    api.get('/beast/sol-price').then(r => setSolPrice(r.data?.price || 0)).catch(() => {})
     api.get('/beast/profile')
       .then(r => setBeastUser(r.data))
       .catch(() => {
-        // Default profile if beast profile doesn't exist yet
         setBeastUser({
           id: '', username: 'Player', beastBalance: { sol: 0, usdc: 0, usd: 0 },
           vipLevel: 'Copper', vipProgress: 0, favorites: [], recentGames: []
@@ -141,7 +142,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
   }
 
   const totalBalance = beastUser
-    ? beastUser.beastBalance.usd + beastUser.beastBalance.usdc + (beastUser.beastBalance.sol * 0) // SOL needs price conversion
+    ? beastUser.beastBalance.usd + beastUser.beastBalance.usdc + (beastUser.beastBalance.sol * (solPrice || 0))
     : 0
 
   if (activeGame) {
@@ -328,7 +329,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
                   <h3>ACCOUNT BALANCE</h3>
                   <div className="beast-hero-total">${totalBalance.toFixed(2)}</div>
                   <div className="beast-hero-currencies">
-                    <span>◎ SOL <strong>${(beastUser?.beastBalance.sol || 0).toFixed(4)}</strong></span>
+                    <span>◎ SOL <strong>${solPrice > 0 ? ((beastUser?.beastBalance.sol || 0) * solPrice).toFixed(2) : (beastUser?.beastBalance.sol || 0).toFixed(4)}</strong></span>
                     <span>💲 USDC <strong>${(beastUser?.beastBalance.usdc || 0).toFixed(2)}</strong></span>
                     <span>💵 USD <strong>${(beastUser?.beastBalance.usd || 0).toFixed(2)}</strong></span>
                   </div>

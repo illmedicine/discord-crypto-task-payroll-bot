@@ -15,6 +15,7 @@ type TrustInfo = {
   wallet: boolean
   key: boolean
   auto_pay_capable: boolean
+  beast_linked?: boolean
 }
 
 export default function WalletSettings() {
@@ -253,7 +254,16 @@ export default function WalletSettings() {
             <div className={`wallet-trust-check ${trust.auto_pay_capable ? 'check-pass' : 'check-fail'}`}>
               {trust.auto_pay_capable ? '✅' : '⬜'} Auto-Pay Capable (pot-split eligible)
             </div>
+            <div className={`wallet-trust-check ${trust.beast_linked ? 'check-pass' : 'check-fail'}`}>
+              {trust.beast_linked ? '🐻' : '⬜'} Illy Beast Gaming Linked (+10 trust, −5 risk)
+            </div>
           </div>
+          {trust.beast_linked && (
+            <div className="wallet-beast-badge">
+              <span className="wallet-beast-badge-icon">🐻</span>
+              <span className="wallet-beast-badge-text">Illy Beast Gamer</span>
+            </div>
+          )}
         </div>
       )}
     </div>
