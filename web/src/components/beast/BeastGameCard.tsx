@@ -23,7 +23,9 @@ const BeastGameCard = React.memo(function BeastGameCard({ game, isFavorite, onPl
   return (
     <div className="beast-game-card" onClick={onPlay}>
       <div className="beast-game-card-img">
-        <span className="beast-game-card-emoji">{game.img}</span>
+          <span className="beast-game-card-emoji">
+            {game.img === 'logo' ? <img src="/beast-logo.png" alt="Illy Beast" style={{ width: 64, height: 64, objectFit: 'contain' }} /> : game.img}
+          </span>
         {game.category === 'originals' && (
           <span className="beast-game-card-badge originals">BEAST ORIGINALS</span>
         )}

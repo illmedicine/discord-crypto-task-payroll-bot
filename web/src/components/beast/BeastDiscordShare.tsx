@@ -17,7 +17,7 @@ export default function BeastDiscordShare({ game, guildId, onClose }: Props) {
   const [selectedGuild, setSelectedGuild] = useState(guildId)
   const [selectedChannel, setSelectedChannel] = useState('')
   const [shareType, setShareType] = useState<'live' | 'thumb'>('thumb')
-  const [message, setMessageText] = useState(`Playing ${game.name} on illy Beast Gaming! 🐾🎮`)
+  const [message, setMessageText] = useState(`Playing ${game.name} on illy Beast Gaming! �🎮`)
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')

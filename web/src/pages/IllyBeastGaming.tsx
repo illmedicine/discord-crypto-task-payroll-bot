@@ -31,7 +31,7 @@ export const BEAST_SLOTS = [
   { id: 'duck-hunters', name: 'Duck Hunters', category: 'slots', img: '🦆', desc: 'Hunt for big wins', houseEdge: 4, minBet: 0.10, maxBet: 100 },
   { id: 'omaha-flip', name: 'Omaha Flip', category: 'slots', img: '🂠', desc: 'Poker-themed slot action', houseEdge: 3, minBet: 0.10, maxBet: 100 },
   { id: 'coin-race', name: 'Coin Race', category: 'slots', img: '🏎️', desc: 'Race coins for multiplied returns', houseEdge: 4, minBet: 0.10, maxBet: 50 },
-  { id: 'beast-fortune', name: 'Beast Fortune', category: 'slots', img: '🐾', desc: 'Illy Beast exclusive jackpot slot', houseEdge: 3, minBet: 0.10, maxBet: 200 },
+  { id: 'beast-fortune', name: 'Beast Fortune', category: 'slots', img: 'logo', desc: 'Illy Beast exclusive jackpot slot', houseEdge: 3, minBet: 0.10, maxBet: 200 },
 ]
 
 export const BEAST_TABLE_GAMES = [
@@ -283,14 +283,14 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
                   className={`beast-cat-btn ${casinoCategory === cat.id ? 'active' : ''}`}
                   onClick={() => setCasinoCategory(cat.id)}
                 >
-                  <span>{cat.icon}</span> {cat.label}
+                  <span>{cat.icon === 'logo' ? <img src="/beast-logo.png" alt="" style={{ width: 18, height: 18, objectFit: 'contain', verticalAlign: 'middle' }} /> : cat.icon}</span> {cat.label}
                 </button>
               ))}
             </div>
             <div className="beast-cat-section">
               <div className="beast-cat-header">CASINO</div>
               {([
-                { id: 'originals' as CasinoCategory, label: 'Originals', icon: '🐾' },
+                { id: 'originals' as CasinoCategory, label: 'Originals', icon: 'logo' },
                 { id: 'new' as CasinoCategory, label: 'New Releases', icon: '✨' },
                 { id: 'slots' as CasinoCategory, label: 'Slots', icon: '🎰' },
                 { id: 'table' as CasinoCategory, label: 'Table Games', icon: '🃏' },
@@ -301,7 +301,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
                   className={`beast-cat-btn ${casinoCategory === cat.id ? 'active' : ''}`}
                   onClick={() => setCasinoCategory(cat.id)}
                 >
-                  <span>{cat.icon}</span> {cat.label}
+                  <span>{cat.icon === 'logo' ? <img src="/beast-logo.png" alt="" style={{ width: 18, height: 18, objectFit: 'contain', verticalAlign: 'middle' }} /> : cat.icon}</span> {cat.label}
                 </button>
               ))}
             </div>
