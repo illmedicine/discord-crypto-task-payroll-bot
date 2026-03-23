@@ -63,13 +63,45 @@ module.exports = function buildApi({ discordClient }) {
 
   // ---- DDoS Protection & Security Headers ----
   app.set('trust proxy', 1) // Trust Railway's proxy for accurate IP detection
-  app.use(helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
-    crossOriginEmbedderPolicy: false, // Allow cross-origin API requests
-    contentSecurityPolicy: false // CSP managed by frontend
-  }))
   app.use(express.json({ limit: '1mb' })) // Cap request body size
   app.use(cookieParser())
+
+  const isProd = process.env.NODE_ENV === 'production'
+  const uiBase = process.env.DCB_UI_BASE || null
+  const publicBase = process.env.DCB_PUBLIC_URL || null
+  const cookieSameSite = process.env.DCB_COOKIE_SAMESITE || (isProd ? 'none' : 'lax')
+  const cookieSecure = isProd
+
+  const allowedOrigins = (() => {
+    const origins = []
+    if (uiBase) {
+      try { origins.push(new URL(uiBase).origin) } catch (_) { origins.push(uiBase) }
+    }
+    origins.push('https://illmedicine.github.io')
+    origins.push('https://dcb-gm.com')
+    origins.push('http://dcb-gm.com')
+    origins.push('https://www.dcb-gm.com')
+    origins.push('https://dcb-games.com')
+    origins.push('https://www.dcb-games.com')
+    return origins
+  })()
+
+  // CORS must come BEFORE helmet so preflight OPTIONS get proper headers
+  app.use(cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true)
+      if (allowedOrigins.length === 0) return cb(null, origin)
+      if (allowedOrigins.includes(origin)) return cb(null, origin)
+      return cb(null, false)
+    },
+    credentials: true,
+  }))
+
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false
+  }))
 
   // Global rate limiter: 200 requests per minute per IP
   const globalLimiter = rateLimit({
@@ -106,36 +138,6 @@ module.exports = function buildApi({ discordClient }) {
   app.use('/api/beast/sports/bet', financialLimiter)
   app.use('/api/beast/deposit', financialLimiter)
   app.use('/api/beast/withdraw', financialLimiter)
-
-  const isProd = process.env.NODE_ENV === 'production'
-  const uiBase = process.env.DCB_UI_BASE || null
-  const publicBase = process.env.DCB_PUBLIC_URL || null
-  const cookieSameSite = process.env.DCB_COOKIE_SAMESITE || (isProd ? 'none' : 'lax')
-  const cookieSecure = isProd
-
-  const allowedOrigins = (() => {
-    const origins = []
-    if (uiBase) {
-      try { origins.push(new URL(uiBase).origin) } catch (_) { origins.push(uiBase) }
-    }
-    origins.push('https://illmedicine.github.io')
-    origins.push('https://dcb-gm.com')
-    origins.push('http://dcb-gm.com')
-    origins.push('https://www.dcb-gm.com')
-    origins.push('https://dcb-games.com')
-    origins.push('https://www.dcb-games.com')
-    return origins
-  })()
-
-  app.use(cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true)
-      if (allowedOrigins.length === 0) return cb(null, origin) // echo origin when no restriction
-      if (allowedOrigins.includes(origin)) return cb(null, origin)
-      return cb(null, false)
-    },
-    credentials: true,
-  }))
 
   function baseUrl(req) {
     if (publicBase) return publicBase.replace(/\/$/, '')
