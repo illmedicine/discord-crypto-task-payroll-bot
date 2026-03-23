@@ -21,6 +21,7 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
   const [tipAmount, setTipAmount] = useState('')
   const [dcbLinked, setDcbLinked] = useState(false)
   const [dcbWallet, setDcbWallet] = useState<string | null>(null)
+  const [dcbDepositAmount, setDcbDepositAmount] = useState('')
   const [linkStatus, setLinkStatus] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -122,6 +123,26 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
     }
   }
 
+  const handleDepositFromDCB = async () => {
+    const amt = parseFloat(dcbDepositAmount)
+    if (isNaN(amt) || amt <= 0) {
+      setMessage({ type: 'error', text: 'Enter a valid amount' })
+      return
+    }
+    setLoading(true)
+    setMessage(null)
+    try {
+      const r = await api.post('/beast/wallet/deposit-from-dcb', { currency, amount: amt })
+      setMessage({ type: 'success', text: r.data?.message || `Deposited ${amt} ${currency} from DCB wallet` })
+      if (r.data?.balance) onBalanceChange(r.data.balance)
+      setDcbDepositAmount('')
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.response?.data?.error || 'Transfer failed' })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const copyAddress = () => {
     if (depositAddress) {
       navigator.clipboard.writeText(depositAddress).catch(() => {
@@ -179,7 +200,43 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                 <span className="beast-wallet-curr-balance">
                   {currency === 'SOL' ? balance.sol.toFixed(4) :
                    currency === 'USDC' ? balance.usdc.toFixed(4) :
-                   balance.usd.toFixed(2)}
+                  
+
+            {/* Deposit from DCB Wallet */}
+            {dcbLinked ? (
+              <div className="beast-wallet-field" style={{ marginTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
+                <label>DEPOSIT FROM DCB WALLET</label>
+                {dcbWallet && (
+                  <div style={{ fontSize: '0.8rem', color: '#a78bfa', marginBottom: 8 }}>
+                    Linked: <code>{dcbWallet.slice(0, 8)}...{dcbWallet.slice(-6)}</code>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type="number"
+                    value={dcbDepositAmount}
+                    onChange={e => setDcbDepositAmount(e.target.value)}
+                    placeholder={`Amount in ${currency}`}
+                    step="0.01"
+                    min="0"
+                    className="beast-wallet-input"
+                    style={{ flex: 1 }}
+                  />
+                  <button className="beast-wallet-action-btn" onClick={handleDepositFromDCB} disabled={loading} style={{ flex: '0 0 auto' }}>
+                    {loading ? 'Transferring...' : `Deposit ${currency}`}
+                  </button>
+                </div>
+                <p className="beast-wallet-note" style={{ marginTop: 4 }}>
+                  Transfer funds from your connected DCB wallet into your Beast wallet instantly.
+                </p>
+              </div>
+            ) : (
+              <div className="beast-wallet-field" style={{ marginTop: 16, borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
+                <p className="beast-wallet-note">
+                  💡 <strong>Tip:</strong> Link your DCB wallet in the "🔗 Link DCB" tab to deposit directly from your DCB balance.
+                </p>
+              </div>
+            )} balance.usd.toFixed(2)}
                 </span>
               </div>
             </div>
