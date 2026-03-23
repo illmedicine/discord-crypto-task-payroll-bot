@@ -188,8 +188,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
       <div className="beast-topbar">
         <div className="beast-topbar-left">
           <div className="beast-logo">
-            <img src="/beast-logo.png" alt="Illy Beast" className="beast-logo-icon" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
-            <span className="beast-logo-text">illy Beast</span>
+            <img src="/beast-logo.png" alt="Illy Beast Gaming" className="beast-logo-img" />
           </div>
           <div className="beast-main-tabs">
             <button

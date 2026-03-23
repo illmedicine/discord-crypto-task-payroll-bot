@@ -79,19 +79,16 @@
   gap: 8px;
 }
 
-.beast-logo-icon {
-  font-size: 28px;
-  filter: drop-shadow(0 0 8px rgba(192, 38, 211, 0.5));
+.beast-logo-img {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 0 10px rgba(192, 38, 211, 0.4));
+  transition: filter 0.3s;
 }
 
-.beast-logo-text {
-  font-size: 22px;
-  font-weight: 800;
-  background: var(--beast-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.5px;
+.beast-logo-img:hover {
+  filter: drop-shadow(0 0 16px rgba(192, 38, 211, 0.7));
 }
 
 .beast-main-tabs {
