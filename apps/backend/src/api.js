@@ -5281,8 +5281,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const row = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (row) {
-        const dcbUser = await db.get('SELECT * FROM users WHERE discord_id = ?', [req.user.id])
-        res.json({ linked: true, dcbAddress: row.dcb_address || null, dcbSolAddress: dcbUser?.solana_address || dcbUser?.wallet_address || null })
+        // Check user_wallets first (personal wallet), then guild_wallets (treasury)
+        const userWallet = await db.get('SELECT solana_address FROM user_wallets WHERE discord_id = ?', [req.user.id])
+        res.json({ linked: true, dcbAddress: row.dcb_address || null, dcbSolAddress: userWallet?.solana_address || null })
       } else {
         res.json({ linked: false, dcbAddress: null })
       }
@@ -5295,9 +5296,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const { guildId, currency } = req.body
       if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency – only SOL, USDC, USD supported' })
-      // Use SELECT * to avoid column name mismatch across schema versions
-      const dcbUser = await db.get('SELECT * FROM users WHERE discord_id = ?', [req.user.id])
-      const dcbAddr = dcbUser?.solana_address || dcbUser?.wallet_address || null
+      // Look up wallet from user_wallets (personal) first, then guild_wallets (treasury)
+      const userWallet = await db.get('SELECT solana_address FROM user_wallets WHERE discord_id = ?', [req.user.id])
+      let dcbAddr = userWallet?.solana_address || null
+      if (!dcbAddr && guildId) {
+        const guildWallet = await db.get('SELECT wallet_address FROM guild_wallets WHERE guild_id = ?', [guildId])
+        dcbAddr = guildWallet?.wallet_address || null
+      }
       if (!dcbAddr) return res.status(400).json({ error: 'No DCB wallet found. Connect a wallet in DCB Event Manager first.' })
       await db.run(
         `INSERT INTO beast_dcb_links (user_id, guild_id, currency, dcb_address)
