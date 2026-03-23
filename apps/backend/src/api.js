@@ -5430,7 +5430,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Treasury check: ensure treasury can cover max potential payout
       const treasuryBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
       const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
-      const treasuryBal = parseFloat(treasury?.[treasuryBalCol] || 0)
+      let treasuryBal = parseFloat(treasury?.[treasuryBalCol] || 0)
+      // Cross-reference: combine treasury balances using live SOL price
+      const sp = await getSolPrice()
+      if (currency === 'SOL' && sp > 0) {
+        treasuryBal += parseFloat(treasury?.balance_usd || 0) / sp
+        treasuryBal += parseFloat(treasury?.balance_usdc || 0) / sp
+      } else if ((currency === 'USD' || currency === 'USDC') && sp > 0) {
+        treasuryBal += parseFloat(treasury?.balance_sol || 0) * sp
+      }
       let maxMulti = 11
       switch (gameId) {
         case 'coin-flip': maxMulti = 1.94; break

@@ -35,10 +35,14 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
 
   // Treasury limits
   const [treasuryLimits, setTreasuryLimits] = useState<{ sol: number; usdc: number; usd: number } | null>(null)
+  const [solPrice, setSolPrice] = useState(0)
 
   useEffect(() => {
     api.get('/beast/treasury/max-payout')
       .then(r => setTreasuryLimits(r.data))
+      .catch(() => {})
+    api.get('/beast/sol-price')
+      .then(r => setSolPrice(r.data?.price || 0))
       .catch(() => {})
   }, [])
 
@@ -64,7 +68,17 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
 
   const getDynamicMaxBet = () => {
     if (!treasuryLimits) return game.maxBet
-    const tBal = currency === 'SOL' ? treasuryLimits.sol : currency === 'USDC' ? treasuryLimits.usdc : treasuryLimits.usd
+    // Use treasury balance for the selected currency
+    let tBal = currency === 'SOL' ? treasuryLimits.sol : currency === 'USDC' ? treasuryLimits.usdc : treasuryLimits.usd
+    // If betting in SOL but treasury has USD loaded, convert USD treasury to SOL equivalent
+    if (currency === 'SOL' && solPrice > 0) {
+      tBal += treasuryLimits.usd / solPrice
+      tBal += treasuryLimits.usdc / solPrice
+    }
+    // If betting in USD/USDC but treasury has SOL loaded, convert SOL treasury to USD equivalent
+    if ((currency === 'USD' || currency === 'USDC') && solPrice > 0) {
+      tBal += treasuryLimits.sol * solPrice
+    }
     const treasuryMax = parseFloat((tBal / getMaxMultiplier()).toFixed(6))
     return Math.max(0, Math.min(game.maxBet, treasuryMax))
   }
@@ -244,7 +258,12 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
               </div>
             </div>
             <div className="beast-bet-range">
-              Min: ${game.minBet.toFixed(2)} — Max: ${dynamicMaxBet.toFixed(2)}
+              Min: {currency === 'SOL' ? `${game.minBet.toFixed(4)} SOL` : `$${game.minBet.toFixed(2)}`} — Max: {currency === 'SOL' ? `${dynamicMaxBet.toFixed(4)} SOL` : `$${dynamicMaxBet.toFixed(2)}`}
+              {solPrice > 0 && currency === 'SOL' && dynamicMaxBet > 0 && (
+                <span style={{ color: '#a78bfa', marginLeft: 6, fontSize: '0.75rem' }}>
+                  (≈ ${(dynamicMaxBet * solPrice).toFixed(2)})
+                </span>
+              )}
               {treasuryLimits && dynamicMaxBet < game.maxBet && (
                 <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: '0.75rem' }}>
                   (treasury limit)
