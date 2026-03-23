@@ -25,6 +25,18 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
   const [linkStatus, setLinkStatus] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [solPrice, setSolPrice] = useState(0)
+
+  // Fetch SOL price on mount
+  useEffect(() => {
+    api.get('/beast/sol-price')
+      .then(r => setSolPrice(r.data?.price || 0))
+      .catch(() => {})
+    const iv = setInterval(() => {
+      api.get('/beast/sol-price').then(r => setSolPrice(r.data?.price || 0)).catch(() => {})
+    }, 60000)
+    return () => clearInterval(iv)
+  }, [])
 
   // Fetch deposit address and DCB link status
   useEffect(() => {
@@ -163,8 +175,13 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
         <div className="beast-wallet-balance">
           <div className="beast-wallet-balance-label">ESTIMATED BALANCE</div>
           <div className="beast-wallet-balance-total">
-            ${(balance.usd + balance.usdc).toFixed(2)}
+            ${solPrice > 0 ? ((balance.sol * solPrice) + balance.usd + balance.usdc).toFixed(2) : (balance.usd + balance.usdc).toFixed(2)}
           </div>
+          {solPrice > 0 && (
+            <div style={{ fontSize: '0.75rem', color: '#a78bfa', marginTop: 2 }}>
+              {balance.sol.toFixed(4)} SOL × ${solPrice.toFixed(2)} = ${(balance.sol * solPrice).toFixed(2)}
+            </div>
+          )}
         </div>
 
         {/* Tabs */}
@@ -236,7 +253,7 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                     type="number"
                     value={dcbDepositAmount}
                     onChange={e => setDcbDepositAmount(e.target.value)}
-                    placeholder={`Amount in ${currency}`}
+                    placeholder={currency === 'SOL' ? 'Amount in SOL' : `Amount in ${currency} (converts to SOL)`}
                     step="0.01"
                     min="0"
                     className="beast-wallet-input"
@@ -245,8 +262,19 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                     {loading ? 'Transferring...' : `Deposit ${currency}`}
                   </button>
                 </div>
+                {dcbDepositAmount && parseFloat(dcbDepositAmount) > 0 && currency !== 'SOL' && solPrice > 0 && (
+                  <div style={{ fontSize: '0.8rem', color: '#10b981', marginTop: 4 }}>
+                    ≈ {(parseFloat(dcbDepositAmount) / solPrice).toFixed(6)} SOL @ ${solPrice.toFixed(2)}/SOL
+                  </div>
+                )}
+                {dcbDepositAmount && parseFloat(dcbDepositAmount) > 0 && currency === 'SOL' && solPrice > 0 && (
+                  <div style={{ fontSize: '0.8rem', color: '#10b981', marginTop: 4 }}>
+                    ≈ ${(parseFloat(dcbDepositAmount) * solPrice).toFixed(2)} USD
+                  </div>
+                )}
                 <p className="beast-wallet-note" style={{ marginTop: 4 }}>
                   Transfer funds from your connected DCB wallet into your Beast wallet instantly.
+                  {currency !== 'SOL' && ' USD/USDC amounts are auto-converted to SOL.'}
                 </p>
               </div>
             ) : (
@@ -291,8 +319,15 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                 min="0"
                 className="beast-wallet-input"
               />
+              {withdrawAmount && parseFloat(withdrawAmount) > 0 && solPrice > 0 && (
+                <div style={{ fontSize: '0.8rem', color: '#10b981', marginTop: 4 }}>
+                  {currency === 'SOL'
+                    ? `≈ $${(parseFloat(withdrawAmount) * solPrice).toFixed(2)} USD`
+                    : `≈ ${(parseFloat(withdrawAmount) / solPrice).toFixed(6)} SOL @ $${solPrice.toFixed(2)}/SOL`}
+                </div>
+              )}
               <div className="beast-wallet-avail">
-                Available: {currency === 'SOL' ? balance.sol.toFixed(4) : currency === 'USDC' ? balance.usdc.toFixed(4) : balance.usd.toFixed(2)} {currency}
+                Available: {balance.sol.toFixed(4)} SOL{solPrice > 0 ? ` (≈ $${(balance.sol * solPrice).toFixed(2)})` : ''}
               </div>
             </div>
             <button className="beast-wallet-action-btn" onClick={handleWithdraw} disabled={loading}>

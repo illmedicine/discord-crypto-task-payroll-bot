@@ -5203,6 +5203,26 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ── Beast: SOL Price helper (cached 60s) ──
+  let _solPriceCache = { price: 0, ts: 0 }
+  async function getSolPrice() {
+    if (_solPriceCache.price > 0 && Date.now() - _solPriceCache.ts < 60000) return _solPriceCache.price
+    let price = 0
+    try { const r = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 }); price = r.data?.solana?.usd || 0 } catch {}
+    if (!price) { try { const r = await axios.get('https://api.coinbase.com/v2/prices/SOL-USD/spot', { timeout: 5000 }); price = parseFloat(r.data?.data?.amount) || 0 } catch {} }
+    if (!price) { try { const r = await axios.get('https://api.kraken.com/0/public/Ticker?pair=SOLUSD', { timeout: 5000 }); price = parseFloat(r.data?.result?.SOLUSD?.c?.[0]) || 0 } catch {} }
+    if (price > 0) _solPriceCache = { price, ts: Date.now() }
+    return price
+  }
+
+  // ── Beast: SOL Price endpoint ──
+  app.get('/api/beast/sol-price', async (req, res) => {
+    try {
+      const price = await getSolPrice()
+      res.json({ price, currency: 'USD' })
+    } catch { res.json({ price: 0, currency: 'USD' }) }
+  })
+
   // ── Beast Live Wins (public) ──
   app.get('/api/beast/live-wins', async (req, res) => {
     try {
@@ -5331,9 +5351,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const link = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (!link) return res.json({ linked: false, balance: 0 })
-      const dcbUser = await db.get('SELECT solana_address FROM users WHERE discord_id = ?', [req.user.id])
-      if (!dcbUser || !dcbUser.solana_address) return res.json({ linked: true, balance: 0, address: null })
-      res.json({ linked: true, address: dcbUser.solana_address, currency: link.currency || 'SOL' })
+      const userWallet = await db.get('SELECT solana_address FROM user_wallets WHERE discord_id = ?', [req.user.id])
+      if (!userWallet || !userWallet.solana_address) return res.json({ linked: true, balance: 0, address: null })
+      res.json({ linked: true, address: userWallet.solana_address, currency: link.currency || 'SOL' })
     } catch (err) {
       res.json({ linked: false, balance: 0 })
     }
@@ -5348,20 +5368,39 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
       const link = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (!link) return res.status(400).json({ error: 'Link your DCB wallet first' })
-      const dcbUser = await db.get('SELECT solana_address FROM users WHERE discord_id = ?', [req.user.id])
-      if (!dcbUser || !dcbUser.solana_address) return res.status(400).json({ error: 'No DCB wallet found' })
-      const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+      // Check user_wallets first, then guild_wallets (same fix as link-dcb routes)
+      let dcbAddress = null
+      const uw = await db.get('SELECT solana_address FROM user_wallets WHERE discord_id = ?', [req.user.id])
+      if (uw && uw.solana_address) { dcbAddress = uw.solana_address }
+      else {
+        const gw = await db.get('SELECT wallet_address FROM guild_wallets WHERE guild_id = ?', [link.guild_id])
+        if (gw && gw.wallet_address) dcbAddress = gw.wallet_address
+      }
+      if (!dcbAddress) return res.status(400).json({ error: 'No DCB wallet found' })
+
+      // Convert USD/USDC amounts to SOL equivalent for balance storage
+      let solAmt = amt
+      let solPrice = 0
+      if (currency === 'USD' || currency === 'USDC') {
+        solPrice = await getSolPrice()
+        if (!solPrice || solPrice <= 0) return res.status(400).json({ error: 'Unable to fetch SOL price for conversion' })
+        solAmt = parseFloat((amt / solPrice).toFixed(9))
+      }
+
       await db.run(
         `INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING`,
         [req.user.id, req.user.username || 'Player']
       )
-      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} + ? WHERE user_id = ?`, [amt, req.user.id])
+      // Always credit balance_sol (all deposits convert to SOL)
+      await db.run(`UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?`, [solAmt, req.user.id])
       await db.run('INSERT INTO beast_dcb_transfers (user_id, currency, amount, direction) VALUES (?, ?, ?, ?)',
         [req.user.id, currency, amt, 'dcb_to_beast'])
       const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      const conversionNote = (currency !== 'SOL' && solPrice) ? ` (${amt} ${currency} ≈ ${solAmt} SOL @ $${solPrice})` : ''
       res.json({
-        ok: true, message: `Deposited ${amt} ${currency} from DCB wallet to Beast wallet`,
+        ok: true, message: `Deposited ${solAmt} SOL from DCB wallet to Beast wallet${conversionNote}`,
         balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
+        conversion: solPrice ? { inputAmount: amt, inputCurrency: currency, solAmount: solAmt, solPrice } : undefined,
       })
     } catch (err) {
       console.error('[Beast] deposit-from-dcb error:', err)
