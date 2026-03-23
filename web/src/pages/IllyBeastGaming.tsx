@@ -488,7 +488,9 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
         </div>
       ) : (
         /* ─── SPORTS BETTING TAB ─── */
-        <BeastSportsBook guildId={guildId} balance={beastUser?.beastBalance || { sol: 0, usdc: 0, usd: 0 }} />
+        <BeastSportsBook guildId={guildId} balance={beastUser?.beastBalance || { sol: 0, usdc: 0, usd: 0 }} onBalanceChange={(newBal) => {
+          if (beastUser) setBeastUser({ ...beastUser, beastBalance: newBal })
+        }} />
       )}
 
       {/* Discord share modal */}

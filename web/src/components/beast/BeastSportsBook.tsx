@@ -4,6 +4,7 @@ import api from '../../api'
 interface Props {
   guildId: string
   balance: { sol: number; usdc: number; usd: number }
+  onBalanceChange?: (newBal: { sol: number; usdc: number; usd: number }) => void
 }
 
 interface SportEvent {
@@ -33,7 +34,7 @@ const SPORTS: { id: Sport; label: string; icon: string }[] = [
   { id: 'esports', label: 'Esports', icon: '🎮' },
 ]
 
-export default function BeastSportsBook({ guildId, balance }: Props) {
+export default function BeastSportsBook({ guildId, balance, onBalanceChange }: Props) {
   const [sport, setSport] = useState<Sport>('all')
   const [events, setEvents] = useState<SportEvent[]>([])
   const [loading, setLoading] = useState(true)
@@ -48,19 +49,7 @@ export default function BeastSportsBook({ guildId, balance }: Props) {
     setLoading(true)
     api.get(`/beast/sports/events?sport=${sport}&status=${viewMode}`)
       .then(r => setEvents(r.data || []))
-      .catch(() => {
-        // Demo events fallback
-        setEvents([
-          { id: 's1', sport: 'football', league: 'NFL', homeTeam: 'Chiefs', awayTeam: 'Eagles', homeOdds: 1.85, drawOdds: null, awayOdds: 2.05, startTime: new Date(Date.now() + 3600000).toISOString(), status: 'upcoming' },
-          { id: 's2', sport: 'basketball', league: 'NBA', homeTeam: 'Lakers', awayTeam: 'Celtics', homeOdds: 1.95, drawOdds: null, awayOdds: 1.90, startTime: new Date(Date.now() + 7200000).toISOString(), status: 'upcoming' },
-          { id: 's3', sport: 'soccer', league: 'Premier League', homeTeam: 'Arsenal', awayTeam: 'Man City', homeOdds: 2.40, drawOdds: 3.20, awayOdds: 2.80, startTime: new Date(Date.now() + 10800000).toISOString(), status: 'upcoming' },
-          { id: 's4', sport: 'mma', league: 'UFC 310', homeTeam: 'Fighter A', awayTeam: 'Fighter B', homeOdds: 1.55, drawOdds: null, awayOdds: 2.60, startTime: new Date(Date.now() + 86400000).toISOString(), status: 'upcoming' },
-          { id: 's5', sport: 'esports', league: 'LCS', homeTeam: 'Team Alpha', awayTeam: 'Team Omega', homeOdds: 1.70, drawOdds: null, awayOdds: 2.20, startTime: new Date(Date.now() + 14400000).toISOString(), status: 'upcoming' },
-          { id: 's6', sport: 'baseball', league: 'MLB', homeTeam: 'Yankees', awayTeam: 'Dodgers', homeOdds: 2.10, drawOdds: null, awayOdds: 1.80, startTime: new Date(Date.now() + 18000000).toISOString(), status: 'upcoming' },
-          { id: 'l1', sport: 'basketball', league: 'NBA', homeTeam: 'Warriors', awayTeam: 'Bucks', homeOdds: 1.75, drawOdds: null, awayOdds: 2.15, startTime: new Date(Date.now() - 3600000).toISOString(), status: 'live', homeScore: 78, awayScore: 72 },
-          { id: 'l2', sport: 'soccer', league: 'La Liga', homeTeam: 'Barcelona', awayTeam: 'Real Madrid', homeOdds: 2.10, drawOdds: 3.50, awayOdds: 3.10, startTime: new Date(Date.now() - 2400000).toISOString(), status: 'live', homeScore: 1, awayScore: 1 },
-        ])
-      })
+      .catch(() => setEvents([]))
       .finally(() => setLoading(false))
   }, [sport, viewMode])
 
@@ -99,13 +88,14 @@ export default function BeastSportsBook({ guildId, balance }: Props) {
     setPlacing(true)
     setBetResult(null)
     try {
-      await api.post('/beast/sports/bet', {
-        bets: betSlip.map(b => ({ eventId: b.eventId, pick: b.pick })),
+      const r = await api.post('/beast/sports/bet', {
+        bets: betSlip.map(b => ({ eventId: b.eventId, pick: b.pick, odds: b.odds })),
         amount: parseFloat(betAmount),
         currency,
       })
       setBetResult('✅ Bet placed successfully!')
       setBetSlip([])
+      if (r.data?.balance && onBalanceChange) onBalanceChange(r.data.balance)
     } catch (err: any) {
       setBetResult(err?.response?.data?.error || 'Failed to place bet')
     } finally {

@@ -5410,12 +5410,147 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Sports: Events ──
+  // ── Beast Sports: The Odds API Integration ──
+  const _sportsCache = {}
+  const SPORTS_CACHE_TTL = 10 * 60 * 1000 // 10 min
+  const SPORT_KEY_MAP = {
+    football: ['americanfootball_nfl', 'americanfootball_ncaaf'],
+    basketball: ['basketball_nba', 'basketball_ncaab', 'basketball_wnba'],
+    baseball: ['baseball_mlb'],
+    soccer: ['soccer_epl', 'soccer_usa_mls', 'soccer_spain_la_liga', 'soccer_germany_bundesliga', 'soccer_italy_serie_a', 'soccer_france_ligue_one'],
+    mma: ['mma_mixed_martial_arts'],
+    esports: []
+  }
+  const SPORT_KEY_REVERSE = {}
+  for (const [cat, keys] of Object.entries(SPORT_KEY_MAP)) {
+    for (const k of keys) SPORT_KEY_REVERSE[k] = cat
+  }
+
+  async function fetchOddsApi(sportKey) {
+    const apiKey = process.env.ODDS_API_KEY
+    if (!apiKey) return []
+    try {
+      const url = `https://api.the-odds-api.com/v4/sports/${encodeURIComponent(sportKey)}/odds/`
+      const resp = await axios.get(url, {
+        params: { apiKey, regions: 'us', markets: 'h2h', oddsFormat: 'decimal' },
+        timeout: 8000
+      })
+      return Array.isArray(resp.data) ? resp.data : []
+    } catch (err) {
+      console.error('[Beast] Odds API error for', sportKey, err.message)
+      return []
+    }
+  }
+
+  async function fetchScoresApi(sportKey) {
+    const apiKey = process.env.ODDS_API_KEY
+    if (!apiKey) return []
+    try {
+      const url = `https://api.the-odds-api.com/v4/sports/${encodeURIComponent(sportKey)}/scores/`
+      const resp = await axios.get(url, {
+        params: { apiKey },
+        timeout: 8000
+      })
+      return Array.isArray(resp.data) ? resp.data : []
+    } catch (err) {
+      console.error('[Beast] Scores API error for', sportKey, err.message)
+      return []
+    }
+  }
+
+  function transformOddsEvent(event, scoreMap) {
+    const h2h = event.bookmakers?.[0]?.markets?.find(m => m.key === 'h2h')
+    const outcomes = h2h?.outcomes || []
+    const homeOutcome = outcomes.find(o => o.name === event.home_team)
+    const awayOutcome = outcomes.find(o => o.name === event.away_team)
+    const drawOutcome = outcomes.find(o => o.name === 'Draw')
+    const sportCat = SPORT_KEY_REVERSE[event.sport_key] || 'other'
+    const now = new Date()
+    const commence = new Date(event.commence_time)
+    const isLive = commence <= now
+    const sc = scoreMap?.[event.id]
+    let homeScore, awayScore
+    if (sc?.scores) {
+      const hs = sc.scores.find(s => s.name === event.home_team)
+      const as2 = sc.scores.find(s => s.name === event.away_team)
+      homeScore = hs ? parseInt(hs.score) : undefined
+      awayScore = as2 ? parseInt(as2.score) : undefined
+    }
+    return {
+      id: event.id,
+      sport: sportCat,
+      league: event.sport_title || event.sport_key,
+      homeTeam: event.home_team,
+      awayTeam: event.away_team,
+      homeOdds: homeOutcome?.price || 1.90,
+      drawOdds: drawOutcome?.price || null,
+      awayOdds: awayOutcome?.price || 1.90,
+      startTime: event.commence_time,
+      status: isLive ? 'live' : 'upcoming',
+      homeScore,
+      awayScore
+    }
+  }
+
   app.get('/api/beast/sports/events', async (req, res) => {
     try {
-      const rows = await db.all('SELECT * FROM beast_sports_events ORDER BY start_time ASC')
-      res.json(rows || [])
-    } catch {
+      const { sport = 'all', status = 'upcoming' } = req.query
+      const apiKey = process.env.ODDS_API_KEY
+      if (!apiKey) return res.json([])
+
+      // Determine which sport keys to fetch
+      let sportKeys
+      if (sport === 'all') {
+        sportKeys = Object.values(SPORT_KEY_MAP).flat()
+      } else {
+        sportKeys = SPORT_KEY_MAP[sport] || []
+      }
+      if (sportKeys.length === 0) return res.json([])
+
+      // Fetch odds with caching (batch all keys under one cache key for 'all')
+      const cacheKey = `odds_${sport}`
+      const cached = _sportsCache[cacheKey]
+      let rawEvents = []
+      if (cached && (Date.now() - cached.ts) < SPORTS_CACHE_TTL) {
+        rawEvents = cached.data
+      } else {
+        const results = await Promise.all(sportKeys.map(k => fetchOddsApi(k)))
+        rawEvents = results.flat()
+        _sportsCache[cacheKey] = { data: rawEvents, ts: Date.now() }
+      }
+
+      // For live view, also fetch scores
+      let scoreMap = {}
+      if (status === 'live') {
+        const scoreCacheKey = `scores_${sport}`
+        const cachedScores = _sportsCache[scoreCacheKey]
+        if (cachedScores && (Date.now() - cachedScores.ts) < (2 * 60 * 1000)) {
+          scoreMap = cachedScores.data
+        } else {
+          const scoreResults = await Promise.all(sportKeys.map(k => fetchScoresApi(k)))
+          const allScores = scoreResults.flat()
+          for (const sc of allScores) { if (sc.id) scoreMap[sc.id] = sc }
+          _sportsCache[scoreCacheKey] = { data: scoreMap, ts: Date.now() }
+        }
+      }
+
+      // Transform to our format
+      let events = rawEvents.map(e => transformOddsEvent(e, scoreMap))
+
+      // Filter by status
+      const now = new Date()
+      if (status === 'live') {
+        events = events.filter(e => new Date(e.startTime) <= now)
+      } else {
+        events = events.filter(e => new Date(e.startTime) > now)
+      }
+
+      // Sort: upcoming by soonest first, live by most recent start
+      events.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+
+      res.json(events)
+    } catch (err) {
+      console.error('[Beast] sports events error:', err)
       res.json([])
     }
   })
@@ -5429,10 +5564,29 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
       const amt = parseFloat(amount)
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
+
+      // Check player balance
+      const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+      const profile = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      const currentBal = parseFloat(profile?.[balCol] || 0)
+      if (amt > currentBal) return res.status(400).json({ error: `Insufficient ${currency} balance` })
+
+      // Deduct from player balance
+      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} - ? WHERE user_id = ?`, [amt, req.user.id])
+
+      // Add to treasury as collected wager
+      const tBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+      await db.run(`UPDATE beast_treasury SET ${tBalCol} = ${tBalCol} + ?, total_wagered = total_wagered + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [amt, amt, amt])
+
       await db.run('INSERT INTO beast_sports_bets (user_id, bets_json, amount, currency, status) VALUES (?,?,?,?,?)',
         [req.user.id, JSON.stringify(bets), amt, currency, 'pending'])
-      res.json({ ok: true, message: 'Bet placed' })
+      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      res.json({
+        ok: true, message: 'Bet placed!',
+        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) }
+      })
     } catch (err) {
+      console.error('[Beast] sports bet error:', err)
       res.status(500).json({ error: 'Failed to place bet' })
     }
   })
