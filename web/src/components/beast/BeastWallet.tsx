@@ -231,7 +231,7 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                     Linked: <code>{dcbWallet.slice(0, 8)}...{dcbWallet.slice(-6)}</code>
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div className="beast-wallet-inline-row">
                   <input
                     type="number"
                     value={dcbDepositAmount}
@@ -240,9 +240,8 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                     step="0.01"
                     min="0"
                     className="beast-wallet-input"
-                    style={{ flex: 1 }}
                   />
-                  <button className="beast-wallet-action-btn" onClick={handleDepositFromDCB} disabled={loading} style={{ flex: '0 0 auto' }}>
+                  <button className="beast-wallet-action-btn" onClick={handleDepositFromDCB} disabled={loading}>
                     {loading ? 'Transferring...' : `Deposit ${currency}`}
                   </button>
                 </div>

@@ -1453,6 +1453,26 @@
   cursor: not-allowed;
 }
 
+/* Flex row for inline input + button (deposit from DCB, etc.) */
+.beast-wallet-inline-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.beast-wallet-inline-row .beast-wallet-input {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.beast-wallet-inline-row .beast-wallet-action-btn {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
 .beast-wallet-danger-btn {
   width: 100%;
   padding: 12px;
