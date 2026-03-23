@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken')
 const axios = require('axios')
 const crypto = require('crypto')
 const helmet = require('helmet')
-const { Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js')
+const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js')
 const rateLimit = require('express-rate-limit')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
@@ -1316,7 +1316,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         // Get username from any available source
         const bet = await db.get('SELECT username FROM gambling_event_bets WHERE user_id = ? AND username IS NOT NULL LIMIT 1', [user_id]).catch(() => null)
         const wallet = await db.get('SELECT username FROM user_wallets WHERE discord_id = ?', [user_id]).catch(() => null)
-        results.push({ user_id, username: bet?.username || wallet?.username || user_id, ...p })
+        const beastLink = await db.get('SELECT 1 FROM beast_dcb_links WHERE user_id = ?', [user_id]).catch(() => null)
+        results.push({ user_id, username: bet?.username || wallet?.username || user_id, beast_linked: !!beastLink, ...p })
       }
       results.sort((a, b) => b.score - a.score)
       res.json(results)
@@ -5042,9 +5043,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         user_id TEXT,
         currency TEXT,
         deposit_address TEXT,
+        secret_key TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, currency)
       )`)
+      // Migration: add secret_key column if missing
+      try { await db.run(`ALTER TABLE beast_deposit_addresses ADD COLUMN secret_key TEXT`) } catch (_) {}
       await db.run(`CREATE TABLE IF NOT EXISTS beast_dcb_links (
         user_id TEXT PRIMARY KEY,
         guild_id TEXT,
@@ -5243,21 +5247,37 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Wallet: Deposit Address ──
+  // ── Beast Wallet: Deposit Address (real Solana keypair) ──
   app.get('/api/beast/wallet/deposit-address', requireAuth, async (req, res) => {
     try {
       const currency = req.query.currency || 'SOL'
       if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.json({ address: '', currency })
       const userId = req.user.id
-      let row = await db.get('SELECT deposit_address FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [userId, currency])
-      if (row && row.deposit_address) {
-        return res.json({ address: row.deposit_address, currency })
+
+      // Check for existing valid address (must be a real Solana base58 pubkey)
+      let row = await db.get('SELECT deposit_address, secret_key FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [userId, currency])
+      if (row && row.deposit_address && row.secret_key) {
+        // Validate it's a real Solana address (not a legacy hex hash)
+        try {
+          new PublicKey(row.deposit_address)
+          return res.json({ address: row.deposit_address, currency })
+        } catch (_) {
+          // Invalid legacy address — will regenerate below
+          console.log(`[Beast] Regenerating invalid deposit address for user ${userId} currency ${currency}`)
+        }
       }
-      const addr = crypto.createHash('sha256').update(`beast-${userId}-${currency}-deposit`).digest('hex').slice(0, 44)
+
+      // Generate a real Solana keypair
+      const kp = Keypair.generate()
+      const addr = kp.publicKey.toBase58()
+      const encSecret = encryptSecret(Buffer.from(kp.secretKey).toString('base64'))
+
       await db.run(
-        'INSERT INTO beast_deposit_addresses (user_id, currency, deposit_address) VALUES (?, ?, ?) ON CONFLICT(user_id, currency) DO NOTHING',
-        [userId, currency, addr]
+        `INSERT INTO beast_deposit_addresses (user_id, currency, deposit_address, secret_key) VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, currency) DO UPDATE SET deposit_address = excluded.deposit_address, secret_key = excluded.secret_key`,
+        [userId, currency, addr, encSecret]
       )
+      console.log(`[Beast] Generated Solana deposit address for user ${userId}: ${addr.slice(0, 8)}...`)
       res.json({ address: addr, currency })
     } catch (err) {
       console.error('[Beast] deposit-address error:', err)

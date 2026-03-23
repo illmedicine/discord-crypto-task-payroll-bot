@@ -253,7 +253,7 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
   const [showHowItWorks, setShowHowItWorks] = useState(false)
 
   /* ---- Prestige badges ---- */
-  const [prestigeMap, setPrestigeMap] = useState<Record<string, { score: number; tier: string; config: { emoji: string; title: string; color: string } }>>({})
+  const [prestigeMap, setPrestigeMap] = useState<Record<string, { score: number; tier: string; config: { emoji: string; title: string; color: string }; beast_linked?: boolean }>>({})
 
   /* ==================================================================
    *  DATA LOADING
@@ -1546,13 +1546,18 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 22 }}>🏆</span>
                         <div>
-                          {ev.winner_names ? (
-                            <div style={{ fontSize: 15, fontWeight: 700, color: '#f1c40f' }}>
-                              {ev.winner_names}
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Winner data not available</div>
-                          )}
+                          {(() => {
+                            const winnerText = ev.winner_names
+                              || (ev.bets?.filter(b => b.is_winner).map(b => b.username || b.user_id).join(', '))
+                              || null
+                            if (winnerText) {
+                              return <div style={{ fontSize: 15, fontWeight: 700, color: '#f1c40f' }}>{winnerText}</div>
+                            }
+                            if (ev.status === 'completed') {
+                              return <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>House wins</div>
+                            }
+                            return <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Awaiting results...</div>
+                          })()}
                           {ev.winning_slot && (
                             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                               Winning Horse: #{ev.winning_slot}
@@ -1600,6 +1605,9 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                               <span className={`prestige-chip prestige-badge-${prestigeMap[b.user_id].tier.toLowerCase()}`}>
                                 {prestigeMap[b.user_id].config.emoji}{prestigeMap[b.user_id].tier}
                               </span>
+                            )}
+                            {prestigeMap[b.user_id]?.beast_linked && (
+                              <span className="beast-linked-chip">🐾 Beast</span>
                             )}
                             <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
                             {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
@@ -1744,6 +1752,9 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                                         <span className={`prestige-chip prestige-badge-${prestigeMap[b.user_id].tier.toLowerCase()}`}>
                                           {prestigeMap[b.user_id].config.emoji}{prestigeMap[b.user_id].tier}
                                         </span>
+                                      )}
+                                      {prestigeMap[b.user_id]?.beast_linked && (
+                                        <span className="beast-linked-chip">🐾 Beast</span>
                                       )}
                                       <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
                                       {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}

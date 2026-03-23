@@ -3613,6 +3613,20 @@ h3 {
   margin-left: 3px;
   vertical-align: middle;
 }
+/* Beast-linked badge chip */
+.beast-linked-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 3px;
+  vertical-align: middle;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(99, 102, 241, 0.2));
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+}
 
 /* Trust checklist */
 .wallet-trust-checklist {
