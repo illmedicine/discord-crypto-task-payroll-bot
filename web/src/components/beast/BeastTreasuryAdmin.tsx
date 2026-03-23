@@ -52,7 +52,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
 
   return (
     <div className="beast-wallet-overlay" onClick={onClose}>
-      <div className="beast-wallet-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <div className="beast-wallet-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480, overflow: 'hidden' }}>
         <div className="beast-wallet-header">
           <h2>BEAST TREASURY</h2>
           <button className="beast-wallet-close" onClick={onClose}>✕</button>
@@ -98,8 +98,8 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
             <div className="beast-wallet-content" style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 16 }}>
               <div className="beast-wallet-field">
                 <label>LOAD FUNDS INTO TREASURY</label>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                  <select value={loadCurrency} onChange={e => setLoadCurrency(e.target.value as any)} className="beast-wallet-select" style={{ flex: '0 0 100px' }}>
+                <div className="beast-treasury-load-row">
+                  <select value={loadCurrency} onChange={e => setLoadCurrency(e.target.value as any)} className="beast-wallet-select">
                     <option value="SOL">SOL</option>
                     <option value="USDC">USDC</option>
                     <option value="USD">USD</option>
@@ -112,9 +112,8 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                     step="0.01"
                     min="0"
                     className="beast-wallet-input"
-                    style={{ flex: 1 }}
                   />
-                  <button className="beast-wallet-action-btn" onClick={handleLoad} disabled={loading} style={{ flex: '0 0 auto' }}>
+                  <button className="beast-wallet-action-btn" onClick={handleLoad} disabled={loading}>
                     {loading ? '...' : 'Load'}
                   </button>
                 </div>
