@@ -4,6 +4,8 @@ const cookieParser = require('cookie-parser')
 const jwt = require('jsonwebtoken')
 const axios = require('axios')
 const crypto = require('crypto')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
 const multer = require('multer')
@@ -59,8 +61,51 @@ module.exports = function buildApi({ discordClient }) {
     } catch (err) { console.error('[internal] transport decryption failed:', err.message); return null; }
   };
 
-  app.use(express.json())
+  // ---- DDoS Protection & Security Headers ----
+  app.set('trust proxy', 1) // Trust Railway's proxy for accurate IP detection
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false, // Allow cross-origin API requests
+    contentSecurityPolicy: false // CSP managed by frontend
+  }))
+  app.use(express.json({ limit: '1mb' })) // Cap request body size
   app.use(cookieParser())
+
+  // Global rate limiter: 200 requests per minute per IP
+  const globalLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later.' },
+    keyGenerator: (req) => req.ip || req.headers['x-forwarded-for'] || 'unknown'
+  })
+  app.use(globalLimiter)
+
+  // Strict limiter for auth endpoints: 10 requests per minute per IP
+  const authLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many login attempts, please try again later.' },
+    keyGenerator: (req) => req.ip || req.headers['x-forwarded-for'] || 'unknown'
+  })
+  app.use('/auth', authLimiter)
+
+  // Strict limiter for wallet/financial endpoints: 30 requests per minute per IP
+  const financialLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please slow down.' },
+    keyGenerator: (req) => req.ip || req.headers['x-forwarded-for'] || 'unknown'
+  })
+  app.use('/api/beast/play', financialLimiter)
+  app.use('/api/beast/sports/bet', financialLimiter)
+  app.use('/api/beast/deposit', financialLimiter)
+  app.use('/api/beast/withdraw', financialLimiter)
 
   const isProd = process.env.NODE_ENV === 'production'
   const uiBase = process.env.DCB_UI_BASE || null
