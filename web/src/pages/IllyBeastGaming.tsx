@@ -75,6 +75,18 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
 
+  // Swap favicon to beast logo when on this page
+  useEffect(() => {
+    const link = document.querySelector("link[rel='icon']") as HTMLLinkElement | null
+    const prevHref = link?.href
+    if (link) link.href = '/beast-logo.png'
+    document.title = 'Illy Beast Gaming'
+    return () => {
+      if (link && prevHref) link.href = prevHref
+      document.title = 'DCB Event Manager'
+    }
+  }, [])
+
   // Load beast user profile
   useEffect(() => {
     setLoading(true)
@@ -176,7 +188,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
       <div className="beast-topbar">
         <div className="beast-topbar-left">
           <div className="beast-logo">
-            <span className="beast-logo-icon">🐾</span>
+            <img src="/beast-logo.png" alt="Illy Beast" className="beast-logo-icon" style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover' }} />
             <span className="beast-logo-text">illy Beast</span>
           </div>
           <div className="beast-main-tabs">

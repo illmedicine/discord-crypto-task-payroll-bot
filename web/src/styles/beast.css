@@ -34,6 +34,23 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+/* Transparent watermark background */
+.beast-portal::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: url('/beast-logo.png') center center / 50vh no-repeat;
+  opacity: 0.04;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.beast-portal > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* ─── TOP BAR ─── */
@@ -754,6 +771,22 @@
   background: var(--beast-bg);
   min-height: 100vh;
   color: var(--beast-text);
+  position: relative;
+}
+
+.beast-game-active::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: url('/beast-logo.png') center center / 50vh no-repeat;
+  opacity: 0.04;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.beast-game-active > * {
+  position: relative;
+  z-index: 1;
 }
 
 .beast-game-header {
