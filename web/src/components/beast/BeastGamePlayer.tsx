@@ -62,12 +62,27 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       case 'roulette': return 2
       case 'lightning-roulette': return 36
       case 'baccarat': return 8
+      // Slots use specific max multipliers (matched to backend)
+      case 'lamb-chop': case 'ice-fishing': case 'duck-hunters':
+      case 'omaha-flip': case 'coin-race': case 'beast-fortune':
+        return 5
       default: return 11
     }
   }
 
+  // Convert USD-denominated minBet/maxBet to current currency
+  const getMinBet = () => {
+    if (currency === 'SOL' && solPrice > 0) return parseFloat((game.minBet / solPrice).toFixed(6))
+    return game.minBet
+  }
+  const getGameMaxBet = () => {
+    if (currency === 'SOL' && solPrice > 0) return parseFloat((game.maxBet / solPrice).toFixed(6))
+    return game.maxBet
+  }
+
   const getDynamicMaxBet = () => {
-    if (!treasuryLimits) return game.maxBet
+    const gameMax = getGameMaxBet()
+    if (!treasuryLimits) return gameMax
     // Use treasury balance for the selected currency
     let tBal = currency === 'SOL' ? treasuryLimits.sol : currency === 'USDC' ? treasuryLimits.usdc : treasuryLimits.usd
     // If betting in SOL but treasury has USD loaded, convert USD treasury to SOL equivalent
@@ -80,10 +95,11 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       tBal += treasuryLimits.sol * solPrice
     }
     const treasuryMax = parseFloat((tBal / getMaxMultiplier()).toFixed(6))
-    return Math.max(0, Math.min(game.maxBet, treasuryMax))
+    return Math.max(0, Math.min(gameMax, treasuryMax))
   }
 
   const dynamicMaxBet = getDynamicMaxBet()
+  const minBet = getMinBet()
 
   // Game-specific state
   const [diceTarget, setDiceTarget] = useState(50) // for dice
@@ -100,7 +116,8 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
 
   const placeBet = useCallback(async () => {
     const bet = parseFloat(betAmount)
-    if (isNaN(bet) || bet < game.minBet || bet > dynamicMaxBet) return
+    if (isNaN(bet) || bet <= 0) return
+    if (bet < minBet * 0.99 || bet > dynamicMaxBet * 1.001) return
     if (bet > getAvailableBalance()) return
 
     setPlaying(true)
@@ -119,27 +136,36 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       setResult(res)
       setHistory(prev => [{ won: res.won, payout: res.payout, multiplier: res.multiplier, timestamp: Date.now() }, ...prev].slice(0, 20))
       if (res.balance) onBalanceChange(res.balance)
+      // Refresh treasury limits after each bet
+      api.get('/beast/treasury/max-payout').then(r2 => setTreasuryLimits(r2.data)).catch(() => {})
     } catch (err: any) {
       const errData = err?.response?.data
       if (errData?.treasuryLimit && errData?.maxBet !== undefined) {
-        setBetAmount(Math.max(0, errData.maxBet).toFixed(2))
-        api.get('/beast/treasury/max-payout').then(r => setTreasuryLimits(r.data)).catch(() => {})
+        const prec = currency === 'SOL' ? 6 : 2
+        setBetAmount(Math.max(0, errData.maxBet).toFixed(prec))
+        api.get('/beast/treasury/max-payout').then(r2 => setTreasuryLimits(r2.data)).catch(() => {})
       }
       setResult({ won: false, payout: 0, multiplier: 0, details: errData?.error || 'Bet failed' })
     } finally {
       setPlaying(false)
     }
-  }, [betAmount, currency, game, diceTarget, minesCount, coinSide, crashMulti, limboTarget, onBalanceChange])
+  }, [betAmount, currency, game, minBet, dynamicMaxBet, diceTarget, minesCount, coinSide, crashMulti, limboTarget, onBalanceChange])
 
+  // Reset bet amount when currency changes so it matches converted min
+  useEffect(() => {
+    setBetAmount(minBet.toFixed(currency === 'SOL' ? 6 : 2))
+  }, [currency, solPrice]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const betPrec = currency === 'SOL' ? 6 : 2
   const halfBet = () => {
     const bet = parseFloat(betAmount)
-    if (!isNaN(bet)) setBetAmount((bet / 2).toFixed(2))
+    if (!isNaN(bet)) setBetAmount(Math.max(bet / 2, minBet).toFixed(betPrec))
   }
   const doubleBet = () => {
     const bet = parseFloat(betAmount)
-    if (!isNaN(bet)) setBetAmount(Math.min(bet * 2, dynamicMaxBet).toFixed(2))
+    if (!isNaN(bet)) setBetAmount(Math.min(bet * 2, dynamicMaxBet).toFixed(betPrec))
   }
-  const maxBet = () => setBetAmount(Math.min(getAvailableBalance(), dynamicMaxBet).toFixed(2))
+  const maxBet = () => setBetAmount(Math.min(getAvailableBalance(), dynamicMaxBet).toFixed(betPrec))
 
   return (
     <div className="beast-player">
@@ -246,9 +272,9 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                 type="number"
                 value={betAmount}
                 onChange={e => setBetAmount(e.target.value)}
-                min={game.minBet}
+                min={minBet}
                 max={dynamicMaxBet}
-                step={0.01}
+                step={currency === 'SOL' ? 0.000001 : 0.01}
                 className="beast-bet-input"
               />
               <div className="beast-bet-shortcuts">
@@ -258,13 +284,13 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
               </div>
             </div>
             <div className="beast-bet-range">
-              Min: {currency === 'SOL' ? `${game.minBet.toFixed(4)} SOL` : `$${game.minBet.toFixed(2)}`} — Max: {currency === 'SOL' ? `${dynamicMaxBet.toFixed(4)} SOL` : `$${dynamicMaxBet.toFixed(2)}`}
+              Min: {currency === 'SOL' ? `${minBet.toFixed(6)} SOL` : `$${minBet.toFixed(2)}`} — Max: {currency === 'SOL' ? `${dynamicMaxBet.toFixed(6)} SOL` : `$${dynamicMaxBet.toFixed(2)}`}
               {solPrice > 0 && currency === 'SOL' && dynamicMaxBet > 0 && (
                 <span style={{ color: '#a78bfa', marginLeft: 6, fontSize: '0.75rem' }}>
                   (≈ ${(dynamicMaxBet * solPrice).toFixed(2)})
                 </span>
               )}
-              {treasuryLimits && dynamicMaxBet < game.maxBet && (
+              {treasuryLimits && dynamicMaxBet < getGameMaxBet() && (
                 <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: '0.75rem' }}>
                   (treasury limit)
                 </span>
@@ -275,7 +301,7 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
           <button
             className="beast-play-btn"
             onClick={placeBet}
-            disabled={playing || parseFloat(betAmount) > getAvailableBalance() || parseFloat(betAmount) > dynamicMaxBet}
+            disabled={playing || !betAmount || parseFloat(betAmount) <= 0 || parseFloat(betAmount) > getAvailableBalance() || parseFloat(betAmount) > dynamicMaxBet * 1.001 || parseFloat(betAmount) < minBet * 0.99}
           >
             {playing ? 'Playing...' : `BET ${betAmount} ${currency}`}
           </button>

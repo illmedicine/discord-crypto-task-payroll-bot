@@ -5455,6 +5455,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         case 'roulette': maxMulti = 2; break
         case 'lightning-roulette': maxMulti = 36; break
         case 'baccarat': maxMulti = 8; break
+        case 'lamb-chop': case 'ice-fishing': case 'duck-hunters':
+        case 'omaha-flip': case 'coin-race': case 'beast-fortune':
+          maxMulti = 5; break
       }
       const maxPossiblePayout = bet * maxMulti
       if (treasuryBal < maxPossiblePayout) {
@@ -5488,6 +5491,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         case 'blackjack': { won = roll > 0.48; multiplier = won ? (roll > 0.93 ? 2.5 : 2) : 0; details = won ? (multiplier === 2.5 ? 'Blackjack!' : 'You win') : 'Dealer wins'; break }
         case 'roulette': case 'lightning-roulette': { const n = Math.floor(roll * 37); won = roll > 0.48; multiplier = won ? (gameId === 'lightning-roulette' && roll > 0.95 ? 36 : 2) : 0; details = `Ball landed on ${n}`; break }
         case 'baccarat': { won = roll > 0.46; multiplier = won ? (roll > 0.85 ? 8 : 2) : 0; details = won ? 'Player wins' : 'Banker wins'; break }
+        case 'lamb-chop': case 'ice-fishing': case 'duck-hunters':
+        case 'omaha-flip': case 'coin-race': case 'beast-fortune':
+          { won = roll > 0.4; multiplier = won ? parseFloat((1 + roll * 4).toFixed(2)) : 0; details = won ? `Win at ${multiplier}x!` : 'No win this spin'; break }
         default: { won = roll > 0.4; multiplier = won ? parseFloat((1 + roll * 10).toFixed(2)) : 0; details = won ? `Win at ${multiplier}x!` : 'No win this spin' }
       }
       payout = won ? parseFloat((bet * multiplier).toFixed(6)) : 0
