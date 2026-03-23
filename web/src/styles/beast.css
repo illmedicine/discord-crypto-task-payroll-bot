@@ -486,8 +486,19 @@
 }
 
 .beast-hero-mascot {
-  font-size: 80px;
+  width: 140px;
+  height: auto;
+  object-fit: contain;
   filter: drop-shadow(0 0 20px rgba(192, 38, 211, 0.5));
+  flex-shrink: 0;
+}
+
+.beast-section-logo {
+  height: 22px;
+  width: auto;
+  vertical-align: middle;
+  margin-right: 4px;
+  filter: drop-shadow(0 0 6px rgba(192, 38, 211, 0.4));
 }
 
 .beast-hero-promo-text h2 {

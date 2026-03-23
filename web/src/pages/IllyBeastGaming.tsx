@@ -338,7 +338,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
                   </div>
                 </div>
                 <div className="beast-hero-promo">
-                  <div className="beast-hero-mascot">🐾</div>
+                  <img src="/beast-logo.png" alt="Illy Beast" className="beast-hero-mascot" />
                   <div className="beast-hero-promo-text">
                     <span className="beast-new-badge">NEW GAMES</span>
                     <h2>illy Beast<br />EXCLUSIVE</h2>
@@ -378,7 +378,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
             {casinoCategory === 'all' && !searchQuery && (
               <div className="beast-section">
                 <div className="beast-section-header">
-                  <h3>🐾 illy Beast Originals</h3>
+                  <h3><img src="/beast-logo.png" alt="" className="beast-section-logo" /> illy Beast Originals</h3>
                   <button className="beast-see-all" onClick={() => setCasinoCategory('originals')}>SEE ALL</button>
                 </div>
                 <div className="beast-game-scroll">
@@ -404,7 +404,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
                     {searchQuery ? `Search: "${searchQuery}"` :
                       casinoCategory === 'favorites' ? '⭐ Your Favorites' :
                       casinoCategory === 'recent' ? '🕐 Recent Games' :
-                      casinoCategory === 'originals' ? '🐾 illy Beast Originals' :
+                      casinoCategory === 'originals' ? <><img src="/beast-logo.png" alt="" className="beast-section-logo" /> illy Beast Originals</> :
                       casinoCategory === 'slots' ? '🎰 Slots' :
                       casinoCategory === 'table' ? '🃏 Table Games' :
                       casinoCategory === 'live' ? '📺 Live Casino' :
