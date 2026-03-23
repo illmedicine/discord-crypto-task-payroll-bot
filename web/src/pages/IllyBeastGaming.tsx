@@ -6,6 +6,7 @@ import BeastSportsBook from '../components/beast/BeastSportsBook'
 import BeastLiveWins from '../components/beast/BeastLiveWins'
 import BeastGamePlayer from '../components/beast/BeastGamePlayer'
 import BeastDiscordShare from '../components/beast/BeastDiscordShare'
+import BeastTreasuryAdmin from '../components/beast/BeastTreasuryAdmin'
 
 /* ───────────────────────────────────────
    Game Catalog – Illy Beast Originals
@@ -70,6 +71,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
   const [showWallet, setShowWallet] = useState(false)
   const [activeGame, setActiveGame] = useState<typeof ALL_GAMES[0] | null>(null)
   const [shareGame, setShareGame] = useState<typeof ALL_GAMES[0] | null>(null)
+  const [showTreasury, setShowTreasury] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -223,6 +225,11 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
               <button className="beast-cashier-btn" onClick={() => setShowWallet(true)}>
                 CASHIER
               </button>
+              {beastUser.id === '1075818871149305966' && (
+                <button className="beast-cashier-btn" onClick={() => setShowTreasury(true)} style={{ marginLeft: 6, background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
+                  TREASURY
+                </button>
+              )}
             </>
           )}
         </div>
@@ -238,6 +245,11 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
             if (beastUser) setBeastUser({ ...beastUser, beastBalance: newBal })
           }}
         />
+      )}
+
+      {/* ─── TREASURY ADMIN MODAL ─── */}
+      {showTreasury && (
+        <BeastTreasuryAdmin onClose={() => setShowTreasury(false)} />
       )}
 
       {/* ─── LIVE WINS TICKER ─── */}

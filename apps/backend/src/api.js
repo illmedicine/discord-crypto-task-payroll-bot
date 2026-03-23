@@ -5054,7 +5054,31 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         direction TEXT DEFAULT 'dcb_to_beast',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`)
-      console.log('[Beast] Tables initialized')
+      await db.run(`CREATE TABLE IF NOT EXISTS beast_treasury (
+        id TEXT PRIMARY KEY DEFAULT 'beast_main',
+        owner_id TEXT DEFAULT '1075818871149305966',
+        balance_sol REAL DEFAULT 0,
+        balance_usdc REAL DEFAULT 0,
+        balance_usd REAL DEFAULT 0,
+        total_wagered REAL DEFAULT 0,
+        total_payouts REAL DEFAULT 0,
+        total_collected REAL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`)
+      await db.run(`INSERT OR IGNORE INTO beast_treasury (id) VALUES ('beast_main')`)
+      await db.run(`CREATE TABLE IF NOT EXISTS beast_treasury_txns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT,
+        currency TEXT,
+        amount REAL,
+        balance_after REAL,
+        bet_id INTEGER,
+        user_id TEXT,
+        details TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`)
+      console.log('[Beast] Tables initialized (with treasury)')
     } catch (err) {
       console.error('[Beast] Table init error:', err)
     }
@@ -5304,6 +5328,38 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
       const currentBal = parseFloat(profile?.[balCol] || 0)
       if (bet > currentBal) return res.status(400).json({ error: `Insufficient ${currency} balance` })
+
+      // Treasury check: ensure treasury can cover max potential payout
+      const treasuryBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+      const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
+      const treasuryBal = parseFloat(treasury?.[treasuryBalCol] || 0)
+      let maxMulti = 11
+      switch (gameId) {
+        case 'coin-flip': maxMulti = 1.94; break
+        case 'dice': maxMulti = parseFloat((99 / ((target || 50) - 1)).toFixed(2)); break
+        case 'limbo': maxMulti = targetMultiplier || 2; break
+        case 'crash': maxMulti = autoCashout || 2; break
+        case 'mines': { const mc2 = minesCount || 3; const ss2 = 25 - mc2; maxMulti = parseFloat((25 / ss2 * (1 + ss2 * 0.2)).toFixed(2)); break }
+        case 'plinko': maxMulti = 5; break
+        case 'keno': maxMulti = 500; break
+        case 'hilo': maxMulti = 1.9; break
+        case 'wheel': maxMulti = 10; break
+        case 'tower': maxMulti = parseFloat(Math.pow(1.4, 10).toFixed(2)); break
+        case 'blackjack': maxMulti = 2.5; break
+        case 'roulette': maxMulti = 2; break
+        case 'lightning-roulette': maxMulti = 36; break
+        case 'baccarat': maxMulti = 8; break
+      }
+      const maxPossiblePayout = bet * maxMulti
+      if (treasuryBal < maxPossiblePayout) {
+        const maxBetAllowed = parseFloat((treasuryBal / maxMulti).toFixed(6))
+        return res.status(400).json({
+          error: `Max bet for ${gameId}: ${maxBetAllowed > 0 ? maxBetAllowed : 0} ${currency} (treasury limit)`,
+          maxBet: maxBetAllowed > 0 ? maxBetAllowed : 0,
+          treasuryLimit: true
+        })
+      }
+
       await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} - ? WHERE user_id = ?`, [bet, req.user.id])
 
       const serverSeed = crypto.randomBytes(32).toString('hex')
@@ -5330,6 +5386,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       }
       payout = won ? parseFloat((bet * multiplier).toFixed(6)) : 0
       if (payout > 0) await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} + ? WHERE user_id = ?`, [payout, req.user.id])
+
+      // Treasury: collect wager, pay winnings
+      await db.run(`UPDATE beast_treasury SET ${treasuryBalCol} = ${treasuryBalCol} + ?, total_wagered = total_wagered + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [bet, bet, bet])
+      if (payout > 0) {
+        await db.run(`UPDATE beast_treasury SET ${treasuryBalCol} = ${treasuryBalCol} - ?, total_payouts = total_payouts + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [payout, payout])
+      }
+
       await db.run('INSERT INTO beast_bets (user_id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details) VALUES (?,?,?,?,?,?,?,?,?)',
         [req.user.id, gameId, bet, currency, won ? 1 : 0, multiplier, payout, serverSeed, details])
       if (won && payout > 0.5) {
@@ -5393,6 +5456,52 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     } catch (err) {
       console.error('[Beast] share error:', err)
       res.status(500).json({ error: 'Failed to share' })
+    }
+  })
+
+  // ── Beast Treasury ──
+  const BEAST_OWNER_ID = '1075818871149305966'
+
+  // GET /api/beast/treasury/max-payout - public: treasury balance available per currency
+  app.get('/api/beast/treasury/max-payout', async (req, res) => {
+    try {
+      const treasury = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_treasury WHERE id = ?', ['beast_main'])
+      res.json({
+        sol: parseFloat(treasury?.balance_sol || 0),
+        usdc: parseFloat(treasury?.balance_usdc || 0),
+        usd: parseFloat(treasury?.balance_usd || 0),
+      })
+    } catch { res.json({ sol: 0, usdc: 0, usd: 0 }) }
+  })
+
+  // GET /api/beast/treasury - owner only: full treasury view
+  app.get('/api/beast/treasury', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
+      const txns = await db.all('SELECT * FROM beast_treasury_txns ORDER BY created_at DESC LIMIT 50')
+      res.json({ treasury, transactions: txns || [] })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load treasury' })
+    }
+  })
+
+  // POST /api/beast/treasury/load - owner loads funds into treasury
+  app.post('/api/beast/treasury/load', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const { currency, amount } = req.body
+      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
+      const amt = parseFloat(amount)
+      if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
+      const tBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+      await db.run(`UPDATE beast_treasury SET ${tBalCol} = ${tBalCol} + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [amt])
+      const updated = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
+      await db.run('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, details) VALUES (?,?,?,?,?,?)',
+        ['load', currency, amt, parseFloat(updated?.[tBalCol] || 0), req.user.id, `Owner loaded ${amt} ${currency}`])
+      res.json({ ok: true, treasury: updated })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load treasury' })
     }
   })
 
