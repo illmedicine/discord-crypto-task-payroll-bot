@@ -200,7 +200,27 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                 <span className="beast-wallet-curr-balance">
                   {currency === 'SOL' ? balance.sol.toFixed(4) :
                    currency === 'USDC' ? balance.usdc.toFixed(4) :
-                  
+                   balance.usd.toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            <div className="beast-wallet-field">
+              <label>DEPOSIT ADDRESS</label>
+              <div className="beast-wallet-address-row">
+                <input
+                  type="text"
+                  readOnly
+                  value={depositAddress || 'Loading...'}
+                  className="beast-wallet-address"
+                />
+                <button className="beast-wallet-copy-btn" onClick={copyAddress}>📋</button>
+              </div>
+              <p className="beast-wallet-note">
+                Deposits must be sent on the Solana network.
+                <strong> Minimum deposit: $1.00 USD equivalent.</strong>
+              </p>
+            </div>
 
             {/* Deposit from DCB Wallet */}
             {dcbLinked ? (
@@ -236,27 +256,7 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                   💡 <strong>Tip:</strong> Link your DCB wallet in the "🔗 Link DCB" tab to deposit directly from your DCB balance.
                 </p>
               </div>
-            )} balance.usd.toFixed(2)}
-                </span>
-              </div>
-            </div>
-
-            <div className="beast-wallet-field">
-              <label>DEPOSIT ADDRESS</label>
-              <div className="beast-wallet-address-row">
-                <input
-                  type="text"
-                  readOnly
-                  value={depositAddress || 'Loading...'}
-                  className="beast-wallet-address"
-                />
-                <button className="beast-wallet-copy-btn" onClick={copyAddress}>📋</button>
-              </div>
-              <p className="beast-wallet-note">
-                Deposits must be sent on the Solana network.
-                <strong> Minimum deposit: $1.00 USD equivalent.</strong>
-              </p>
-            </div>
+            )}
           </div>
         )}
 
