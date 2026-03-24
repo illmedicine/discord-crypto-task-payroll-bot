@@ -5959,7 +5959,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // GET /api/admin/failed-payments — audit all failed worker payouts and gambling refunds
+  // GET /api/admin/failed-payments — comprehensive audit of ALL failed payouts
+  // Covers: worker payouts, gambling (horse race) pot splits, poker pot splits
   // Accepts session auth OR internal secret (for CLI/script usage)
   app.get('/api/admin/failed-payments', (req, res, next) => {
     const user = getSessionUser(req)
@@ -5969,65 +5970,108 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   }, async (req, res) => {
     try {
       const guildId = req.query.guildId
+      const guildFilter = guildId ? 'AND guild_id = ?' : ''
+      const guildWhere = guildId ? 'WHERE guild_id = ?' : ''
+      const gp = guildId ? [guildId] : []
 
-      // 0. Get actual column names + status distribution for debugging
-      const columns = await db.all(`PRAGMA table_info(worker_payouts)`).catch(() => [])
-      const colNames = columns.map(c => c.name)
-      const statusDist = await db.all(
-        `SELECT status, COUNT(*) as cnt, SUM(amount_sol) as total_sol FROM worker_payouts ${guildId ? 'WHERE guild_id = ?' : ''} GROUP BY status ORDER BY cnt DESC`,
-        guildId ? [guildId] : []
+      // ─── 1. WORKER PAYOUTS ────────────────────────────────────
+      const wpCols = (await db.all(`PRAGMA table_info(worker_payouts)`).catch(() => [])).map(c => c.name)
+      const wpStatusDist = await db.all(
+        `SELECT status, COUNT(*) as cnt, SUM(amount_sol) as total_sol FROM worker_payouts ${guildWhere} GROUP BY status ORDER BY cnt DESC`, gp
       ).catch(() => [])
 
-      // 1. Failed worker payouts — select only columns that exist
       const safeSelect = ['id', 'guild_id', 'recipient_discord_id', 'recipient_address', 'amount_sol', 'amount_usd', 'sol_price_at_time', 'status', 'memo', 'paid_by', 'created_at']
-        .filter(c => colNames.includes(c)).join(', ')
-      const nonSuccessStatuses = statusDist.filter(s => s.status && !['success', 'completed', 'paid'].includes(s.status.toLowerCase())).map(s => s.status)
+        .filter(c => wpCols.includes(c)).join(', ')
+      const nonSuccessStatuses = wpStatusDist.filter(s => s.status && !['success', 'completed', 'paid'].includes(s.status.toLowerCase())).map(s => s.status)
 
       let failedPayouts = []
       if (nonSuccessStatuses.length > 0 && safeSelect) {
-        const placeholders = nonSuccessStatuses.map(() => '?').join(', ')
-        const params = [...nonSuccessStatuses, ...(guildId ? [guildId] : [])]
+        const ph = nonSuccessStatuses.map(() => '?').join(', ')
         failedPayouts = await db.all(
-          `SELECT ${safeSelect} FROM worker_payouts WHERE status IN (${placeholders}) ${guildId ? 'AND guild_id = ?' : ''} ORDER BY created_at DESC LIMIT 200`,
-          params
-        ).catch(e => { console.error('[Audit] failedPayouts query error:', e.message); return [] })
+          `SELECT ${safeSelect} FROM worker_payouts WHERE status IN (${ph}) ${guildFilter} ORDER BY created_at DESC LIMIT 200`,
+          [...nonSuccessStatuses, ...gp]
+        ).catch(e => { console.error('[Audit] failedPayouts:', e.message); return [] })
       }
 
-      // 2. Failed gambling refunds
-      const failedRefunds = await db.all(
-        `SELECT b.gambling_event_id, b.user_id, b.username, b.bet_amount, b.payment_status, b.wallet_address,
-                e.title as event_title, e.currency, e.status as event_status
-         FROM gambling_event_bets b JOIN gambling_events e ON b.gambling_event_id = e.id
-         WHERE b.payment_status IN ('refund_failed', 'payout_failed') ${guildId ? 'AND b.guild_id = ?' : ''}
-         ORDER BY b.joined_at DESC LIMIT 100`,
-        guildId ? [guildId] : []
-      ).catch(e => { console.error('[Audit] failedRefunds query error:', e.message); return [] })
-
-      // 3. Summary stats
-      const payoutStats = await db.get(
+      const wpStats = await db.get(
         `SELECT COUNT(*) as total,
-                SUM(CASE WHEN status NOT IN ('success', 'completed', 'paid') THEN 1 ELSE 0 END) as failed,
-                SUM(CASE WHEN status NOT IN ('success', 'completed', 'paid') THEN amount_sol ELSE 0 END) as failed_sol
-         FROM worker_payouts ${guildId ? 'WHERE guild_id = ?' : ''}`,
-        guildId ? [guildId] : []
+                SUM(CASE WHEN status NOT IN ('success','completed','paid') THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN status NOT IN ('success','completed','paid') THEN amount_sol ELSE 0 END) as failed_sol
+         FROM worker_payouts ${guildWhere}`, gp
       ).catch(() => ({ total: 0, failed: 0, failed_sol: 0 }))
 
-      const refundStats = await db.get(
+      // ─── 2. GAMBLING (HORSE RACE) POT SPLIT FAILURES ──────────
+      const failedGambling = await db.all(
+        `SELECT b.id, b.gambling_event_id, b.guild_id, b.user_id, b.username, b.chosen_slot,
+                b.bet_amount, b.is_winner, b.payment_status, b.wallet_address,
+                b.entry_tx_signature, b.payout_tx_signature, b.joined_at,
+                e.title as event_title, e.mode as event_mode, e.currency, e.entry_fee,
+                e.status as event_status, e.created_at as event_created_at
+         FROM gambling_event_bets b LEFT JOIN gambling_events e ON b.gambling_event_id = e.id
+         WHERE b.payment_status IN ('payout_failed','refund_failed') ${guildId ? 'AND b.guild_id = ?' : ''}
+         ORDER BY b.joined_at DESC LIMIT 200`, gp
+      ).catch(e => { console.error('[Audit] failedGambling:', e.message); return [] })
+
+      const gamblingStatusDist = await db.all(
+        `SELECT payment_status, COUNT(*) as cnt, SUM(bet_amount) as total_amount
+         FROM gambling_event_bets ${guildWhere} GROUP BY payment_status ORDER BY cnt DESC`, gp
+      ).catch(() => [])
+
+      const gamblingStats = await db.get(
         `SELECT COUNT(*) as total,
-                SUM(CASE WHEN payment_status = 'refund_failed' THEN bet_amount ELSE 0 END) as failed_refund_amount
-         FROM gambling_event_bets WHERE payment_status IN ('refund_failed', 'payout_failed') ${guildId ? 'AND guild_id = ?' : ''}`,
-        guildId ? [guildId] : []
-      ).catch(() => ({ total: 0, failed_refund_amount: 0 }))
+                SUM(CASE WHEN payment_status='payout_failed' THEN 1 ELSE 0 END) as payout_failed_cnt,
+                SUM(CASE WHEN payment_status='refund_failed' THEN 1 ELSE 0 END) as refund_failed_cnt,
+                SUM(CASE WHEN payment_status='payout_failed' THEN bet_amount ELSE 0 END) as payout_failed_sol,
+                SUM(CASE WHEN payment_status='refund_failed' THEN bet_amount ELSE 0 END) as refund_failed_sol
+         FROM gambling_event_bets
+         WHERE payment_status IN ('payout_failed','refund_failed') ${guildFilter}`, gp
+      ).catch(() => ({ total: 0, payout_failed_cnt: 0, refund_failed_cnt: 0, payout_failed_sol: 0, refund_failed_sol: 0 }))
+
+      // ─── 3. POKER POT SPLIT FAILURES ──────────────────────────
+      // 'payout_failed' = TX was attempted but failed
+      // 'committed' + final_chips > 0 = game ended with chips but payout never attempted/completed
+      const failedPoker = await db.all(
+        `SELECT p.id, p.poker_event_id, p.guild_id, p.user_id, p.wallet_address,
+                p.buy_in_amount, p.final_chips, p.payout_amount, p.payment_status,
+                p.entry_tx_signature, p.payout_tx_signature, p.joined_at,
+                e.title as event_title, e.mode as event_mode, e.buy_in as event_buy_in,
+                e.currency, e.status as event_status, e.created_at as event_created_at
+         FROM poker_event_players p LEFT JOIN poker_events e ON p.poker_event_id = e.id
+         WHERE (p.payment_status = 'payout_failed' OR (p.payment_status = 'committed' AND p.final_chips > 0))
+         ${guildId ? 'AND p.guild_id = ?' : ''}
+         ORDER BY p.joined_at DESC LIMIT 200`, gp
+      ).catch(e => { console.error('[Audit] failedPoker:', e.message); return [] })
+
+      const pokerStatusDist = await db.all(
+        `SELECT payment_status, COUNT(*) as cnt, SUM(buy_in_amount) as total_buy_in, SUM(payout_amount) as total_payout
+         FROM poker_event_players ${guildWhere} GROUP BY payment_status ORDER BY cnt DESC`, gp
+      ).catch(() => [])
+
+      const pokerStats = await db.get(
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN payment_status='payout_failed' THEN 1 ELSE 0 END) as payout_failed_cnt,
+                SUM(CASE WHEN payment_status='committed' AND final_chips > 0 THEN 1 ELSE 0 END) as stuck_committed_cnt,
+                SUM(CASE WHEN payment_status='payout_failed' THEN COALESCE(payout_amount, buy_in_amount) ELSE 0 END) as payout_failed_sol,
+                SUM(CASE WHEN payment_status='committed' AND final_chips > 0 THEN buy_in_amount ELSE 0 END) as stuck_committed_sol
+         FROM poker_event_players
+         WHERE (payment_status='payout_failed' OR (payment_status='committed' AND final_chips > 0))
+         ${guildFilter}`, gp
+      ).catch(() => ({ total: 0, payout_failed_cnt: 0, stuck_committed_cnt: 0, payout_failed_sol: 0, stuck_committed_sol: 0 }))
+
+      // ─── GRAND TOTAL ──────────────────────────────────────────
+      const workerOwed = parseFloat(wpStats?.failed_sol || 0)
+      const gamblingOwed = parseFloat(gamblingStats?.payout_failed_sol || 0) + parseFloat(gamblingStats?.refund_failed_sol || 0)
+      const pokerOwed = parseFloat(pokerStats?.payout_failed_sol || 0) + parseFloat(pokerStats?.stuck_committed_sol || 0)
 
       res.json({
-        failedPayouts,
-        failedRefunds,
-        statusDistribution: statusDist,
-        columns: colNames,
-        summary: {
-          workerPayouts: payoutStats,
-          gamblingRefunds: refundStats,
-          totalOwedSol: parseFloat(payoutStats?.failed_sol || 0) + parseFloat(refundStats?.failed_refund_amount || 0)
+        workerPayouts: { records: failedPayouts, statusDistribution: wpStatusDist, columns: wpCols, stats: wpStats },
+        gamblingEvents: { records: failedGambling, statusDistribution: gamblingStatusDist, stats: gamblingStats },
+        pokerEvents: { records: failedPoker, statusDistribution: pokerStatusDist, stats: pokerStats },
+        grandTotal: {
+          workerOwedSol: workerOwed,
+          gamblingOwedSol: gamblingOwed,
+          pokerOwedSol: pokerOwed,
+          totalOwedSol: workerOwed + gamblingOwed + pokerOwed
         }
       })
     } catch (err) {
