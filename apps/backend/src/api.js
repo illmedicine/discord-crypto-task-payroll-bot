@@ -5434,7 +5434,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         `SELECT COALESCE(SUM(amount), 0) as total FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`,
         [req.user.id]
       )
-      const alreadyDepositedSol = parseFloat(totalDeposited?.total || 0)
+      let alreadyDepositedSol = parseFloat(totalDeposited?.total || 0)
+
+      // Auto-reset stale tracking: if tracked deposits >= on-chain balance, these were phantom deposits
+      // from before balance verification existed — clear them so user can deposit their real balance
+      if (alreadyDepositedSol > 0 && alreadyDepositedSol >= onChainSol) {
+        console.log(`[Beast] Auto-clearing stale deposit tracking for ${req.user.id}: tracked ${alreadyDepositedSol} >= on-chain ${onChainSol}`)
+        await db.run(`DELETE FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`, [req.user.id])
+        alreadyDepositedSol = 0
+      }
+
       const availableSol = Math.max(0, onChainSol - alreadyDepositedSol)
 
       if (solAmt > availableSol + 0.000001) {
