@@ -139,8 +139,9 @@ async function runHorseRaceAnimation(channel, slots, winningSlot, eventId) {
   }
 }
 
-/** Sync event status to backend with logging — includes full event data for upsert */
-function syncStatusToBackend(eventId, status, guildId, extra = {}) {
+/** Sync event status to backend with logging — includes full event data for upsert.
+ *  Returns a promise so callers can await critical syncs (e.g. event completion). */
+async function syncStatusToBackend(eventId, status, guildId, extra = {}) {
   try {
     const backendUrl = process.env.DCB_BACKEND_URL;
     const secret = process.env.DCB_INTERNAL_SECRET;
@@ -149,15 +150,19 @@ function syncStatusToBackend(eventId, status, guildId, extra = {}) {
       return;
     }
     const url = `${backendUrl.replace(/\/$/, '')}/api/internal/gambling-event-sync`;
-    fetch(url, {
+    const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': secret },
       body: JSON.stringify({ eventId, action: 'status_update', status, guildId, ...extra }),
-    }).then(r => {
-      if (r.ok) console.log(`[SYNC] \u2705 Event #${eventId} status=${status} synced to backend`);
-      else r.text().then(t => console.error(`[SYNC] \u274c Event #${eventId}: backend returned ${r.status} — ${t}`));
-    }).catch(err => console.error(`[SYNC] \u274c Event #${eventId} sync failed:`, err.message));
-  } catch (e) { console.error(`[SYNC] Error preparing sync for event #${eventId}:`, e.message); }
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.ok) {
+      console.log(`[SYNC] \u2705 Event #${eventId} status=${status} synced to backend`);
+    } else {
+      const t = await r.text();
+      console.error(`[SYNC] \u274c Event #${eventId}: backend returned ${r.status} — ${t}`);
+    }
+  } catch (e) { console.error(`[SYNC] \u274c Event #${eventId} sync failed:`, e.message); }
 }
 
 /** Full-sync an event to the backend (create or replace). Called on event creation. */
@@ -609,6 +614,18 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
       betBreakdown += `${isWin}**${slot.label}**: ${count} bet(s) (${pct}%)\n`;
     }
 
+    // ======== Resolve display names before building embed ========
+    const userNameMap = new Map(); // userId -> displayName
+    const allUserIds = [...new Set([...winnerUserIds, ...bets.map(b => b.user_id)])];
+    for (const uid of allUserIds) {
+      try {
+        const user = await client.users.fetch(uid);
+        userNameMap.set(uid, user.displayName || user.username || uid);
+      } catch (_) {
+        userNameMap.set(uid, uid);
+      }
+    }
+
     // ======== Announce results ========
     try {
       const channel = await client.channels.fetch(event.channel_id);
@@ -629,13 +646,13 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
         resultsEmbed.addFields({ name: '📈 Bets by Horse', value: betBreakdown || 'No bets placed' });
 
         if (winnerUserIds.length > 0) {
-          const winnerMentions = winnerUserIds.map(id => `<@${id}>`).join(', ');
-          resultsEmbed.addFields({ name: '🎊 Winners', value: winnerMentions });
+          const winnerDisplayNames = winnerUserIds.map(id => userNameMap.get(id) || id).join(', ');
+          resultsEmbed.addFields({ name: '🎊 Winners', value: winnerDisplayNames });
         } else {
-          const loserMentions = bets.map(b => `<@${b.user_id}>`).join(', ');
+          const loserNames = bets.map(b => userNameMap.get(b.user_id) || b.user_id).join(', ');
           const taunt = isSoloRace
-            ? `🏠 **The house wins!** Your horse didn't cross the finish line first. Better luck next time, ${loserMentions}!`
-            : `🏠 **The house wins!** Nobody picked the winning horse. Better luck next time, ${loserMentions}!`;
+            ? `🏠 **The house wins!** Your horse didn't cross the finish line first. Better luck next time, ${loserNames}!`
+            : `🏠 **The house wins!** Nobody picked the winning horse. Better luck next time, ${loserNames}!`;
           resultsEmbed.addFields({ name: '🎊 Winners', value: taunt });
         }
 
@@ -680,9 +697,9 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
               } else {
                 amtText = `${(r.solAmount || r.amount).toFixed(4)} SOL`;
               }
-              paymentSummary += `✅ <@${r.userId}>: ${amtText} — [View TX](https://solscan.io/tx/${r.signature})\n`;
+              paymentSummary += `✅ ${userNameMap.get(r.userId) || r.userId}: ${amtText} — [View TX](https://solscan.io/tx/${r.signature})\n`;
             } else {
-              paymentSummary += `❌ <@${r.userId}>: ${r.reason}\n`;
+              paymentSummary += `❌ ${userNameMap.get(r.userId) || r.userId}: ${r.reason}\n`;
             }
           }
           resultsEmbed.addFields({ name: '💸 Payouts', value: paymentSummary });
@@ -726,9 +743,10 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
           }
         } else {
           const loserMentions = bets.map(b => `<@${b.user_id}>`).join(', ');
+          const loserNames = bets.map(b => userNameMap.get(b.user_id) || b.user_id).join(', ');
           mentionContent = `🏇 **HORSE RACE RESULTS!** 🏁\n\n` +
             `🏠 **The house wins!** Nobody picked the winning horse.\n` +
-            `Better luck next time ${loserMentions}! 💸`;
+            `Better luck next time ${loserNames}! 💸\n${loserMentions}`;
           if (isPotMode && totalPot > 0) mentionContent += `\n🏠 House takes the pot: **${totalPot.toFixed(4)} ${event.currency}**`;
         }
 
@@ -741,36 +759,27 @@ const processGamblingEvent = async (eventId, client, reason = 'time', deps = {})
 
     await db.updateGamblingEventStatus(eventId, 'completed');
 
-    // Resolve winner display names
+    // Use already-resolved winner display names
     let winnerNames = '';
     if (winnerUserIds.length > 0) {
-      const names = [];
-      for (const uid of winnerUserIds) {
-        try {
-          const user = await client.users.fetch(uid);
-          names.push(user.displayName || user.username || uid);
-        } catch (_) {
-          names.push(uid);
-        }
-      }
-      winnerNames = names.join(', ');
+      winnerNames = winnerUserIds.map(uid => userNameMap.get(uid) || uid).join(', ');
     } else {
       winnerNames = 'House wins';
     }
     // Save winner_names to local DB
     await new Promise(r => db.db.run('UPDATE gambling_events SET winner_names = ? WHERE id = ?', [winnerNames, eventId], r));
 
-    // Resolve all participant usernames for backend sync
+    // Resolve all participant usernames for backend sync (reuse already-fetched names)
     const allBets = await db.getGamblingEventBets(eventId);
     const betsForSync = [];
     for (const b of allBets) {
-      let username = b.user_id;
-      try { const u = await client.users.fetch(b.user_id); username = u.displayName || u.username || b.user_id; } catch {}
-      betsForSync.push({ user_id: b.user_id, username, chosen_slot: b.chosen_slot, bet_amount: b.bet_amount || 0, is_winner: b.is_winner || 0, payment_status: b.payment_status || 'none', wallet_address: b.wallet_address || null, joined_at: b.joined_at || null, guild_id: b.guild_id || event.guild_id });
+      const username = userNameMap.get(b.user_id) || b.user_id;
+      betsForSync.push({ user_id: b.user_id, username, chosen_slot: b.chosen_slot, bet_amount: b.bet_amount || 0, is_winner: b.is_winner || 0, payment_status: b.payment_status || 'none', wallet_address: b.wallet_address || null, joined_at: b.joined_at || null, guild_id: b.guild_id || event.guild_id, entry_tx_signature: b.entry_tx_signature || null, payout_tx_signature: b.payout_tx_signature || null });
     }
 
     // Include full event data so backend can create event if it doesn't exist
-    syncStatusToBackend(eventId, 'completed', event.guild_id, {
+    // Await the sync so winner data reliably reaches the backend before bot moves on
+    await syncStatusToBackend(eventId, 'completed', event.guild_id, {
       winnerNames, winningSlot,
       bets: betsForSync,
       title: event.title, description: event.description, mode: event.mode,

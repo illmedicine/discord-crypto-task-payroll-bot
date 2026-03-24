@@ -139,6 +139,66 @@ function destroyTable(table) {
   if (table.eventId) tablesByEventId.delete(table.eventId);
 }
 
+// ─── Backend sync: push poker payout results to backend DB ───────────────────
+async function syncPokerPayoutsToBackend(table) {
+  if (!DCB_BACKEND_URL || !DCB_INTERNAL_SECRET) {
+    console.warn(`[Poker] Cannot sync payouts for event #${table.eventId}: DCB_BACKEND_URL or DCB_INTERNAL_SECRET not set`);
+    return;
+  }
+  if (!table.eventId || !db) return;
+
+  try {
+    // Read all player records from local DB
+    const players = await new Promise((resolve, reject) => {
+      db.db.all('SELECT * FROM poker_event_players WHERE poker_event_id = ?', [table.eventId], (err, rows) => {
+        if (err) reject(err); else resolve(rows || []);
+      });
+    });
+
+    // Read event record
+    const event = await new Promise((resolve, reject) => {
+      db.db.get('SELECT * FROM poker_events WHERE id = ?', [table.eventId], (err, row) => {
+        if (err) reject(err); else resolve(row);
+      });
+    });
+
+    const url = `${DCB_BACKEND_URL.replace(/\/$/, '')}/api/internal/poker-event-sync`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-dcb-internal-secret': DCB_INTERNAL_SECRET },
+      body: JSON.stringify({
+        eventId: table.eventId,
+        guildId: table.guildId,
+        status: 'completed',
+        event: event ? {
+          title: event.title, description: event.description, mode: event.mode,
+          buyIn: event.buy_in, currency: event.currency, smallBlind: event.small_blind,
+          bigBlind: event.big_blind, startingChips: event.starting_chips,
+          maxPlayers: event.max_players, turnTimer: event.turn_timer,
+          channelId: event.channel_id, messageId: event.message_id,
+        } : null,
+        players: players.map(p => ({
+          user_id: p.user_id, username: p.username, wallet_address: p.wallet_address,
+          buy_in_amount: p.buy_in_amount, final_chips: p.final_chips,
+          payout_amount: p.payout_amount, payment_status: p.payment_status,
+          entry_tx_signature: p.entry_tx_signature, payout_tx_signature: p.payout_tx_signature,
+          joined_at: p.joined_at,
+        })),
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (res.ok) {
+      console.log(`[Poker] ✅ Payout sync for event #${table.eventId} → backend (${players.length} players)`);
+    } else {
+      const t = await res.text();
+      console.error(`[Poker] ❌ Payout sync for event #${table.eventId}: backend returned ${res.status} — ${t}`);
+    }
+  } catch (e) {
+    console.error(`[Poker] ❌ Payout sync for event #${table.eventId} failed:`, e.message);
+  }
+}
+
 /**
  * Process SOL payouts when a crypto-mode table closes.
  * Distributes 90% of total pot to players proportional to final chip stacks.
@@ -213,20 +273,20 @@ async function processPokerPayouts(table, channel) {
 
       // Send from treasury
       const keypair = crypto.getKeypairFromSecret(guildWallet.wallet_secret);
+      if (!keypair) {
+        payoutResults.push({ user: seat.displayName, success: false, reason: 'Invalid treasury key' });
+        continue;
+      }
+
       let result;
       if (isUsdc) {
         result = await crypto.sendUsdcFrom(guildWallet.wallet_secret, recipientAddr, payoutSol);
       } else {
         result = await crypto.sendSolFrom(keypair, recipientAddr, payoutSol);
       }
-        payoutResults.push({ user: seat.displayName, success: false, reason: 'Invalid treasury key' });
-        continue;
-      }
 
-      const result = await crypto.sendSolFrom(keypair, recipientAddr, payoutSol);
       if (result && result.success) {
         payoutResults.push({ user: seat.displayName, amount: payoutSol, success: true, tx: result.signature });
-        // Update DB record
         if (db.dbRun) {
           await db.dbRun(
             'UPDATE poker_event_players SET final_chips = ?, payout_amount = ?, payment_status = ?, payout_tx_signature = ? WHERE poker_event_id = ? AND user_id = ?',
@@ -242,7 +302,11 @@ async function processPokerPayouts(table, channel) {
           ).catch(() => {});
         }
       }
-    }decimals)} ${unit} → [tx](https://solscan.io/tx/${r.tx})`
+    }
+
+    const lines = payoutResults.map(r =>
+      r.success
+        ? `✅ **${r.user}**: ${r.amount.toFixed(decimals)} ${unit} → [tx](https://solscan.io/tx/${r.tx})`
         : `❌ **${r.user}**: ${r.reason}`
     );
 
@@ -252,23 +316,18 @@ async function processPokerPayouts(table, channel) {
       .setDescription(
         `Total pool: **${totalBuyIns.toFixed(decimals)} ${unit}**\n` +
         `House cut (10%): **${houseCut.toFixed(decimals)} ${unit}**\n` +
-        `Paid out: **${payoutPool.toFixed(decimals)} ${unit}} SOL → [tx](https://solscan.io/tx/${r.tx})`
-        : `❌ **${r.user}**: ${r.reason}`
-    );
-
-    const payoutEmbed = new EmbedBuilder()
-      .setColor('#27AE60')
-      .setTitle('💰 Poker Payouts')
-      .setDescription(
-        `Total pool: **${totalBuyIns.toFixed(4)} SOL**\n` +
-        `House cut (10%): **${houseCut.toFixed(4)} SOL**\n` +
-        `Paid out: **${payoutPool.toFixed(4)} SOL**\n\n` +
+        `Paid out: **${payoutPool.toFixed(decimals)} ${unit}**\n\n` +
         lines.join('\n')
       )
       .setFooter({ text: `Poker Event #${table.eventId}` })
       .setTimestamp();
 
     await channel.send({ embeds: [payoutEmbed] }).catch(() => {});
+
+    // Sync payout results to backend DB so frontend can display them
+    await syncPokerPayoutsToBackend(table).catch(e =>
+      console.error(`[Poker] Backend payout sync failed for event #${table.eventId}:`, e.message)
+    );
   } catch (err) {
     console.error('[Poker] Payout error:', err);
     await channel.send({ content: '⚠️ Error processing payouts. Contact an admin.' }).catch(() => {});

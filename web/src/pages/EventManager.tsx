@@ -66,6 +66,8 @@ type GamblingEventBet = {
   is_winner: number
   payment_status: string
   joined_at: string
+  entry_tx_signature: string | null
+  payout_tx_signature: string | null
 }
 
 type GamblingEvent = {
@@ -94,6 +96,17 @@ type GamblingEvent = {
 type SlotEntry = { label: string; color: string }
 
 /* --- Poker Event types --- */
+type PokerEventPlayer = {
+  user_id: string
+  username: string | null
+  buy_in_amount: number
+  final_chips: number
+  payout_amount: number
+  payment_status: string
+  entry_tx_signature: string | null
+  payout_tx_signature: string | null
+}
+
 type PokerEvent = {
   id: number
   title: string
@@ -112,6 +125,7 @@ type PokerEvent = {
   message_id: string | null
   ended_at: string | null
   created_at: string
+  players?: PokerEventPlayer[]
 }
 
 /* --- Shared types --- */
@@ -1611,6 +1625,15 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                             )}
                             <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
                             {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
+                            {b.payment_status && b.payment_status !== 'none' && (
+                              <span style={{ fontSize: 10, opacity: 0.7 }}>
+                                {b.payment_status === 'paid' || b.payment_status === 'committed' ? '✅' : b.payment_status === 'pending' ? '⏳' : '❌'}
+                              </span>
+                            )}
+                            {b.payout_tx_signature && (
+                              <a href={`https://solscan.io/tx/${b.payout_tx_signature}`} target="_blank" rel="noreferrer"
+                                style={{ fontSize: 10, color: '#3498DB', textDecoration: 'none' }}>TX</a>
+                            )}
                           </span>
                         ))}
                       </div>
@@ -1758,6 +1781,15 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                                       )}
                                       <span style={{ opacity: 0.6 }}>→ #{b.chosen_slot}</span>
                                       {b.bet_amount > 0 && <span style={{ opacity: 0.6 }}>({b.bet_amount} {ev.currency})</span>}
+                                      {b.payment_status && b.payment_status !== 'none' && (
+                                        <span style={{ fontSize: 10, opacity: 0.7 }}>
+                                          {b.payment_status === 'paid' || b.payment_status === 'committed' ? '✅' : b.payment_status === 'pending' ? '⏳' : '❌'}
+                                        </span>
+                                      )}
+                                      {b.payout_tx_signature && (
+                                        <a href={`https://solscan.io/tx/${b.payout_tx_signature}`} target="_blank" rel="noreferrer"
+                                          style={{ fontSize: 10, color: '#3498DB', textDecoration: 'none' }}>TX</a>
+                                      )}
                                     </span>
                                   ))}
                                 </div>
@@ -1874,7 +1906,8 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
               </thead>
               <tbody>
                 {pVisible.map(ev => (
-                  <tr key={ev.id}>
+                  <React.Fragment key={ev.id}>
+                  <tr>
                     <td>#{ev.id}</td>
                     <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ev.title}</td>
                     <td><span style={{ fontSize: 11 }}>{ev.mode === 'pot' ? '🏦 Pot' : '🎮 Casual'}</span></td>
@@ -1912,6 +1945,41 @@ export default function EventManager({ guildId, isOwner = true }: Props) {
                       </div>
                     </td>
                   </tr>
+                  {ev.players && ev.players.length > 0 && (
+                    <tr>
+                      <td colSpan={9} style={{ padding: '4px 12px 8px', background: 'rgba(255,255,255,0.02)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4, fontWeight: 600 }}>
+                          👥 Players ({ev.players.length})
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {ev.players.map((p, i) => (
+                            <span key={i} style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 4,
+                              fontSize: 11, padding: '3px 8px', borderRadius: 6,
+                              background: p.payout_amount > 0 ? 'rgba(39,174,96,0.12)' : 'rgba(255,255,255,0.05)',
+                              border: `1px solid ${p.payout_amount > 0 ? 'rgba(39,174,96,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                              color: p.payout_amount > 0 ? '#27AE60' : 'var(--text-secondary)',
+                            }}>
+                              {p.payout_amount > 0 ? '💰' : '🃏'}{' '}
+                              <span style={{ fontWeight: p.payout_amount > 0 ? 700 : 400 }}>{p.username || p.user_id}</span>
+                              {p.final_chips > 0 && <span style={{ opacity: 0.6 }}>{p.final_chips} chips</span>}
+                              {p.payout_amount > 0 && <span style={{ opacity: 0.7 }}>→ {p.payout_amount.toFixed(4)} {ev.currency}</span>}
+                              {p.payment_status && p.payment_status !== 'none' && (
+                                <span style={{ fontSize: 10, opacity: 0.7 }}>
+                                  {p.payment_status === 'paid' ? '✅' : p.payment_status === 'pending' ? '⏳' : p.payment_status === 'payout_failed' ? '❌' : ''}
+                                </span>
+                              )}
+                              {p.payout_tx_signature && (
+                                <a href={`https://solscan.io/tx/${p.payout_tx_signature}`} target="_blank" rel="noreferrer"
+                                  style={{ fontSize: 10, color: '#3498DB', textDecoration: 'none' }}>TX</a>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

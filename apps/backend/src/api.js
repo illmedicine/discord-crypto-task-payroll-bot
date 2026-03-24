@@ -2340,7 +2340,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     // Attach bets/participants for each event (single query, grouped client-side)
     if (rows.length > 0) {
       const allBets = await db.all(
-        `SELECT gambling_event_id, user_id, username, chosen_slot, bet_amount, is_winner, payment_status, joined_at
+        `SELECT gambling_event_id, user_id, username, chosen_slot, bet_amount, is_winner, payment_status, joined_at, entry_tx_signature, payout_tx_signature
          FROM gambling_event_bets WHERE guild_id = ? ORDER BY joined_at ASC`,
         [req.guild.id]
       )
@@ -2764,6 +2764,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   /* ---- List poker events ---- */
   app.get('/api/admin/guilds/:guildId/poker-events', requireAuth, requireGuildMember, async (req, res) => {
     const rows = await db.all('SELECT * FROM poker_events WHERE guild_id = ? ORDER BY id DESC', [req.guild.id])
+    // Attach players for each event
+    if (rows.length > 0) {
+      const allPlayers = await db.all(
+        `SELECT poker_event_id, user_id, username, wallet_address, buy_in_amount, final_chips, payout_amount, payment_status, entry_tx_signature, payout_tx_signature, joined_at
+         FROM poker_event_players WHERE guild_id = ? ORDER BY joined_at ASC`,
+        [req.guild.id]
+      ).catch(() => [])
+      const playersByEvent = {}
+      for (const p of allPlayers) {
+        if (!playersByEvent[p.poker_event_id]) playersByEvent[p.poker_event_id] = []
+        playersByEvent[p.poker_event_id].push(p)
+      }
+      for (const row of rows) {
+        row.players = playersByEvent[row.id] || []
+      }
+    }
     res.json(rows)
   })
 
@@ -4318,9 +4334,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         if (Array.isArray(syncBets) && syncBets.length > 0) {
           for (const b of syncBets) {
             await db.run(
-              `INSERT OR REPLACE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, is_winner, payment_status, wallet_address, joined_at, username)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [eventId, b.guild_id || guildId, b.user_id, b.chosen_slot, b.bet_amount || 0, b.is_winner || 0, b.payment_status || 'none', b.wallet_address || null, b.joined_at || null, b.username || null]
+              `INSERT OR REPLACE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, is_winner, payment_status, wallet_address, joined_at, username, entry_tx_signature, payout_tx_signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [eventId, b.guild_id || guildId, b.user_id, b.chosen_slot, b.bet_amount || 0, b.is_winner || 0, b.payment_status || 'none', b.wallet_address || null, b.joined_at || null, b.username || null, b.entry_tx_signature || null, b.payout_tx_signature || null]
             ).catch(e => console.error(`[internal] Failed to sync bet for user ${b.user_id} on #${eventId}:`, e?.message))
           }
         }
@@ -4356,9 +4372,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         if (Array.isArray(fullSyncBets) && fullSyncBets.length > 0) {
           for (const b of fullSyncBets) {
             await db.run(
-              `INSERT OR REPLACE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, is_winner, payment_status, wallet_address, joined_at, username)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [eventId, b.guild_id || guildId, b.user_id, b.chosen_slot, b.bet_amount || 0, b.is_winner || 0, b.payment_status || 'none', b.wallet_address || null, b.joined_at || null, b.username || null]
+              `INSERT OR REPLACE INTO gambling_event_bets (gambling_event_id, guild_id, user_id, chosen_slot, bet_amount, is_winner, payment_status, wallet_address, joined_at, username, entry_tx_signature, payout_tx_signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [eventId, b.guild_id || guildId, b.user_id, b.chosen_slot, b.bet_amount || 0, b.is_winner || 0, b.payment_status || 'none', b.wallet_address || null, b.joined_at || null, b.username || null, b.entry_tx_signature || null, b.payout_tx_signature || null]
             ).catch(() => {})
           }
         }
@@ -4368,6 +4384,58 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.json({ ok: true })
     } catch (err) {
       console.error('[internal] gambling-event-sync error:', err?.message || err)
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  // Bot syncs poker payout results to backend so frontend can display them
+  app.post('/api/internal/poker-event-sync', requireInternal, async (req, res) => {
+    try {
+      const { eventId, guildId, status, event: eventData, players } = req.body || {}
+      if (!eventId) return res.status(400).json({ error: 'missing_eventId' })
+
+      // Upsert the poker event itself (create stub if it doesn't exist)
+      const existing = await db.get('SELECT id FROM poker_events WHERE id = ?', [eventId])
+      if (!existing && eventData) {
+        await db.run(
+          `INSERT INTO poker_events (id, guild_id, channel_id, message_id, title, description, mode, buy_in, currency,
+            small_blind, big_blind, starting_chips, max_players, turn_timer, current_players, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [eventId, guildId || '', eventData.channelId || '', eventData.messageId || null,
+           eventData.title || `Poker Event #${eventId}`, eventData.description || '', eventData.mode || 'pot',
+           eventData.buyIn || 0, eventData.currency || 'SOL',
+           eventData.smallBlind || 5, eventData.bigBlind || 10, eventData.startingChips || 1000,
+           eventData.maxPlayers || 8, eventData.turnTimer || 60,
+           Array.isArray(players) ? players.length : 0, status || 'completed']
+        )
+      } else {
+        // Update status and player count
+        await db.run(
+          'UPDATE poker_events SET status = ?, current_players = ? WHERE id = ?',
+          [status || 'completed', Array.isArray(players) ? players.length : (existing?.current_players || 0), eventId]
+        ).catch(() => {})
+      }
+
+      // Upsert player records with payout data
+      if (Array.isArray(players) && players.length > 0) {
+        for (const p of players) {
+          await db.run(
+            `INSERT OR REPLACE INTO poker_event_players
+              (poker_event_id, guild_id, user_id, username, wallet_address, buy_in_amount,
+               final_chips, payout_amount, payment_status, entry_tx_signature, payout_tx_signature, joined_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [eventId, guildId || '', p.user_id, p.username || null, p.wallet_address || null,
+             p.buy_in_amount || 0, p.final_chips || 0, p.payout_amount || 0,
+             p.payment_status || 'none', p.entry_tx_signature || null, p.payout_tx_signature || null,
+             p.joined_at || null]
+          ).catch(e => console.error(`[internal] Failed to sync poker player ${p.user_id} on #${eventId}:`, e?.message))
+        }
+      }
+
+      console.log(`[internal] poker-event #${eventId} sync → status=${status}, players=${Array.isArray(players) ? players.length : 0}`)
+      res.json({ ok: true })
+    } catch (err) {
+      console.error('[internal] poker-event-sync error:', err?.message || err)
       res.status(500).json({ error: 'internal_error' })
     }
   })
