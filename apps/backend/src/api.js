@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken')
 const axios = require('axios')
 const crypto = require('crypto')
 const helmet = require('helmet')
-const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js')
+const { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction: SolTransaction, SystemProgram, sendAndConfirmTransaction } = require('@solana/web3.js')
 const rateLimit = require('express-rate-limit')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
@@ -5281,6 +5281,37 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         await db.run("INSERT INTO beast_treasury_txns (type, currency, amount, details) VALUES ('phantom_purge_v1', 'SOL', 0, 'One-time purge of all phantom/dummy data. On-chain mode active.')")
         console.log('[Beast] ✅ Phantom data purge complete. All balances reset to 0.')
       }
+
+      // ── Multi-wallet system: beast_user_wallets table ──
+      await db.run(`CREATE TABLE IF NOT EXISTS beast_user_wallets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        wallet_type TEXT NOT NULL,
+        wallet_address TEXT NOT NULL,
+        secret_key TEXT NOT NULL,
+        label TEXT,
+        source_game TEXT,
+        source_bet_id INTEGER,
+        balance_cache REAL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`)
+
+      // Migration: copy existing deposit addresses into beast_user_wallets
+      const walletMigrated = await db.get("SELECT 1 FROM beast_treasury_txns WHERE type = 'multi_wallet_migration_v1' LIMIT 1")
+      if (!walletMigrated) {
+        console.log('[Beast] 🔄 Migrating deposit addresses to beast_user_wallets...')
+        const existingDeps = await db.all('SELECT * FROM beast_deposit_addresses WHERE secret_key IS NOT NULL')
+        for (const row of existingDeps) {
+          const exists = await db.get('SELECT 1 FROM beast_user_wallets WHERE user_id = ? AND wallet_type = ? AND wallet_address = ?',
+            [row.user_id, 'deposit', row.deposit_address])
+          if (!exists) {
+            await db.run('INSERT INTO beast_user_wallets (user_id, wallet_type, wallet_address, secret_key, label, balance_cache) VALUES (?,?,?,?,?,?)',
+              [row.user_id, 'deposit', row.deposit_address, row.secret_key, 'Deposit Wallet', 0])
+          }
+        }
+        await db.run("INSERT INTO beast_treasury_txns (type, currency, amount, details) VALUES ('multi_wallet_migration_v1', 'SOL', 0, 'Migrated deposit addresses to beast_user_wallets for multi-wallet system')")
+        console.log('[Beast] ✅ Deposit addresses migrated to beast_user_wallets')
+      }
     } catch (err) {
       console.error('[Beast] Table init error:', err)
     }
@@ -5377,6 +5408,137 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     const t = await db.get('SELECT wallet_address, wallet_secret FROM beast_treasury WHERE id = ?', ['beast_main'])
     if (t?.wallet_address && t?.wallet_secret) return t
     return null
+  }
+
+  // ── Multi-wallet helpers ──
+
+  // Get all wallets for a user, deposit first then winnings by date
+  async function getUserWalletsBeast(userId) {
+    return await db.all(
+      `SELECT * FROM beast_user_wallets WHERE user_id = ? ORDER BY CASE wallet_type WHEN 'deposit' THEN 0 ELSE 1 END, created_at ASC`,
+      [userId]
+    )
+  }
+
+  // Refresh on-chain balance caches for all user wallets, returns total
+  async function refreshWalletCachesBeast(userId) {
+    const wallets = await getUserWalletsBeast(userId)
+    if (!wallets.length) return 0
+    const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+    const conn = new Connection(rpcUrl, 'confirmed')
+    let total = 0
+    for (const w of wallets) {
+      try {
+        const lamports = await conn.getBalance(new PublicKey(w.wallet_address))
+        const sol = lamports / LAMPORTS_PER_SOL
+        await db.run('UPDATE beast_user_wallets SET balance_cache = ? WHERE id = ?', [sol, w.id])
+        total += sol
+      } catch {
+        total += w.balance_cache || 0
+      }
+    }
+    await db.run('UPDATE beast_profiles SET balance_sol = ? WHERE user_id = ?', [total, userId])
+    return total
+  }
+
+  // Decrypt an encrypted secret and return a Keypair
+  function decryptToKeypair(encSecret) {
+    const raw = encSecret.startsWith('enc:') ? decryptSecret(encSecret) : encSecret
+    if (!raw) throw new Error('Failed to decrypt wallet secret')
+    if (raw.startsWith('[')) {
+      return Keypair.fromSecretKey(new Uint8Array(JSON.parse(raw)))
+    }
+    const buf = Buffer.from(raw, 'base64')
+    if (buf.length === 64) {
+      return Keypair.fromSecretKey(new Uint8Array(buf))
+    }
+    // base58 fallback
+    const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    function decodeBase58(str) {
+      const bytes = []
+      for (const c of str) {
+        let carry = BASE58_ALPHABET.indexOf(c)
+        if (carry < 0) throw new Error('Invalid base58 character')
+        for (let j = 0; j < bytes.length; j++) { carry += bytes[j] * 58; bytes[j] = carry & 0xff; carry >>= 8 }
+        while (carry > 0) { bytes.push(carry & 0xff); carry >>= 8 }
+      }
+      for (const c of str) { if (c === '1') bytes.push(0); else break }
+      return new Uint8Array(bytes.reverse())
+    }
+    return Keypair.fromSecretKey(decodeBase58(raw))
+  }
+
+  // Multi-wallet transfer: sweep from user wallets → single recipient on-chain
+  // Returns { ok, signature, breakdown } or { ok: false, error }
+  async function multiWalletTransferBeast(wallets, recipientAddress, amountSol) {
+    const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+    const conn = new Connection(rpcUrl, 'confirmed')
+    const rentReserve = (BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL
+
+    let remaining = amountSol
+    const sources = []
+
+    for (const w of wallets) {
+      if (remaining <= 0.000001) break
+      let onChainSol
+      try {
+        const lam = await conn.getBalance(new PublicKey(w.wallet_address))
+        onChainSol = lam / LAMPORTS_PER_SOL
+      } catch { continue }
+
+      // Deposit wallets keep rent reserve; winnings wallets can be fully drained
+      const available = w.wallet_type === 'deposit'
+        ? Math.max(0, onChainSol - rentReserve)
+        : Math.max(0, onChainSol - 0.000005) // just tx fee share
+      if (available <= 0.000001) continue
+
+      let kp
+      try { kp = decryptToKeypair(w.secret_key) } catch { continue }
+
+      const take = Math.min(remaining, available)
+      sources.push({ keypair: kp, amount: take, walletId: w.id, address: w.wallet_address, type: w.wallet_type })
+      remaining -= take
+    }
+
+    if (remaining > 0.000001) {
+      return { ok: false, error: `Insufficient on-chain balance across wallets. Short by ${remaining.toFixed(6)} SOL` }
+    }
+
+    const tx = new SolTransaction()
+    const recipientPk = new PublicKey(recipientAddress)
+    const signers = []
+
+    for (const src of sources) {
+      tx.add(SystemProgram.transfer({
+        fromPubkey: src.keypair.publicKey,
+        toPubkey: recipientPk,
+        lamports: Math.round(src.amount * LAMPORTS_PER_SOL)
+      }))
+      signers.push(src.keypair)
+    }
+
+    tx.feePayer = signers[0].publicKey
+    tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash
+
+    const sim = await conn.simulateTransaction(tx, signers)
+    if (sim.value.err) {
+      return { ok: false, error: `TX simulation failed: ${JSON.stringify(sim.value.err)}` }
+    }
+
+    const signature = await sendAndConfirmTransaction(conn, tx, signers)
+
+    // Update balance caches for affected wallets
+    for (const src of sources) {
+      try {
+        const newLam = await conn.getBalance(src.keypair.publicKey)
+        await db.run('UPDATE beast_user_wallets SET balance_cache = ? WHERE id = ?', [newLam / LAMPORTS_PER_SOL, src.walletId])
+      } catch {}
+    }
+
+    return {
+      ok: true, signature,
+      breakdown: sources.map(s => ({ address: s.address, amount: s.amount, type: s.type }))
+    }
   }
 
   // ── Beast Profile ──
@@ -5488,15 +5650,31 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.json({ address: '', currency })
       const userId = req.user.id
 
-      // Check for existing valid address (must be a real Solana base58 pubkey)
+      // Check for existing valid address in beast_user_wallets first
+      const existingWallet = await db.get(
+        "SELECT wallet_address, secret_key FROM beast_user_wallets WHERE user_id = ? AND wallet_type = 'deposit' LIMIT 1",
+        [userId]
+      )
+      if (existingWallet && existingWallet.wallet_address) {
+        try {
+          new PublicKey(existingWallet.wallet_address)
+          return res.json({ address: existingWallet.wallet_address, currency })
+        } catch (_) {}
+      }
+
+      // Fallback: check legacy beast_deposit_addresses
       let row = await db.get('SELECT deposit_address, secret_key FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [userId, currency])
       if (row && row.deposit_address && row.secret_key) {
-        // Validate it's a real Solana address (not a legacy hex hash)
         try {
           new PublicKey(row.deposit_address)
+          // Ensure it's in beast_user_wallets too
+          const inNew = await db.get('SELECT 1 FROM beast_user_wallets WHERE user_id = ? AND wallet_address = ?', [userId, row.deposit_address])
+          if (!inNew) {
+            await db.run('INSERT INTO beast_user_wallets (user_id, wallet_type, wallet_address, secret_key, label, balance_cache) VALUES (?,?,?,?,?,?)',
+              [userId, 'deposit', row.deposit_address, row.secret_key, 'Deposit Wallet', 0])
+          }
           return res.json({ address: row.deposit_address, currency })
         } catch (_) {
-          // Invalid legacy address — will regenerate below
           console.log(`[Beast] Regenerating invalid deposit address for user ${userId} currency ${currency}`)
         }
       }
@@ -5506,11 +5684,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const addr = kp.publicKey.toBase58()
       const encSecret = encryptSecret(Buffer.from(kp.secretKey).toString('base64'))
 
+      // Insert into both tables
       await db.run(
         `INSERT INTO beast_deposit_addresses (user_id, currency, deposit_address, secret_key) VALUES (?, ?, ?, ?)
          ON CONFLICT(user_id, currency) DO UPDATE SET deposit_address = excluded.deposit_address, secret_key = excluded.secret_key`,
         [userId, currency, addr, encSecret]
       )
+      await db.run('INSERT INTO beast_user_wallets (user_id, wallet_type, wallet_address, secret_key, label, balance_cache) VALUES (?,?,?,?,?,?)',
+        [userId, 'deposit', addr, encSecret, 'Deposit Wallet', 0])
+
       console.log(`[Beast] Generated Solana deposit address for user ${userId}: ${addr.slice(0, 8)}...`)
       res.json({ address: addr, currency })
     } catch (err) {
@@ -5519,7 +5701,58 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Wallet: Withdraw (sends from user's OWN Beast deposit address + treasury backup for winnings) ──
+  // ── Beast Wallet: List all wallets (deposit + winnings) ──
+  app.get('/api/beast/wallet/all', requireAuth, async (req, res) => {
+    try {
+      const wallets = await getUserWalletsBeast(req.user.id)
+      const refresh = req.query.refresh === 'true'
+      if (refresh && wallets.length) {
+        await refreshWalletCachesBeast(req.user.id)
+        const updated = await getUserWalletsBeast(req.user.id)
+        const total = updated.reduce((s, w) => s + (w.balance_cache || 0), 0)
+        return res.json({
+          wallets: updated.map(w => ({
+            id: w.id, type: w.wallet_type, address: w.wallet_address,
+            balance: w.balance_cache || 0, label: w.label || (w.wallet_type === 'deposit' ? 'Deposit Wallet' : 'Winnings'),
+            sourceGame: w.source_game, sourceBetId: w.source_bet_id, createdAt: w.created_at
+          })),
+          totalBalance: total
+        })
+      }
+      const total = wallets.reduce((s, w) => s + (w.balance_cache || 0), 0)
+      res.json({
+        wallets: wallets.map(w => ({
+          id: w.id, type: w.wallet_type, address: w.wallet_address,
+          balance: w.balance_cache || 0, label: w.label || (w.wallet_type === 'deposit' ? 'Deposit Wallet' : 'Winnings'),
+          sourceGame: w.source_game, sourceBetId: w.source_bet_id, createdAt: w.created_at
+        })),
+        totalBalance: total
+      })
+    } catch (err) {
+      console.error('[Beast] wallet/all error:', err)
+      res.json({ wallets: [], totalBalance: 0 })
+    }
+  })
+
+  // ── Beast Wallet: Refresh all wallet balances from on-chain ──
+  app.post('/api/beast/wallet/refresh-balances', requireAuth, async (req, res) => {
+    try {
+      const total = await refreshWalletCachesBeast(req.user.id)
+      const wallets = await getUserWalletsBeast(req.user.id)
+      res.json({
+        ok: true, totalBalance: total,
+        wallets: wallets.map(w => ({
+          id: w.id, type: w.wallet_type, address: w.wallet_address,
+          balance: w.balance_cache || 0, label: w.label
+        }))
+      })
+    } catch (err) {
+      console.error('[Beast] refresh-balances error:', err)
+      res.status(500).json({ error: 'Failed to refresh balances' })
+    }
+  })
+
+  // ── Beast Wallet: Withdraw (multi-wallet sweep to external address) ──
   app.post('/api/beast/wallet/withdraw', requireAuth, async (req, res) => {
     try {
       const { currency, amount, toAddress } = req.body
@@ -5531,36 +5764,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       // Validate recipient address
       try { new PublicKey(toAddress) } catch { return res.status(400).json({ error: 'Invalid Solana address' }) }
 
-      const profile = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
-      const currentBal = parseFloat(profile?.balance_sol || 0)
-      if (amt > currentBal) return res.status(400).json({ error: `Insufficient SOL balance (have ${currentBal.toFixed(6)})` })
+      // Get all user wallets and check combined balance
+      const wallets = await getUserWalletsBeast(req.user.id)
+      if (!wallets.length) return res.status(400).json({ error: 'No wallets found. Deposit SOL first.' })
+      const totalBal = wallets.reduce((s, w) => s + (w.balance_cache || 0), 0)
+      if (amt > totalBal) return res.status(400).json({ error: `Insufficient SOL balance (have ${totalBal.toFixed(6)} across ${wallets.length} wallets)` })
 
       // Calculate Illy Beast fee
       const { fee, net, pct } = calculateBeastFee(amt)
       if (net <= 0) return res.status(400).json({ error: `Amount too small after ${(pct * 100).toFixed(0)}% fee` })
-
-      // Get user's OWN Beast deposit address (primary funding source)
-      const depRow = await db.get('SELECT deposit_address, secret_key FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [req.user.id, 'SOL'])
-      if (!depRow || !depRow.secret_key) {
-        return res.status(400).json({ error: 'No Beast wallet found. Make a deposit first to create your wallet.' })
-      }
-
-      // Check on-chain balance of user's Beast deposit address
-      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
-      const conn = new Connection(rpcUrl, 'confirmed')
-      const depLamports = await conn.getBalance(new PublicKey(depRow.deposit_address))
-      const depSol = depLamports / LAMPORTS_PER_SOL
-      const rentReserve = (BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL
-      const depAvailable = Math.max(0, depSol - rentReserve)
-
-      // Determine how much comes from user's deposit addr vs treasury (for winnings)
-      let sentFromDeposit = 0
-      let sentFromTreasury = 0
-      let depositTxSig = null
-      let treasuryTxSig = null
-
-      // Deduct from user profile FIRST (prevents double-spend)
-      await db.run('UPDATE beast_profiles SET balance_sol = balance_sol - ? WHERE user_id = ?', [amt, req.user.id])
 
       // Create pending withdrawal record
       const wdInsert = await db.run(
@@ -5569,67 +5781,27 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       )
       const wdId = wdInsert?.lastID
 
-      // Step 1: Send from user's Beast deposit address (up to available balance)
-      const fromDeposit = Math.min(net, depAvailable)
-      if (fromDeposit > 0.000001) {
-        console.log(`[Beast] Withdrawal step 1: ${fromDeposit.toFixed(6)} SOL from user deposit ${depRow.deposit_address.slice(0, 8)}...`)
-        const depResult = await sendSolBeast(depRow.secret_key, toAddress, fromDeposit)
-        if (depResult.ok) {
-          sentFromDeposit = fromDeposit
-          depositTxSig = depResult.signature
-        } else {
-          console.warn(`[Beast] Deposit addr send failed: ${depResult.error}`)
-        }
-      }
+      // Multi-wallet sweep: send net amount from all user wallets → external address
+      console.log(`[Beast] Withdrawal: sweeping ${net.toFixed(6)} SOL from ${wallets.length} wallets → ${toAddress.slice(0, 8)}...`)
+      const sweepResult = await multiWalletTransferBeast(wallets, toAddress, net)
 
-      // Step 2: If user won more than deposited, treasury covers the remainder
-      const remaining = net - sentFromDeposit
-      if (remaining > 0.000001) {
-        const tw = await getBeastTreasuryWallet()
-        if (tw) {
-          console.log(`[Beast] Withdrawal step 2: ${remaining.toFixed(6)} SOL from treasury (game winnings)`)
-          const tResult = await sendSolBeast(tw.wallet_secret, toAddress, remaining)
-          if (tResult.ok) {
-            sentFromTreasury = remaining
-            treasuryTxSig = tResult.signature
-          } else {
-            console.error(`[Beast] Treasury send failed: ${tResult.error}`)
-          }
-        } else {
-          console.warn('[Beast] Treasury wallet not configured — cannot cover game winnings portion')
-        }
-      }
-
-      const totalSent = sentFromDeposit + sentFromTreasury
-      if (totalSent < 0.000001) {
-        // Nothing sent — refund user
-        await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [amt, req.user.id])
+      if (!sweepResult.ok) {
         await db.run('UPDATE beast_withdrawals SET status = ? WHERE id = ?', ['failed', wdId])
         return res.status(400).json({
-          error: `Withdrawal failed: insufficient on-chain balance in your Beast wallet (${depAvailable.toFixed(6)} SOL available). Deposit SOL to ${depRow.deposit_address} first.`,
-          depositAddress: depRow.deposit_address, onChainBalance: depSol
+          error: `Withdrawal failed: ${sweepResult.error}`,
+          walletCount: wallets.length, totalBalance: totalBal
         })
       }
 
-      // If partial send (couldn't cover full net), refund the unsent portion
-      const unsent = net - totalSent
-      if (unsent > 0.000001) {
-        await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [unsent, req.user.id])
-      }
-
-      const txSig = depositTxSig || treasuryTxSig
       await db.run('UPDATE beast_withdrawals SET status = ?, tx_signature = ? WHERE id = ?',
-        ['confirmed', txSig, wdId])
+        ['confirmed', sweepResult.signature, wdId])
 
-      // Treasury ledger entries
-      if (sentFromTreasury > 0) {
-        await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol - ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [sentFromTreasury])
-      }
+      // Treasury ledger entry
       await db.run(
         'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
-        ['withdrawal', 'SOL', totalSent, req.user.id, req.user.username || 'Player',
-         `Withdrawal: ${totalSent.toFixed(6)} SOL → ${toAddress.slice(0, 8)}... (${sentFromDeposit.toFixed(6)} from wallet, ${sentFromTreasury.toFixed(6)} from treasury, fee: ${fee.toFixed(6)})`,
-         txSig]
+        ['withdrawal', 'SOL', net, req.user.id, req.user.username || 'Player',
+         `Withdrawal: ${net.toFixed(6)} SOL → ${toAddress.slice(0, 8)}... (from ${sweepResult.breakdown.length} wallets, fee: ${fee.toFixed(6)})`,
+         sweepResult.signature]
       )
       if (fee > 0) {
         await db.run(
@@ -5639,15 +5811,20 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         )
       }
 
-      console.log(`[Beast] ✅ Withdrawal confirmed: deposit=${depositTxSig||'none'} treasury=${treasuryTxSig||'none'} | ${totalSent.toFixed(6)} net, ${fee.toFixed(6)} fee`)
-      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      // Refresh all wallet caches + cleanup empty winnings wallets
+      const newTotal = await refreshWalletCachesBeast(req.user.id)
+      // Remove fully drained winnings wallets (balance_cache ≈ 0)
+      await db.run("DELETE FROM beast_user_wallets WHERE user_id = ? AND wallet_type = 'winnings' AND balance_cache < 0.000001", [req.user.id])
+      const updatedWallets = await getUserWalletsBeast(req.user.id)
+
+      console.log(`[Beast] ✅ Withdrawal ${net.toFixed(6)} SOL confirmed: ${sweepResult.signature}`)
       res.json({
         ok: true,
-        message: `Withdrew ${totalSent.toFixed(6)} SOL to ${toAddress.slice(0, 8)}... (${(pct * 100).toFixed(0)}% fee: ${fee.toFixed(6)} SOL)`,
-        tx_signature: txSig, amountSent: totalSent, fee, feePercent: pct * 100,
-        sources: { fromDeposit: sentFromDeposit, fromTreasury: sentFromTreasury, depositTx: depositTxSig, treasuryTx: treasuryTxSig },
-        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
-        depositAddress: depRow.deposit_address
+        message: `Withdrew ${net.toFixed(6)} SOL to ${toAddress.slice(0, 8)}... (${(pct * 100).toFixed(0)}% fee: ${fee.toFixed(6)} SOL)`,
+        tx_signature: sweepResult.signature, amountSent: net, fee, feePercent: pct * 100,
+        sources: sweepResult.breakdown,
+        balance: { sol: newTotal, usdc: 0, usd: 0 },
+        wallets: updatedWallets.map(w => ({ type: w.wallet_type, address: w.wallet_address, balance: w.balance_cache, label: w.label }))
       })
     } catch (err) {
       console.error('[Beast] withdraw error:', err)
@@ -5655,38 +5832,50 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Wallet: Tip (real balance transfer) ──
+  // ── Beast Wallet: Tip (on-chain multi-wallet transfer) ──
   app.post('/api/beast/wallet/tip', requireAuth, async (req, res) => {
     try {
       const { currency, amount, toUser } = req.body
       if (!currency || !amount || !toUser) return res.status(400).json({ error: 'Missing fields' })
-      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
+      if (currency !== 'SOL') return res.status(400).json({ error: 'Only SOL tips supported for on-chain' })
       const amt = parseFloat(amount)
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
       if (toUser === req.user.id) return res.status(400).json({ error: 'Cannot tip yourself' })
 
-      const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+      // Get sender's wallets and check combined balance
+      const senderWallets = await getUserWalletsBeast(req.user.id)
+      if (!senderWallets.length) return res.status(400).json({ error: 'No wallets found. Deposit SOL first.' })
+      const senderTotal = senderWallets.reduce((s, w) => s + (w.balance_cache || 0), 0)
+      if (amt > senderTotal) return res.status(400).json({ error: `Insufficient SOL balance (have ${senderTotal.toFixed(6)} across ${senderWallets.length} wallets)` })
 
-      // Check sender balance
-      const senderProfile = await db.get(`SELECT ${balCol} FROM beast_profiles WHERE user_id = ?`, [req.user.id])
-      const senderBal = parseFloat(senderProfile?.[balCol] || 0)
-      if (amt > senderBal) return res.status(400).json({ error: `Insufficient ${currency} balance (have ${senderBal.toFixed(6)})` })
-
-      // Deduct from sender
-      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} - ? WHERE user_id = ?`, [amt, req.user.id])
-
-      // Credit recipient (create profile if needed)
+      // Get recipient's deposit wallet (create profile if needed)
       await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING', [toUser, 'Player'])
-      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} + ? WHERE user_id = ?`, [amt, toUser])
+      const recipientWallet = await db.get("SELECT wallet_address FROM beast_user_wallets WHERE user_id = ? AND wallet_type = 'deposit' LIMIT 1", [toUser])
+      if (!recipientWallet) return res.status(400).json({ error: 'Recipient has no Beast wallet. They need to create a deposit address first.' })
+
+      // On-chain transfer: sender's wallets → recipient's deposit wallet
+      console.log(`[Beast] Tip: ${amt} SOL from user ${req.user.id} → ${toUser}`)
+      const tipResult = await multiWalletTransferBeast(senderWallets, recipientWallet.wallet_address, amt)
+      if (!tipResult.ok) {
+        return res.status(400).json({ error: `Tip failed: ${tipResult.error}` })
+      }
 
       // Record tip
       await db.run('INSERT INTO beast_tips (from_user, to_user, currency, amount) VALUES (?, ?, ?, ?)',
         [req.user.id, toUser, currency, amt])
 
-      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      // Refresh both users' wallet caches
+      const senderNewTotal = await refreshWalletCachesBeast(req.user.id)
+      await refreshWalletCachesBeast(toUser)
+
+      // Cleanup empty winnings wallets for sender
+      await db.run("DELETE FROM beast_user_wallets WHERE user_id = ? AND wallet_type = 'winnings' AND balance_cache < 0.000001", [req.user.id])
+
+      console.log(`[Beast] ✅ Tip ${amt} SOL confirmed: ${tipResult.signature}`)
       res.json({
-        ok: true, message: `Tipped ${amt} ${currency} to ${toUser}`,
-        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) }
+        ok: true, message: `Tipped ${amt} SOL to ${toUser} (on-chain confirmed)`,
+        tx_signature: tipResult.signature,
+        balance: { sol: senderNewTotal, usdc: 0, usd: 0 }
       })
     } catch (err) {
       console.error('[Beast] tip error:', err)
@@ -5767,9 +5956,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const link = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (!link) return res.status(400).json({ error: 'Link your DCB wallet first' })
 
-      // Get treasury wallet (required for real transfers)
-      const tw = await getBeastTreasuryWallet()
-      if (!tw) return res.status(400).json({ error: 'Treasury wallet not configured. Contact admin.' })
+      // Get user's Beast deposit wallet (funds go here, NOT treasury)
+      const depositWallet = await db.get("SELECT wallet_address FROM beast_user_wallets WHERE user_id = ? AND wallet_type = 'deposit' LIMIT 1", [req.user.id])
+      if (!depositWallet) return res.status(400).json({ error: 'No Beast deposit wallet found. Generate a deposit address first.' })
 
       // Get user's DCB wallet address + secret for signing
       const uw = await db.get('SELECT solana_address, wallet_secret FROM user_wallets WHERE discord_id = ?', [req.user.id])
@@ -5795,37 +5984,37 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         })
       }
 
-      // Execute real on-chain transfer: user's DCB wallet → treasury wallet
-      console.log(`[Beast] DCB deposit: ${amt.toFixed(6)} SOL from ${uw.solana_address.slice(0, 8)}... → treasury`)
-      const result = await sendSolBeast(uw.wallet_secret, tw.wallet_address, amt)
+      // Execute real on-chain transfer: user's DCB wallet → user's Beast deposit wallet
+      console.log(`[Beast] DCB deposit: ${amt.toFixed(6)} SOL from DCB ${uw.solana_address.slice(0, 8)}... → Beast deposit ${depositWallet.wallet_address.slice(0, 8)}...`)
+      const result = await sendSolBeast(uw.wallet_secret, depositWallet.wallet_address, amt)
 
       if (!result.ok) {
         return res.status(400).json({ error: `On-chain transfer failed: ${result.error}` })
       }
 
-      // Credit user beast balance + treasury
+      // Ensure profile exists
       await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING',
         [req.user.id, req.user.username || 'Player'])
-      await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [amt, req.user.id])
-      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [amt])
       await db.run('INSERT INTO beast_dcb_transfers (user_id, currency, amount, direction) VALUES (?, ?, ?, ?)',
         [req.user.id, 'SOL', amt, 'dcb_to_beast'])
 
-      // Treasury ledger
+      // Ledger entry
       await db.run(
         'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
         ['deposit_from_dcb', 'SOL', amt, req.user.id, req.user.username || 'Player',
-         `DCB→Beast deposit: ${amt.toFixed(6)} SOL | on-chain TX confirmed | from ${uw.solana_address.slice(0, 8)}...`,
+         `DCB→Beast deposit: ${amt.toFixed(6)} SOL → user deposit wallet ${depositWallet.wallet_address.slice(0, 8)}...`,
          result.signature]
       )
 
+      // Refresh wallet balance caches
+      const newTotal = await refreshWalletCachesBeast(req.user.id)
+
       console.log(`[Beast] ✅ DCB deposit confirmed: ${result.signature}`)
-      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
       res.json({
         ok: true,
-        message: `Deposited ${amt.toFixed(6)} SOL from DCB wallet (on-chain confirmed)`,
+        message: `Deposited ${amt.toFixed(6)} SOL from DCB wallet to your Beast deposit wallet (on-chain confirmed)`,
         tx_signature: result.signature,
-        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
+        balance: { sol: newTotal, usdc: 0, usd: 0 },
         dcbBalance: { onChain: onChainSol - amt }
       })
     } catch (err) {
@@ -5834,31 +6023,35 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Games: Play (provably fair RNG) ──
+  // ── Beast Games: Play (on-chain wager + payout, provably fair RNG) ──
   app.post('/api/beast/games/play', requireAuth, async (req, res) => {
     try {
       const { gameId, betAmount, currency, target, minesCount, side, autoCashout, targetMultiplier } = req.body
       if (!gameId || !betAmount || !currency) return res.status(400).json({ error: 'Missing fields' })
-      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
+      if (currency !== 'SOL') return res.status(400).json({ error: 'Only SOL games supported for on-chain play' })
       const bet = parseFloat(betAmount)
       if (isNaN(bet) || bet <= 0) return res.status(400).json({ error: 'Invalid bet amount' })
-      const profile = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
-      const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
-      const currentBal = parseFloat(profile?.[balCol] || 0)
-      if (bet > currentBal) return res.status(400).json({ error: `Insufficient ${currency} balance` })
+
+      // Get all user wallets and check combined on-chain balance
+      const wallets = await getUserWalletsBeast(req.user.id)
+      if (!wallets.length) return res.status(400).json({ error: 'No wallets found. Deposit SOL to your Beast wallet first.' })
+      const totalBal = wallets.reduce((sum, w) => sum + (w.balance_cache || 0), 0)
+      if (bet > totalBal) return res.status(400).json({ error: `Insufficient SOL balance (have ${totalBal.toFixed(6)})` })
 
       // Treasury check: ensure treasury can cover max potential payout
-      const treasuryBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
-      const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
-      let treasuryBal = parseFloat(treasury?.[treasuryBalCol] || 0)
-      // Cross-reference: combine treasury balances using live SOL price
-      const sp = await getSolPrice()
-      if (currency === 'SOL' && sp > 0) {
-        treasuryBal += parseFloat(treasury?.balance_usd || 0) / sp
-        treasuryBal += parseFloat(treasury?.balance_usdc || 0) / sp
-      } else if ((currency === 'USD' || currency === 'USDC') && sp > 0) {
-        treasuryBal += parseFloat(treasury?.balance_sol || 0) * sp
+      const tw = await getBeastTreasuryWallet()
+      if (!tw) return res.status(400).json({ error: 'House wallet not configured. Contact admin.' })
+      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const conn = new Connection(rpcUrl, 'confirmed')
+      let treasuryOnChain
+      try {
+        const tLam = await conn.getBalance(new PublicKey(tw.wallet_address))
+        treasuryOnChain = tLam / LAMPORTS_PER_SOL
+      } catch {
+        const tRow = await db.get('SELECT balance_sol FROM beast_treasury WHERE id = ?', ['beast_main'])
+        treasuryOnChain = parseFloat(tRow?.balance_sol || 0)
       }
+
       let maxMulti = 11
       switch (gameId) {
         case 'coin-flip': maxMulti = 1.94; break
@@ -5880,17 +6073,23 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           maxMulti = 5; break
       }
       const maxPossiblePayout = bet * maxMulti
-      if (treasuryBal < maxPossiblePayout) {
-        const maxBetAllowed = parseFloat((treasuryBal / maxMulti).toFixed(6))
+      if (treasuryOnChain < maxPossiblePayout) {
+        const maxBetAllowed = parseFloat((treasuryOnChain / maxMulti).toFixed(6))
         return res.status(400).json({
-          error: `Max bet for ${gameId}: ${maxBetAllowed > 0 ? maxBetAllowed : 0} ${currency} (treasury limit)`,
-          maxBet: maxBetAllowed > 0 ? maxBetAllowed : 0,
-          treasuryLimit: true
+          error: `Max bet for ${gameId}: ${maxBetAllowed > 0 ? maxBetAllowed : 0} SOL (treasury limit)`,
+          maxBet: maxBetAllowed > 0 ? maxBetAllowed : 0, treasuryLimit: true
         })
       }
 
-      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} - ? WHERE user_id = ?`, [bet, req.user.id])
+      // ── Step 1: On-chain wager transfer (user wallets → treasury) ──
+      console.log(`[Beast] Game ${gameId}: transferring ${bet} SOL wager on-chain for user ${req.user.id}`)
+      const wagerResult = await multiWalletTransferBeast(wallets, tw.wallet_address, bet)
+      if (!wagerResult.ok) {
+        return res.status(400).json({ error: `Wager transfer failed: ${wagerResult.error}` })
+      }
+      console.log(`[Beast] ✅ Wager ${bet} SOL transferred to treasury: ${wagerResult.signature}`)
 
+      // ── Step 2: Provably fair RNG ──
       const serverSeed = crypto.randomBytes(32).toString('hex')
       const nonce = Date.now()
       const hash = crypto.createHash('sha256').update(`${serverSeed}:${nonce}`).digest('hex')
@@ -5904,7 +6103,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         case 'crash': { const ca = 1 / (1 - roll); const co = autoCashout || 2; won = ca >= co; multiplier = won ? co : 0; details = `Crashed at ${ca.toFixed(2)}x`; break }
         case 'mines': { const mc = minesCount || 3; const ss = 25 - mc; const rv = Math.floor(roll * ss) + 1; won = roll > 0.3; multiplier = won ? parseFloat((25 / ss * (1 + rv * 0.2)).toFixed(2)) : 0; details = won ? `Revealed ${rv} gems safely` : 'Hit a mine!'; break }
         case 'plinko': { const b = [0.5,1,1.5,2,3,5,3,2,1.5,1,0.5]; const i = Math.floor(roll * b.length); multiplier = b[i]; won = multiplier > 1; details = `Ball landed in ${multiplier}x bucket`; break }
-        case 'keno': { const m = Math.floor(roll * 10); const kp = [0,0,0.5,1,2,5,10,25,50,100,500]; multiplier = kp[m] || 0; won = multiplier > 0; details = `Matched ${m} out of 10 numbers`; break }
+        case 'keno': { const m = Math.floor(roll * 10); const kp2 = [0,0,0.5,1,2,5,10,25,50,100,500]; multiplier = kp2[m] || 0; won = multiplier > 0; details = `Matched ${m} out of 10 numbers`; break }
         case 'hilo': { won = roll > 0.45; multiplier = won ? 1.9 : 0; details = won ? 'Correct guess!' : 'Wrong guess'; break }
         case 'wheel': { const sg = [0,0.5,1,1.5,2,3,5,10,0,0.5,1,1.5,2,3,0,1]; const si = Math.floor(roll * sg.length); multiplier = sg[si]; won = multiplier > 0; details = `Wheel stopped at ${multiplier}x`; break }
         case 'tower': { const fl = Math.floor(roll * 10) + 1; won = roll > 0.35; multiplier = won ? parseFloat(Math.pow(1.4, fl).toFixed(2)) : 0; details = won ? `Climbed ${fl} floors` : `Fell at floor ${fl}`; break }
@@ -5917,33 +6116,106 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         default: { won = roll > 0.4; multiplier = won ? parseFloat((1 + roll * 10).toFixed(2)) : 0; details = won ? `Win at ${multiplier}x!` : 'No win this spin' }
       }
       payout = won ? parseFloat((bet * multiplier).toFixed(6)) : 0
-      if (payout > 0) await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} + ? WHERE user_id = ?`, [payout, req.user.id])
 
-      // Treasury: collect wager, pay winnings
-      await db.run(`UPDATE beast_treasury SET ${treasuryBalCol} = ${treasuryBalCol} + ?, total_wagered = total_wagered + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [bet, bet, bet])
-      if (payout > 0) {
-        await db.run(`UPDATE beast_treasury SET ${treasuryBalCol} = ${treasuryBalCol} - ?, total_payouts = total_payouts + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [payout, payout])
+      // ── Step 3: On-chain payout if won ──
+      let payoutTxSig = null
+      let newWinningsWallet = null
+      const depositWallet = wallets.find(w => w.wallet_type === 'deposit')
+
+      if (payout > 0 && depositWallet) {
+        const profit = parseFloat((payout - bet).toFixed(6))
+        console.log(`[Beast] Game WIN: paying ${bet} SOL back to deposit + ${profit > 0 ? profit : 0} SOL profit to winnings wallet`)
+
+        try {
+          const treasuryKp = decryptToKeypair(tw.wallet_secret)
+          const payoutTx = new SolTransaction()
+
+          // Return bet to deposit wallet
+          payoutTx.add(SystemProgram.transfer({
+            fromPubkey: treasuryKp.publicKey,
+            toPubkey: new PublicKey(depositWallet.wallet_address),
+            lamports: Math.round(bet * LAMPORTS_PER_SOL)
+          }))
+
+          // If profit > 0, create new winnings wallet and send profit there
+          let winKp = null
+          if (profit > 0) {
+            winKp = Keypair.generate()
+            payoutTx.add(SystemProgram.transfer({
+              fromPubkey: treasuryKp.publicKey,
+              toPubkey: winKp.publicKey,
+              lamports: Math.round(profit * LAMPORTS_PER_SOL)
+            }))
+          }
+
+          payoutTx.feePayer = treasuryKp.publicKey
+          payoutTx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash
+          const payoutSim = await conn.simulateTransaction(payoutTx, [treasuryKp])
+          if (payoutSim.value.err) {
+            // Payout failed — refund wager to deposit wallet
+            console.error('[Beast] Payout simulation failed, refunding wager:', payoutSim.value.err)
+            const refund = await sendSolBeast(tw.wallet_secret, depositWallet.wallet_address, bet)
+            await refreshWalletCachesBeast(req.user.id)
+            return res.status(500).json({
+              error: 'Game payout failed, wager refunded to your deposit wallet.',
+              refunded: refund.ok, refundTx: refund.signature || null
+            })
+          }
+
+          payoutTxSig = await sendAndConfirmTransaction(conn, payoutTx, [treasuryKp])
+          console.log(`[Beast] ✅ Payout ${payout} SOL confirmed: ${payoutTxSig}`)
+
+          // Store new winnings wallet
+          if (winKp && profit > 0) {
+            const winAddr = winKp.publicKey.toBase58()
+            const winEncSecret = encryptSecret(Buffer.from(winKp.secretKey).toString('base64'))
+            const winInsert = await db.run(
+              'INSERT INTO beast_user_wallets (user_id, wallet_type, wallet_address, secret_key, label, source_game, balance_cache) VALUES (?,?,?,?,?,?,?)',
+              [req.user.id, 'winnings', winAddr, winEncSecret, `${gameId} win (${multiplier}x)`, gameId, profit]
+            )
+            newWinningsWallet = { id: winInsert?.lastID, address: winAddr, amount: profit }
+          }
+        } catch (payErr) {
+          // Payout TX failed — attempt refund
+          console.error('[Beast] Payout TX failed:', payErr.message)
+          const refund = await sendSolBeast(tw.wallet_secret, depositWallet.wallet_address, bet)
+          await refreshWalletCachesBeast(req.user.id)
+          return res.status(500).json({
+            error: 'Game payout failed, wager refunded.',
+            refunded: refund.ok, refundTx: refund.signature || null
+          })
+        }
       }
 
-      // Record bet in beast_bets
+      // ── Step 4: Update treasury DB + record bet + ledger ──
+      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol + ?, total_wagered = total_wagered + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [bet, bet, bet])
+      if (payout > 0) {
+        await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol - ?, total_payouts = total_payouts + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [payout, payout])
+      }
+
       const betInsert = await db.run('INSERT INTO beast_bets (user_id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details) VALUES (?,?,?,?,?,?,?,?,?)',
         [req.user.id, gameId, bet, currency, won ? 1 : 0, multiplier, payout, serverSeed, details])
       const betRowId = betInsert?.lastID || null
 
-      // ── Treasury ledger: wager collected ──
+      // Link winnings wallet to bet
+      if (newWinningsWallet && betRowId) {
+        await db.run('UPDATE beast_user_wallets SET source_bet_id = ? WHERE id = ?', [betRowId, newWinningsWallet.id])
+      }
+
       const tAfter = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
-      const tBalAfter = parseFloat(tAfter?.[treasuryBalCol] || 0)
+      const tBalAfter = parseFloat(tAfter?.balance_sol || 0)
       const uname = req.user.username || 'Player'
       await db.run(
-        `INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, bet_id, user_id, username, details) VALUES (?,?,?,?,?,?,?,?)`,
+        `INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, bet_id, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?,?,?)`,
         ['wager_in', currency, bet, tBalAfter + (payout > 0 ? payout : 0), betRowId, req.user.id, uname,
-         `Wager: ${bet} ${currency} on ${gameId}`]
+         `Wager: ${bet} SOL on ${gameId} (on-chain)`, wagerResult.signature]
       )
       if (payout > 0) {
         await db.run(
-          `INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, bet_id, user_id, username, details) VALUES (?,?,?,?,?,?,?,?)`,
+          `INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, bet_id, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?,?,?)`,
           ['payout', currency, payout, tBalAfter, betRowId, req.user.id, uname,
-           `Payout: ${payout} ${currency} (${multiplier}x) on ${gameId}`]
+           `Payout: ${payout} SOL (${multiplier}x) on ${gameId}${newWinningsWallet ? ' → new wallet ' + newWinningsWallet.address.slice(0, 8) + '...' : ''}`,
+           payoutTxSig]
         )
       }
 
@@ -5951,10 +6223,18 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         await db.run('INSERT INTO beast_live_wins (username, game, amount, multiplier, currency) VALUES (?,?,?,?,?)',
           [req.user.username || 'Player', gameId, payout, multiplier, currency])
       }
-      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+
+      // Refresh all wallet balance caches
+      const newTotal = await refreshWalletCachesBeast(req.user.id)
+      const allWallets = await getUserWalletsBeast(req.user.id)
+
       res.json({
         won, payout, multiplier, details, serverSeed,
-        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
+        balance: { sol: newTotal, usdc: 0, usd: 0 },
+        wagerTx: wagerResult.signature,
+        payoutTx: payoutTxSig,
+        newWinningsWallet: newWinningsWallet ? { address: newWinningsWallet.address, amount: newWinningsWallet.amount } : null,
+        wallets: allWallets.map(w => ({ type: w.wallet_type, address: w.wallet_address, balance: w.balance_cache, label: w.label }))
       })
     } catch (err) {
       console.error('[Beast] play error:', err)
@@ -6339,69 +6619,41 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // POST /api/beast/wallet/confirm-deposit - sweep funds from user's deposit address to treasury
+  // POST /api/beast/wallet/confirm-deposit - refresh on-chain balance for user's wallets (no sweep, funds stay in user wallets)
   app.post('/api/beast/wallet/confirm-deposit', requireAuth, async (req, res) => {
     try {
       const { currency } = req.body
       const cur = currency || 'SOL'
-      if (cur !== 'SOL') return res.status(400).json({ error: 'Only SOL deposits supported for on-chain sweep' })
+      if (cur !== 'SOL') return res.status(400).json({ error: 'Only SOL supported' })
 
-      const tw = await getBeastTreasuryWallet()
-      if (!tw) return res.status(400).json({ error: 'Treasury wallet not configured. Contact admin.' })
+      // Ensure user has a profile
+      await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING',
+        [req.user.id, req.user.username || 'Player'])
 
-      // Get user's deposit address + secret
-      const depRow = await db.get('SELECT deposit_address, secret_key FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [req.user.id, cur])
-      if (!depRow || !depRow.deposit_address || !depRow.secret_key) {
+      // Refresh all wallet on-chain balances
+      const total = await refreshWalletCachesBeast(req.user.id)
+      const wallets = await getUserWalletsBeast(req.user.id)
+
+      if (!wallets.length) {
         return res.status(400).json({ error: 'No deposit address found. Generate one first.' })
       }
 
-      // Check on-chain balance of deposit address
-      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
-      const conn = new Connection(rpcUrl, 'confirmed')
-      const depLamports = await conn.getBalance(new PublicKey(depRow.deposit_address))
-      const depSol = depLamports / LAMPORTS_PER_SOL
-      const sweepable = depSol - (BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL
+      const depositWallet = wallets.find(w => w.wallet_type === 'deposit')
+      console.log(`[Beast] Deposit confirmed: refreshed ${wallets.length} wallets for user ${req.user.id}, total ${total.toFixed(6)} SOL`)
 
-      if (sweepable <= 0.000001) {
-        return res.status(400).json({
-          error: `No sweepable balance. Deposit address has ${depSol.toFixed(6)} SOL (need > ${((BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL).toFixed(6)} for rent+fees).`,
-          depositAddress: depRow.deposit_address, balance: depSol
-        })
-      }
-
-      const sweepAmt = parseFloat(sweepable.toFixed(9))
-
-      // Transfer from deposit address → treasury wallet
-      console.log(`[Beast] Sweeping ${sweepAmt} SOL from deposit ${depRow.deposit_address.slice(0, 8)}... → treasury`)
-      const result = await sendSolBeast(depRow.secret_key, tw.wallet_address, sweepAmt)
-      if (!result.ok) {
-        return res.status(400).json({ error: `Sweep failed: ${result.error}`, depositAddress: depRow.deposit_address })
-      }
-
-      // Credit user balance + treasury
-      await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING',
-        [req.user.id, req.user.username || 'Player'])
-      await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [sweepAmt, req.user.id])
-      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [sweepAmt])
-
-      // Ledger entry
-      await db.run(
-        'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
-        ['deposit_sweep', 'SOL', sweepAmt, req.user.id, req.user.username || 'Player',
-         `Deposit sweep: ${sweepAmt.toFixed(6)} SOL from ${depRow.deposit_address.slice(0, 8)}... | TX: ${result.signature}`,
-         result.signature]
-      )
-
-      console.log(`[Beast] ✅ Sweep ${sweepAmt} SOL confirmed: ${result.signature}`)
-      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
       res.json({
-        ok: true, message: `Deposited ${sweepAmt.toFixed(6)} SOL (on-chain confirmed)`,
-        tx_signature: result.signature, amount: sweepAmt,
-        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) }
+        ok: true, message: `Balance refreshed: ${total.toFixed(6)} SOL across ${wallets.length} wallets`,
+        amount: total,
+        balance: { sol: total, usdc: 0, usd: 0 },
+        wallets: wallets.map(w => ({
+          type: w.wallet_type, address: w.wallet_address,
+          balance: w.balance_cache || 0, label: w.label
+        })),
+        depositAddress: depositWallet?.wallet_address || null
       })
     } catch (err) {
       console.error('[Beast] confirm-deposit error:', err)
-      res.status(500).json({ error: 'Deposit confirmation failed: ' + (err?.message || 'unknown') })
+      res.status(500).json({ error: 'Balance refresh failed: ' + (err?.message || 'unknown') })
     }
   })
 

@@ -874,6 +874,24 @@ module.exports = {
       });
     }
 
+    // Validate keypair matches stored address (detect stale keys / address mismatch)
+    const playerKeypair = crypto.getKeypairFromSecret(playerSecret);
+    if (!playerKeypair) {
+      return interaction.editReply({
+        content: '❌ **Wallet Key Error!**\n\nYour saved private key could not be loaded. Please reconnect your wallet:\n🌐 **DCB Event Manager** → Profile → 🔐 Wallet & Security\n🤖 **Or:** `/user-wallet connect private-key:YOUR_KEY`',
+        embeds: [], components: []
+      });
+    }
+    const derivedAddress = playerKeypair.publicKey.toBase58();
+    if (derivedAddress !== userData.solana_address) {
+      console.error(`[GamblingConfirm] ❌ Keypair mismatch for user ${interaction.user.id}: stored=${userData.solana_address}, derived=${derivedAddress}`);
+      return interaction.editReply({
+        content: '❌ **Wallet Key Mismatch!**\n\nYour saved private key does not match your connected wallet address. Please reconnect your wallet with the correct key:\n🌐 **DCB Event Manager** → Profile → 🔐 Wallet & Security\n🤖 **Or:** `/user-wallet connect private-key:YOUR_KEY`\n\n' +
+          `Connected address: \`${userData.solana_address}\`\nKey derives to: \`${derivedAddress}\``,
+        embeds: [], components: []
+      });
+    }
+
     // 3. Calculate transfer amount
     const isUsdc = event.currency === 'USDC';
     let solAmount = entryFee;
@@ -901,6 +919,23 @@ module.exports = {
         walletBalance = await crypto.getBalance(userData.solana_address);
       }
     } catch (_) {}
+
+    // For USDC transfers, also verify SOL balance for TX fees + ATA rent
+    if (isUsdc) {
+      let solBalance = 0;
+      try { solBalance = await crypto.getBalance(userData.solana_address); } catch (_) {}
+      const minSolRequired = 0.005; // covers TX fee (~0.00025) + ATA rent (~0.002) with buffer
+      if (solBalance < minSolRequired) {
+        return interaction.editReply({
+          content: `❌ **Insufficient SOL for Transaction Fees!**\n\n` +
+            `USDC transfers require a small amount of SOL to cover network fees.\n` +
+            `💰 SOL balance: **${solBalance.toFixed(6)} SOL**\n` +
+            `📉 Minimum needed: **~${minSolRequired} SOL**\n\n` +
+            `📥 Send some SOL to your wallet: \`${userData.solana_address}\``,
+          embeds: [], components: []
+        });
+      }
+    }
 
     const txFeeBuffer = isUsdc ? 0 : 0.00001;
     const requiredAmount = isUsdc ? entryFee : solAmount;
