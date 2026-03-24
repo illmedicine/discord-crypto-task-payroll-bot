@@ -5969,12 +5969,29 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   }, async (req, res) => {
     try {
       const guildId = req.query.guildId
-      // 1. Failed worker payouts
-      const failedPayouts = await db.all(
-        `SELECT id, guild_id, recipient_discord_id, recipient_address, amount_sol, amount_usd, sol_price_at_time, status, memo, paid_by, created_at
-         FROM worker_payouts WHERE status IN ('failed', 'pending') ${guildId ? 'AND guild_id = ?' : ''} ORDER BY created_at DESC LIMIT 100`,
+
+      // 0. Get actual column names + status distribution for debugging
+      const columns = await db.all(`PRAGMA table_info(worker_payouts)`).catch(() => [])
+      const colNames = columns.map(c => c.name)
+      const statusDist = await db.all(
+        `SELECT status, COUNT(*) as cnt, SUM(amount_sol) as total_sol FROM worker_payouts ${guildId ? 'WHERE guild_id = ?' : ''} GROUP BY status ORDER BY cnt DESC`,
         guildId ? [guildId] : []
       ).catch(() => [])
+
+      // 1. Failed worker payouts — select only columns that exist
+      const safeSelect = ['id', 'guild_id', 'recipient_discord_id', 'recipient_address', 'amount_sol', 'amount_usd', 'sol_price_at_time', 'status', 'memo', 'paid_by', 'created_at']
+        .filter(c => colNames.includes(c)).join(', ')
+      const nonSuccessStatuses = statusDist.filter(s => s.status && !['success', 'completed', 'paid'].includes(s.status.toLowerCase())).map(s => s.status)
+
+      let failedPayouts = []
+      if (nonSuccessStatuses.length > 0 && safeSelect) {
+        const placeholders = nonSuccessStatuses.map(() => '?').join(', ')
+        const params = [...nonSuccessStatuses, ...(guildId ? [guildId] : [])]
+        failedPayouts = await db.all(
+          `SELECT ${safeSelect} FROM worker_payouts WHERE status IN (${placeholders}) ${guildId ? 'AND guild_id = ?' : ''} ORDER BY created_at DESC LIMIT 200`,
+          params
+        ).catch(e => { console.error('[Audit] failedPayouts query error:', e.message); return [] })
+      }
 
       // 2. Failed gambling refunds
       const failedRefunds = await db.all(
@@ -5984,16 +6001,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
          WHERE b.payment_status IN ('refund_failed', 'payout_failed') ${guildId ? 'AND b.guild_id = ?' : ''}
          ORDER BY b.joined_at DESC LIMIT 100`,
         guildId ? [guildId] : []
-      ).catch(() => [])
+      ).catch(e => { console.error('[Audit] failedRefunds query error:', e.message); return [] })
 
       // 3. Summary stats
       const payoutStats = await db.get(
-        `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status = 'failed' THEN amount_sol ELSE 0 END) as failed_sol
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN status NOT IN ('success', 'completed', 'paid') THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN status NOT IN ('success', 'completed', 'paid') THEN amount_sol ELSE 0 END) as failed_sol
          FROM worker_payouts ${guildId ? 'WHERE guild_id = ?' : ''}`,
         guildId ? [guildId] : []
-      ).catch(() => ({ total: 0, failed: 0, pending: 0, failed_sol: 0 }))
+      ).catch(() => ({ total: 0, failed: 0, failed_sol: 0 }))
 
       const refundStats = await db.get(
         `SELECT COUNT(*) as total,
@@ -6005,6 +6022,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.json({
         failedPayouts,
         failedRefunds,
+        statusDistribution: statusDist,
+        columns: colNames,
         summary: {
           workerPayouts: payoutStats,
           gamblingRefunds: refundStats,
