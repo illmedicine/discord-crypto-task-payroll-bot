@@ -5260,6 +5260,27 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       await db.run(`ALTER TABLE beast_withdrawals ADD COLUMN fee REAL DEFAULT 0`).catch(() => {})
       await db.run(`ALTER TABLE beast_withdrawals ADD COLUMN fee_percent REAL DEFAULT 0`).catch(() => {})
       console.log('[Beast] Tables initialized (with treasury + wallet columns)')
+
+      // ── One-time phantom data purge (runs once, then marks complete) ──
+      const purgeFlag = await db.get("SELECT 1 FROM beast_treasury_txns WHERE type = 'phantom_purge_v1' LIMIT 1")
+      if (!purgeFlag) {
+        console.log('[Beast] 🔄 Running one-time phantom data purge...')
+        // Reset ALL user beast balances to 0 (phantom amounts)
+        await db.run('UPDATE beast_profiles SET balance_sol = 0, balance_usdc = 0, balance_usd = 0')
+        // Reset treasury balances to 0 (keep wallet keypair if set)
+        await db.run(`UPDATE beast_treasury SET balance_sol = 0, balance_usdc = 0, balance_usd = 0, total_wagered = 0, total_payouts = 0, total_collected = 0, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`)
+        // Clear all phantom ledger entries (no tx_signature = never on-chain)
+        await db.run('DELETE FROM beast_treasury_txns WHERE tx_signature IS NULL')
+        // Clear phantom transfers/withdrawals/bets/tips
+        await db.run('DELETE FROM beast_dcb_transfers')
+        await db.run('DELETE FROM beast_withdrawals WHERE tx_signature IS NULL')
+        await db.run('DELETE FROM beast_bets')
+        await db.run('DELETE FROM beast_live_wins')
+        await db.run('DELETE FROM beast_tips')
+        // Mark purge complete so it never runs again
+        await db.run("INSERT INTO beast_treasury_txns (type, currency, amount, details) VALUES ('phantom_purge_v1', 'SOL', 0, 'One-time purge of all phantom/dummy data. On-chain mode active.')")
+        console.log('[Beast] ✅ Phantom data purge complete. All balances reset to 0.')
+      }
     } catch (err) {
       console.error('[Beast] Table init error:', err)
     }
@@ -5498,7 +5519,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Wallet: Withdraw (REAL on-chain transfer with Illy Beast fee) ──
+  // ── Beast Wallet: Withdraw (sends from user's OWN Beast deposit address + treasury backup for winnings) ──
   app.post('/api/beast/wallet/withdraw', requireAuth, async (req, res) => {
     try {
       const { currency, amount, toAddress } = req.body
@@ -5518,9 +5539,25 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const { fee, net, pct } = calculateBeastFee(amt)
       if (net <= 0) return res.status(400).json({ error: `Amount too small after ${(pct * 100).toFixed(0)}% fee` })
 
-      // Get treasury wallet
-      const tw = await getBeastTreasuryWallet()
-      if (!tw) return res.status(400).json({ error: 'Treasury wallet not configured. Contact admin.' })
+      // Get user's OWN Beast deposit address (primary funding source)
+      const depRow = await db.get('SELECT deposit_address, secret_key FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [req.user.id, 'SOL'])
+      if (!depRow || !depRow.secret_key) {
+        return res.status(400).json({ error: 'No Beast wallet found. Make a deposit first to create your wallet.' })
+      }
+
+      // Check on-chain balance of user's Beast deposit address
+      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const conn = new Connection(rpcUrl, 'confirmed')
+      const depLamports = await conn.getBalance(new PublicKey(depRow.deposit_address))
+      const depSol = depLamports / LAMPORTS_PER_SOL
+      const rentReserve = (BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL
+      const depAvailable = Math.max(0, depSol - rentReserve)
+
+      // Determine how much comes from user's deposit addr vs treasury (for winnings)
+      let sentFromDeposit = 0
+      let sentFromTreasury = 0
+      let depositTxSig = null
+      let treasuryTxSig = null
 
       // Deduct from user profile FIRST (prevents double-spend)
       await db.run('UPDATE beast_profiles SET balance_sol = balance_sol - ? WHERE user_id = ?', [amt, req.user.id])
@@ -5532,30 +5569,67 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       )
       const wdId = wdInsert?.lastID
 
-      // Execute real on-chain transfer from treasury → user (net amount after fee)
-      console.log(`[Beast] Withdrawal: ${net.toFixed(6)} SOL (${amt} - ${fee} fee) → ${toAddress.slice(0, 8)}...`)
-      const result = await sendSolBeast(tw.wallet_secret, toAddress, net)
-
-      if (!result.ok) {
-        // Refund user balance on failure
-        await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [amt, req.user.id])
-        await db.run('UPDATE beast_withdrawals SET status = ? WHERE id = ?', ['failed', wdId])
-        return res.status(400).json({ error: `Withdrawal failed: ${result.error}` })
+      // Step 1: Send from user's Beast deposit address (up to available balance)
+      const fromDeposit = Math.min(net, depAvailable)
+      if (fromDeposit > 0.000001) {
+        console.log(`[Beast] Withdrawal step 1: ${fromDeposit.toFixed(6)} SOL from user deposit ${depRow.deposit_address.slice(0, 8)}...`)
+        const depResult = await sendSolBeast(depRow.secret_key, toAddress, fromDeposit)
+        if (depResult.ok) {
+          sentFromDeposit = fromDeposit
+          depositTxSig = depResult.signature
+        } else {
+          console.warn(`[Beast] Deposit addr send failed: ${depResult.error}`)
+        }
       }
 
-      // Mark confirmed with TX signature
-      await db.run('UPDATE beast_withdrawals SET status = ?, tx_signature = ? WHERE id = ?',
-        ['confirmed', result.signature, wdId])
+      // Step 2: If user won more than deposited, treasury covers the remainder
+      const remaining = net - sentFromDeposit
+      if (remaining > 0.000001) {
+        const tw = await getBeastTreasuryWallet()
+        if (tw) {
+          console.log(`[Beast] Withdrawal step 2: ${remaining.toFixed(6)} SOL from treasury (game winnings)`)
+          const tResult = await sendSolBeast(tw.wallet_secret, toAddress, remaining)
+          if (tResult.ok) {
+            sentFromTreasury = remaining
+            treasuryTxSig = tResult.signature
+          } else {
+            console.error(`[Beast] Treasury send failed: ${tResult.error}`)
+          }
+        } else {
+          console.warn('[Beast] Treasury wallet not configured — cannot cover game winnings portion')
+        }
+      }
 
-      // Update treasury: deduct net amount sent (fee stays in treasury)
-      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol - ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [net])
+      const totalSent = sentFromDeposit + sentFromTreasury
+      if (totalSent < 0.000001) {
+        // Nothing sent — refund user
+        await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [amt, req.user.id])
+        await db.run('UPDATE beast_withdrawals SET status = ? WHERE id = ?', ['failed', wdId])
+        return res.status(400).json({
+          error: `Withdrawal failed: insufficient on-chain balance in your Beast wallet (${depAvailable.toFixed(6)} SOL available). Deposit SOL to ${depRow.deposit_address} first.`,
+          depositAddress: depRow.deposit_address, onChainBalance: depSol
+        })
+      }
+
+      // If partial send (couldn't cover full net), refund the unsent portion
+      const unsent = net - totalSent
+      if (unsent > 0.000001) {
+        await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [unsent, req.user.id])
+      }
+
+      const txSig = depositTxSig || treasuryTxSig
+      await db.run('UPDATE beast_withdrawals SET status = ?, tx_signature = ? WHERE id = ?',
+        ['confirmed', txSig, wdId])
 
       // Treasury ledger entries
+      if (sentFromTreasury > 0) {
+        await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol - ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [sentFromTreasury])
+      }
       await db.run(
         'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
-        ['withdrawal', 'SOL', net, req.user.id, req.user.username || 'Player',
-         `Withdrawal: ${net.toFixed(6)} SOL → ${toAddress.slice(0, 8)}... (fee: ${fee.toFixed(6)} SOL @ ${(pct * 100).toFixed(0)}%)`,
-         result.signature]
+        ['withdrawal', 'SOL', totalSent, req.user.id, req.user.username || 'Player',
+         `Withdrawal: ${totalSent.toFixed(6)} SOL → ${toAddress.slice(0, 8)}... (${sentFromDeposit.toFixed(6)} from wallet, ${sentFromTreasury.toFixed(6)} from treasury, fee: ${fee.toFixed(6)})`,
+         txSig]
       )
       if (fee > 0) {
         await db.run(
@@ -5565,13 +5639,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         )
       }
 
-      console.log(`[Beast] ✅ Withdrawal confirmed: ${result.signature} | ${net.toFixed(6)} net, ${fee.toFixed(6)} fee`)
+      console.log(`[Beast] ✅ Withdrawal confirmed: deposit=${depositTxSig||'none'} treasury=${treasuryTxSig||'none'} | ${totalSent.toFixed(6)} net, ${fee.toFixed(6)} fee`)
       const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
       res.json({
         ok: true,
-        message: `Withdrew ${net.toFixed(6)} SOL to ${toAddress.slice(0, 8)}... (${(pct * 100).toFixed(0)}% fee: ${fee.toFixed(6)} SOL)`,
-        tx_signature: result.signature, amountSent: net, fee, feePercent: pct * 100,
+        message: `Withdrew ${totalSent.toFixed(6)} SOL to ${toAddress.slice(0, 8)}... (${(pct * 100).toFixed(0)}% fee: ${fee.toFixed(6)} SOL)`,
+        tx_signature: txSig, amountSent: totalSent, fee, feePercent: pct * 100,
+        sources: { fromDeposit: sentFromDeposit, fromTreasury: sentFromTreasury, depositTx: depositTxSig, treasuryTx: treasuryTxSig },
         balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
+        depositAddress: depRow.deposit_address
       })
     } catch (err) {
       console.error('[Beast] withdraw error:', err)
