@@ -3833,6 +3833,18 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         }
 
         const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL)
+
+        // Pre-flight: verify treasury has sufficient balance
+        const treasuryBalance = await conn.getBalance(senderKeypair.publicKey)
+        const minNeeded = lamports + 10000 + 3000000 // amount + fee buffer + rent buffer
+        if (treasuryBalance < minNeeded) {
+          await db.run(`UPDATE worker_payouts SET status = 'failed' WHERE id = ?`, [payoutId])
+          return res.status(400).json({
+            error: 'insufficient_balance',
+            message: `Treasury has ${(treasuryBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL but needs ${(minNeeded / LAMPORTS_PER_SOL).toFixed(6)} SOL (${amountSol} + fees + rent buffer)`
+          })
+        }
+
         const tx = new SolTransaction().add(
           SystemProgram.transfer({
             fromPubkey: senderKeypair.publicKey,
@@ -3840,6 +3852,19 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             lamports
           })
         )
+
+        // Simulate before broadcasting
+        tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash
+        tx.feePayer = senderKeypair.publicKey
+        const sim = await conn.simulateTransaction(tx)
+        if (sim.value.err) {
+          await db.run(`UPDATE worker_payouts SET status = 'failed' WHERE id = ?`, [payoutId])
+          return res.status(400).json({
+            error: 'simulation_failed',
+            message: `TX simulation failed: ${JSON.stringify(sim.value.err)}. No funds were sent.`
+          })
+        }
+
         const signature = await sendAndConfirmTransaction(conn, tx, [senderKeypair])
 
         // 7. Update payout record as confirmed
@@ -5931,6 +5956,58 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     } catch (err) {
       console.error('[Beast] reset-deposit-tracking error:', err)
       res.status(500).json({ error: 'Reset failed' })
+    }
+  })
+
+  // GET /api/admin/failed-payments — audit all failed worker payouts and gambling refunds
+  app.get('/api/admin/failed-payments', requireAuth, async (req, res) => {
+    try {
+      const guildId = req.query.guildId
+      // 1. Failed worker payouts
+      const failedPayouts = await db.all(
+        `SELECT id, guild_id, recipient_discord_id, recipient_address, amount_sol, amount_usd, sol_price_at_time, status, memo, paid_by, created_at
+         FROM worker_payouts WHERE status IN ('failed', 'pending') ${guildId ? 'AND guild_id = ?' : ''} ORDER BY created_at DESC LIMIT 100`,
+        guildId ? [guildId] : []
+      ).catch(() => [])
+
+      // 2. Failed gambling refunds
+      const failedRefunds = await db.all(
+        `SELECT b.gambling_event_id, b.user_id, b.username, b.bet_amount, b.payment_status, b.wallet_address,
+                e.title as event_title, e.currency, e.status as event_status
+         FROM gambling_event_bets b JOIN gambling_events e ON b.gambling_event_id = e.id
+         WHERE b.payment_status IN ('refund_failed', 'payout_failed') ${guildId ? 'AND b.guild_id = ?' : ''}
+         ORDER BY b.joined_at DESC LIMIT 100`,
+        guildId ? [guildId] : []
+      ).catch(() => [])
+
+      // 3. Summary stats
+      const payoutStats = await db.get(
+        `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'failed' THEN amount_sol ELSE 0 END) as failed_sol
+         FROM worker_payouts ${guildId ? 'WHERE guild_id = ?' : ''}`,
+        guildId ? [guildId] : []
+      ).catch(() => ({ total: 0, failed: 0, pending: 0, failed_sol: 0 }))
+
+      const refundStats = await db.get(
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN payment_status = 'refund_failed' THEN bet_amount ELSE 0 END) as failed_refund_amount
+         FROM gambling_event_bets WHERE payment_status IN ('refund_failed', 'payout_failed') ${guildId ? 'AND guild_id = ?' : ''}`,
+        guildId ? [guildId] : []
+      ).catch(() => ({ total: 0, failed_refund_amount: 0 }))
+
+      res.json({
+        failedPayouts,
+        failedRefunds,
+        summary: {
+          workerPayouts: payoutStats,
+          gamblingRefunds: refundStats,
+          totalOwedSol: parseFloat(payoutStats?.failed_sol || 0) + parseFloat(refundStats?.failed_refund_amount || 0)
+        }
+      })
+    } catch (err) {
+      console.error('[Admin] failed-payments audit error:', err)
+      res.status(500).json({ error: 'Audit failed' })
     }
   })
 

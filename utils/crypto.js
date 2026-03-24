@@ -105,20 +105,48 @@ const getKeypairFromSecret = (secret) => {
   }
 };
 
+// Minimum SOL to keep in any wallet (rent-exemption + fee buffer)
+const MIN_SOL_BUFFER = 0.003; // ~0.00204 SOL rent + ~0.001 for fees
+const MIN_LAMPORTS_BUFFER = Math.ceil(MIN_SOL_BUFFER * LAMPORTS_PER_SOL);
+const TX_FEE_LAMPORTS = 10000; // conservative TX fee (2x base)
+
 // Send SOL to recipient (from bot wallet)
 const sendSol = async (recipientAddress, amountSol) => {
   try {
     const wallet = getWallet();
     if (!wallet) throw new Error('Wallet not initialized');
 
+    const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+
+    // Pre-flight balance check
+    const senderBalance = await connection.getBalance(wallet.publicKey);
+    if (senderBalance < lamports + TX_FEE_LAMPORTS + MIN_LAMPORTS_BUFFER) {
+      return {
+        success: false,
+        error: `Insufficient SOL: bot wallet has ${(senderBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL but needs ${amountSol.toFixed(6)} SOL + fees + rent buffer.`
+      };
+    }
+
     const recipient = new PublicKey(recipientAddress);
     const instruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
       toPubkey: recipient,
-      lamports: amountSol * LAMPORTS_PER_SOL
+      lamports
     });
 
     const transaction = new Transaction().add(instruction);
+
+    // Simulate before broadcasting
+    transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    transaction.feePayer = wallet.publicKey;
+    const sim = await connection.simulateTransaction(transaction);
+    if (sim.value.err) {
+      return {
+        success: false,
+        error: `TX simulation failed: ${JSON.stringify(sim.value.err)}. No funds were sent.`
+      };
+    }
+
     const signature = await sendAndConfirmTransaction(connection, transaction, [wallet]);
     
     return {
@@ -143,8 +171,23 @@ const sendSolFrom = async (keypairOrSecret, recipientAddress, amountSol) => {
       : keypairOrSecret;
     if (!wallet) throw new Error('Invalid wallet keypair');
 
-    const recipient = new PublicKey(recipientAddress);
+    // Pre-flight: verify the signing wallet actually exists on-chain
+    const senderBalance = await connection.getBalance(wallet.publicKey);
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+    if (senderBalance === 0) {
+      return {
+        success: false,
+        error: `Wallet ${wallet.publicKey.toBase58().slice(0,8)}... has never received SOL on-chain (0 balance). The private key may not match the funded wallet address.`
+      };
+    }
+    if (senderBalance < lamports + TX_FEE_LAMPORTS + MIN_LAMPORTS_BUFFER) {
+      return {
+        success: false,
+        error: `Insufficient SOL: wallet has ${(senderBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL but needs ${amountSol.toFixed(6)} SOL + ${(TX_FEE_LAMPORTS / LAMPORTS_PER_SOL).toFixed(6)} fees + ${MIN_SOL_BUFFER} rent buffer.`
+      };
+    }
+
+    const recipient = new PublicKey(recipientAddress);
     const instruction = SystemProgram.transfer({
       fromPubkey: wallet.publicKey,
       toPubkey: recipient,
@@ -152,6 +195,18 @@ const sendSolFrom = async (keypairOrSecret, recipientAddress, amountSol) => {
     });
 
     const transaction = new Transaction().add(instruction);
+
+    // Simulate before broadcasting to catch lamport errors
+    transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    transaction.feePayer = wallet.publicKey;
+    const sim = await connection.simulateTransaction(transaction);
+    if (sim.value.err) {
+      return {
+        success: false,
+        error: `TX simulation failed: ${JSON.stringify(sim.value.err)}. No funds were sent. Wallet balance: ${(senderBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL.`
+      };
+    }
+
     const signature = await sendAndConfirmTransaction(connection, transaction, [wallet]);
     
     return {
@@ -343,6 +398,21 @@ const sendUsdcFrom = async (keypairOrSecret, recipientAddress, amountUsdc) => {
       : keypairOrSecret;
     if (!wallet) throw new Error('Invalid wallet keypair');
 
+    // Pre-flight: verify the signing wallet has SOL for TX fees + potential ATA rent
+    const senderSolBalance = await connection.getBalance(wallet.publicKey);
+    if (senderSolBalance === 0) {
+      return {
+        success: false,
+        error: `Wallet ${wallet.publicKey.toBase58().slice(0,8)}... has never received SOL on-chain (0 balance). The private key may not match the funded wallet address.`
+      };
+    }
+    if (senderSolBalance < 5000000) { // 0.005 SOL minimum for fees + ATA rent
+      return {
+        success: false,
+        error: `Insufficient SOL for USDC transfer fees: wallet has ${(senderSolBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL but needs ~0.005 SOL for network fees and token account creation.`
+      };
+    }
+
     const recipient = new PublicKey(recipientAddress);
     const amountRaw = Math.floor(amountUsdc * Math.pow(10, USDC_DECIMALS));
 
@@ -353,6 +423,18 @@ const sendUsdcFrom = async (keypairOrSecret, recipientAddress, amountUsdc) => {
 
     // Get or create the recipient's associated token account
     const recipientAta = await splToken.getOrCreateAssociatedTokenAccount(
+
+    // Simulate before broadcasting
+    transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    transaction.feePayer = wallet.publicKey;
+    const sim = await connection.simulateTransaction(transaction);
+    if (sim.value.err) {
+      return {
+        success: false,
+        error: `USDC TX simulation failed: ${JSON.stringify(sim.value.err)}. No funds were sent.`
+      };
+    }
+
       connection, wallet, USDC_MINT, recipient
     );
 

@@ -129,24 +129,17 @@ const processVoteEvent = async (eventId, client, reason = 'time', deps = {}) => 
                 } else {
                   paymentResults.push({ userId, success: false, reason: res.error || 'Payment failed' });
                 }
+              } else if (guildWallet.wallet_secret) {
+                // Fallback: use guild treasury keypair directly via sendSolFrom
+                const res = await crypto.sendSolFrom(guildWallet.wallet_secret, userData.solana_address, prizePerWinner);
+                if (res && res.success) {
+                  await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, res.signature);
+                  paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature: res.signature });
+                } else {
+                  paymentResults.push({ userId, success: false, reason: res?.error || 'Payment failed (fallback path)' });
+                }
               } else {
-                const recipientPubkey = new PublicKey(userData.solana_address);
-                const lamports = Math.floor(prizePerWinner * 1e9);
-
-                const treasuryPubkey = new PublicKey(guildWallet.wallet_address);
-                const instruction = SystemProgram.transfer({
-                  fromPubkey: treasuryPubkey,
-                  toPubkey: recipientPubkey,
-                  lamports
-                });
-
-                const tx = new Transaction().add(instruction);
-                const botWallet = crypto.getWallet();
-                const signature = await sendAndConfirmTransaction(connection, tx, [botWallet]);
-
-                await db.recordTransaction(event.guild_id, guildWallet.wallet_address, userData.solana_address, prizePerWinner, signature);
-
-                paymentResults.push({ userId, address: userData.solana_address, amount: prizePerWinner, success: true, signature });
+                paymentResults.push({ userId, success: false, reason: 'No treasury secret key configured for payout' });
               }
             } else {
               paymentResults.push({ userId, success: false, reason: 'No wallet connected' });
