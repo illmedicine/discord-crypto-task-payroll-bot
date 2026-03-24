@@ -5960,7 +5960,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // GET /api/admin/failed-payments — audit all failed worker payouts and gambling refunds
-  app.get('/api/admin/failed-payments', requireAuth, async (req, res) => {
+  // Accepts session auth OR internal secret (for CLI/script usage)
+  app.get('/api/admin/failed-payments', (req, res, next) => {
+    const user = getSessionUser(req)
+    if (user) { req.user = user; return next() }
+    if (INTERNAL_SECRET && req.headers['x-dcb-internal-secret'] === INTERNAL_SECRET) return next()
+    return res.status(401).json({ error: 'unauthorized' })
+  }, async (req, res) => {
     try {
       const guildId = req.query.guildId
       // 1. Failed worker payouts
