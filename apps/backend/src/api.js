@@ -5906,5 +5906,24 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // POST /api/beast/admin/reset-deposit-tracking - owner resets stale deposit tracking for a user
+  app.post('/api/beast/admin/reset-deposit-tracking', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const { userId } = req.body
+      const targetId = userId || req.user.id
+      const before = await db.get(
+        `SELECT COALESCE(SUM(amount), 0) as total FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`,
+        [targetId]
+      )
+      await db.run(`DELETE FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`, [targetId])
+      console.log(`[Beast] Owner reset deposit tracking for ${targetId} (was ${before?.total || 0} SOL)`)
+      res.json({ ok: true, cleared: parseFloat(before?.total || 0), userId: targetId })
+    } catch (err) {
+      console.error('[Beast] reset-deposit-tracking error:', err)
+      res.status(500).json({ error: 'Reset failed' })
+    }
+  })
+
   return app
 }

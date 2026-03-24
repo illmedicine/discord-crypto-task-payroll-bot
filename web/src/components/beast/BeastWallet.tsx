@@ -143,9 +143,14 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
       return
     }
     // Client-side check: if we know DCB available balance, validate first
-    if (dcbAvailable && currency === 'SOL' && amt > dcbAvailable.available + 0.000001) {
-      setMessage({ type: 'error', text: `Exceeds DCB wallet available: ${dcbAvailable.available.toFixed(6)} SOL` })
-      return
+    if (dcbAvailable) {
+      let solNeeded = amt
+      if (currency !== 'SOL' && solPrice > 0) solNeeded = amt / solPrice
+      if (solNeeded > dcbAvailable.available + 0.000001) {
+        const avail = currency === 'SOL' ? `${dcbAvailable.available.toFixed(6)} SOL` : `$${(dcbAvailable.available * solPrice).toFixed(2)} ${currency} (${dcbAvailable.available.toFixed(6)} SOL)`
+        setMessage({ type: 'error', text: `Amount exceeds available DCB balance: ${avail}. Use MAX to deposit the full available amount.` })
+        return
+      }
     }
     setLoading(true)
     setMessage(null)
@@ -270,6 +275,18 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
                     min="0"
                     className="beast-wallet-input"
                   />
+                  {dcbAvailable && dcbAvailable.available > 0 && (
+                    <button
+                      style={{ padding: '6px 10px', fontSize: '0.75rem', fontWeight: 700, background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: 6, color: '#22c55e', cursor: 'pointer' }}
+                      onClick={() => {
+                        if (currency === 'SOL') {
+                          setDcbDepositAmount(dcbAvailable.available.toFixed(6))
+                        } else if (solPrice > 0) {
+                          setDcbDepositAmount((dcbAvailable.available * solPrice).toFixed(2))
+                        }
+                      }}
+                    >MAX</button>
+                  )}
                   <button className="beast-wallet-action-btn" onClick={handleDepositFromDCB} disabled={loading}>
                     {loading ? 'Transferring...' : `Deposit ${currency}`}
                   </button>
