@@ -3417,7 +3417,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
            COALESCE(SUM(wds.online_minutes), 0) as total_online_minutes,
            COALESCE(SUM(wds.events_created), 0) as total_events_created,
            COUNT(DISTINCT wds.stat_date) as active_days,
-           (SELECT MAX(wa2.created_at) FROM worker_activity wa2 WHERE wa2.guild_id = dw.guild_id AND wa2.discord_id = dw.discord_id) as last_active
+           (SELECT MAX(wa2.created_at) FROM worker_activity wa2 WHERE wa2.guild_id = dw.guild_id AND wa2.discord_id = dw.discord_id) as last_active,
+           (SELECT COUNT(*) FROM worker_payouts wp WHERE wp.guild_id = dw.guild_id AND wp.paid_by = dw.discord_id AND wp.status = 'confirmed' ${days ? "AND wp.paid_at >= date('now', '-' || " + days + " || ' days')" : ''}) as actual_payouts_issued,
+           (SELECT COALESCE(SUM(wp2.amount_sol), 0) FROM worker_payouts wp2 WHERE wp2.guild_id = dw.guild_id AND wp2.recipient_discord_id = dw.discord_id AND wp2.status = 'confirmed') as actual_payout_received
          FROM dcb_workers dw
          LEFT JOIN worker_daily_stats wds ON dw.guild_id = wds.guild_id AND dw.discord_id = wds.discord_id
            AND wds.stat_date >= date('now', '-' || ? || ' days')
@@ -3426,6 +3428,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
          ORDER BY dw.role ASC, total_commands DESC`,
         [days, req.guild.id]
       )
+      // Use actual_payouts_issued from worker_payouts when daily stats are 0
+      for (const w of rows || []) {
+        if (w.total_payouts_issued === 0 && w.actual_payouts_issued > 0) {
+          w.total_payouts_issued = w.actual_payouts_issued
+        }
+        if (w.total_payout_amount === 0 && w.actual_payout_received > 0) {
+          w.total_payout_amount = w.actual_payout_received
+        }
+      }
       // Enrich with Discord data
       const enriched = await Promise.all((rows || []).map(async (w) => {
         try {
@@ -3890,6 +3901,13 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
            VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, discord_id, stat_date) DO UPDATE SET payout_total = payout_total + ?`,
           [req.guild.id, req.params.discordId, today, amountSol, amountSol]
         )
+
+        // 9b. Increment payouts_issued for the payer (admin)
+        await db.run(
+          `INSERT INTO worker_daily_stats (guild_id, discord_id, stat_date, payouts_issued)
+           VALUES (?, ?, ?, 1) ON CONFLICT(guild_id, discord_id, stat_date) DO UPDATE SET payouts_issued = payouts_issued + 1`,
+          [req.guild.id, req.user.id, today]
+        ).catch(() => {}) // payer may not be a worker
 
         // 10. Log in activity_feed
         const recipientName = worker.username || req.params.discordId
@@ -5980,9 +5998,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         `SELECT status, COUNT(*) as cnt, SUM(amount_sol) as total_sol FROM worker_payouts ${guildWhere} GROUP BY status ORDER BY cnt DESC`, gp
       ).catch(() => [])
 
-      const safeSelect = ['id', 'guild_id', 'recipient_discord_id', 'recipient_address', 'amount_sol', 'amount_usd', 'sol_price_at_time', 'status', 'memo', 'paid_by', 'created_at']
+      const safeSelect = ['id', 'guild_id', 'recipient_discord_id', 'recipient_address', 'amount_sol', 'amount_usd', 'sol_price_at_time', 'status', 'memo', 'paid_by', 'paid_at', 'created_at', 'tx_signature']
         .filter(c => wpCols.includes(c)).join(', ')
-      const nonSuccessStatuses = wpStatusDist.filter(s => s.status && !['success', 'completed', 'paid'].includes(s.status.toLowerCase())).map(s => s.status)
+      const SUCCESS_STATUSES = ['success', 'completed', 'paid', 'confirmed']
+      const nonSuccessStatuses = wpStatusDist.filter(s => s.status && !SUCCESS_STATUSES.includes(s.status.toLowerCase())).map(s => s.status)
 
       let failedPayouts = []
       if (nonSuccessStatuses.length > 0 && safeSelect) {
@@ -5995,8 +6014,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       const wpStats = await db.get(
         `SELECT COUNT(*) as total,
-                SUM(CASE WHEN status NOT IN ('success','completed','paid') THEN 1 ELSE 0 END) as failed,
-                SUM(CASE WHEN status NOT IN ('success','completed','paid') THEN amount_sol ELSE 0 END) as failed_sol
+                SUM(CASE WHEN status NOT IN ('success','completed','paid','confirmed') THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN status NOT IN ('success','completed','paid','confirmed') THEN amount_sol ELSE 0 END) as failed_sol
          FROM worker_payouts ${guildWhere}`, gp
       ).catch(() => ({ total: 0, failed: 0, failed_sol: 0 }))
 
@@ -6065,8 +6084,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       res.json({
         workerPayouts: { records: failedPayouts, statusDistribution: wpStatusDist, columns: wpCols, stats: wpStats },
-        gamblingEvents: { records: failedGambling, statusDistribution: gamblingStatusDist, stats: gamblingStats },
-        pokerEvents: { records: failedPoker, statusDistribution: pokerStatusDist, stats: pokerStats },
+        gamblingEvents: { records: failedGambling, statusDistribution: gamblingStatusDist, stats: gamblingStats,
+          note: failedGambling.length === 0 && gamblingStatusDist.length > 0 ? 'Gambling event payout processing happens on the Discord bot (separate DB). Records here reflect the backend copy. Check bot logs for payout_failed entries.' : undefined },
+        pokerEvents: { records: failedPoker, statusDistribution: pokerStatusDist, stats: pokerStats,
+          note: failedPoker.length === 0 && pokerStatusDist.length === 0 ? 'Poker events are managed by the Discord bot (separate DB). This backend DB may not have poker payout records. Check bot DB directly for payout_failed entries.' : undefined },
         grandTotal: {
           workerOwedSol: workerOwed,
           gamblingOwedSol: gamblingOwed,
