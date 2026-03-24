@@ -5250,11 +5250,113 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       )`)
       // Migration: add username column if missing
       await db.run(`ALTER TABLE beast_treasury_txns ADD COLUMN username TEXT`).catch(() => {})
-      console.log('[Beast] Tables initialized (with treasury)')
+      // Migration: add tx_signature column to treasury_txns
+      await db.run(`ALTER TABLE beast_treasury_txns ADD COLUMN tx_signature TEXT`).catch(() => {})
+      // Migration: add wallet_address + wallet_secret to beast_treasury
+      await db.run(`ALTER TABLE beast_treasury ADD COLUMN wallet_address TEXT`).catch(() => {})
+      await db.run(`ALTER TABLE beast_treasury ADD COLUMN wallet_secret TEXT`).catch(() => {})
+      // Migration: add tx_signature, fee, fee_percent to beast_withdrawals
+      await db.run(`ALTER TABLE beast_withdrawals ADD COLUMN tx_signature TEXT`).catch(() => {})
+      await db.run(`ALTER TABLE beast_withdrawals ADD COLUMN fee REAL DEFAULT 0`).catch(() => {})
+      await db.run(`ALTER TABLE beast_withdrawals ADD COLUMN fee_percent REAL DEFAULT 0`).catch(() => {})
+      console.log('[Beast] Tables initialized (with treasury + wallet columns)')
     } catch (err) {
       console.error('[Beast] Table init error:', err)
     }
   })()
+
+  // ── Beast Fee Engine: Illy Beast graduated transaction fee (1-5%) ──
+  function calculateBeastFee(amountSol) {
+    let pct
+    if (amountSol <= 0.1) pct = 0.05       // 5% for ≤ 0.1 SOL
+    else if (amountSol <= 1) pct = 0.03     // 3% for ≤ 1 SOL
+    else if (amountSol <= 10) pct = 0.02    // 2% for ≤ 10 SOL
+    else pct = 0.01                          // 1% for > 10 SOL
+    const fee = parseFloat((amountSol * pct).toFixed(9))
+    return { fee, net: parseFloat((amountSol - fee).toFixed(9)), pct }
+  }
+
+  // ── Beast Solana Transfer Helper (simulation + rent safety) ──
+  const BEAST_RENT_EXEMPT_MIN = 890880 // lamports rent-exempt minimum
+  const BEAST_FEE_BUFFER = 10000       // lamports tx fee buffer
+
+  async function sendSolBeast(encryptedSecret, recipientAddress, amountSol) {
+    const { Connection, PublicKey, Transaction: SolTx, SystemProgram, sendAndConfirmTransaction, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js')
+
+    // Decrypt secret key
+    const raw = encryptedSecret.startsWith('enc:') ? decryptSecret(encryptedSecret) : encryptedSecret
+    if (!raw) return { ok: false, error: 'Failed to decrypt wallet secret' }
+
+    // Reconstruct keypair (supports base64, JSON array, base58)
+    let kp
+    try {
+      if (raw.startsWith('[')) {
+        kp = Keypair.fromSecretKey(new Uint8Array(JSON.parse(raw)))
+      } else {
+        // Try base64 first (beast deposit addresses use this format)
+        const buf = Buffer.from(raw, 'base64')
+        if (buf.length === 64) {
+          kp = Keypair.fromSecretKey(new Uint8Array(buf))
+        } else {
+          throw new Error('not base64-64')
+        }
+      }
+    } catch {
+      // Fallback: base58 decode
+      const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+      function decodeBase58(str) {
+        const bytes = []
+        for (const c of str) {
+          let carry = BASE58_ALPHABET.indexOf(c)
+          if (carry < 0) throw new Error('Invalid base58 character: ' + c)
+          for (let j = 0; j < bytes.length; j++) { carry += bytes[j] * 58; bytes[j] = carry & 0xff; carry >>= 8 }
+          while (carry > 0) { bytes.push(carry & 0xff); carry >>= 8 }
+        }
+        for (const c of str) { if (c === '1') bytes.push(0); else break }
+        return new Uint8Array(bytes.reverse())
+      }
+      kp = Keypair.fromSecretKey(decodeBase58(raw))
+    }
+
+    const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+    const conn = new Connection(rpcUrl, 'confirmed')
+    const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL)
+
+    if (lamports <= 0) return { ok: false, error: 'Amount too small (rounds to 0 lamports)' }
+
+    // Check balance with rent + fee safety
+    const balance = await conn.getBalance(kp.publicKey)
+    const minNeeded = lamports + BEAST_FEE_BUFFER + BEAST_RENT_EXEMPT_MIN
+    if (balance < minNeeded) {
+      return {
+        ok: false,
+        error: `Insufficient on-chain balance: ${(balance / LAMPORTS_PER_SOL).toFixed(6)} SOL available, need ${(minNeeded / LAMPORTS_PER_SOL).toFixed(6)} SOL (${amountSol} + fees + rent reserve)`
+      }
+    }
+
+    const recipient = new PublicKey(recipientAddress)
+    const tx = new SolTx().add(
+      SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: recipient, lamports })
+    )
+
+    // Simulate before broadcasting
+    tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash
+    tx.feePayer = kp.publicKey
+    const sim = await conn.simulateTransaction(tx)
+    if (sim.value.err) {
+      return { ok: false, error: `TX simulation failed: ${JSON.stringify(sim.value.err)}. No funds sent.` }
+    }
+
+    const signature = await sendAndConfirmTransaction(conn, tx, [kp])
+    return { ok: true, signature, from: kp.publicKey.toBase58() }
+  }
+
+  // ── Get or create Beast treasury wallet ──
+  async function getBeastTreasuryWallet() {
+    const t = await db.get('SELECT wallet_address, wallet_secret FROM beast_treasury WHERE id = ?', ['beast_main'])
+    if (t?.wallet_address && t?.wallet_secret) return t
+    return null
+  }
 
   // ── Beast Profile ──
   app.get('/api/beast/profile', requireAuth, async (req, res) => {
@@ -5396,43 +5498,122 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Wallet: Withdraw ──
+  // ── Beast Wallet: Withdraw (REAL on-chain transfer with Illy Beast fee) ──
   app.post('/api/beast/wallet/withdraw', requireAuth, async (req, res) => {
     try {
       const { currency, amount, toAddress } = req.body
       if (!currency || !amount || !toAddress) return res.status(400).json({ error: 'Missing fields' })
-      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
+      if (currency !== 'SOL') return res.status(400).json({ error: 'Only SOL withdrawals supported for on-chain' })
       const amt = parseFloat(amount)
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
+
+      // Validate recipient address
+      try { new PublicKey(toAddress) } catch { return res.status(400).json({ error: 'Invalid Solana address' }) }
+
       const profile = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
-      const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
-      const currentBal = parseFloat(profile?.[balCol] || 0)
-      if (amt > currentBal) return res.status(400).json({ error: `Insufficient ${currency} balance` })
-      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} - ? WHERE user_id = ?`, [amt, req.user.id])
-      await db.run('INSERT INTO beast_withdrawals (user_id, currency, amount, to_address, status) VALUES (?, ?, ?, ?, ?)',
-        [req.user.id, currency, amt, toAddress, 'pending'])
+      const currentBal = parseFloat(profile?.balance_sol || 0)
+      if (amt > currentBal) return res.status(400).json({ error: `Insufficient SOL balance (have ${currentBal.toFixed(6)})` })
+
+      // Calculate Illy Beast fee
+      const { fee, net, pct } = calculateBeastFee(amt)
+      if (net <= 0) return res.status(400).json({ error: `Amount too small after ${(pct * 100).toFixed(0)}% fee` })
+
+      // Get treasury wallet
+      const tw = await getBeastTreasuryWallet()
+      if (!tw) return res.status(400).json({ error: 'Treasury wallet not configured. Contact admin.' })
+
+      // Deduct from user profile FIRST (prevents double-spend)
+      await db.run('UPDATE beast_profiles SET balance_sol = balance_sol - ? WHERE user_id = ?', [amt, req.user.id])
+
+      // Create pending withdrawal record
+      const wdInsert = await db.run(
+        'INSERT INTO beast_withdrawals (user_id, currency, amount, to_address, status, fee, fee_percent) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [req.user.id, currency, amt, toAddress, 'pending', fee, pct * 100]
+      )
+      const wdId = wdInsert?.lastID
+
+      // Execute real on-chain transfer from treasury → user (net amount after fee)
+      console.log(`[Beast] Withdrawal: ${net.toFixed(6)} SOL (${amt} - ${fee} fee) → ${toAddress.slice(0, 8)}...`)
+      const result = await sendSolBeast(tw.wallet_secret, toAddress, net)
+
+      if (!result.ok) {
+        // Refund user balance on failure
+        await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [amt, req.user.id])
+        await db.run('UPDATE beast_withdrawals SET status = ? WHERE id = ?', ['failed', wdId])
+        return res.status(400).json({ error: `Withdrawal failed: ${result.error}` })
+      }
+
+      // Mark confirmed with TX signature
+      await db.run('UPDATE beast_withdrawals SET status = ?, tx_signature = ? WHERE id = ?',
+        ['confirmed', result.signature, wdId])
+
+      // Update treasury: deduct net amount sent (fee stays in treasury)
+      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol - ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [net])
+
+      // Treasury ledger entries
+      await db.run(
+        'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
+        ['withdrawal', 'SOL', net, req.user.id, req.user.username || 'Player',
+         `Withdrawal: ${net.toFixed(6)} SOL → ${toAddress.slice(0, 8)}... (fee: ${fee.toFixed(6)} SOL @ ${(pct * 100).toFixed(0)}%)`,
+         result.signature]
+      )
+      if (fee > 0) {
+        await db.run(
+          'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details) VALUES (?,?,?,?,?,?)',
+          ['fee_collected', 'SOL', fee, req.user.id, req.user.username || 'Player',
+           `Illy Beast fee: ${fee.toFixed(6)} SOL (${(pct * 100).toFixed(0)}% of ${amt.toFixed(6)})`]
+        )
+      }
+
+      console.log(`[Beast] ✅ Withdrawal confirmed: ${result.signature} | ${net.toFixed(6)} net, ${fee.toFixed(6)} fee`)
       const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
       res.json({
-        ok: true, message: `Withdrawal of ${amt} ${currency} submitted`,
+        ok: true,
+        message: `Withdrew ${net.toFixed(6)} SOL to ${toAddress.slice(0, 8)}... (${(pct * 100).toFixed(0)}% fee: ${fee.toFixed(6)} SOL)`,
+        tx_signature: result.signature, amountSent: net, fee, feePercent: pct * 100,
         balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
       })
     } catch (err) {
       console.error('[Beast] withdraw error:', err)
-      res.status(500).json({ error: 'Withdrawal failed' })
+      res.status(500).json({ error: 'Withdrawal failed: ' + (err?.message || 'unknown') })
     }
   })
 
-  // ── Beast Wallet: Tip ──
+  // ── Beast Wallet: Tip (real balance transfer) ──
   app.post('/api/beast/wallet/tip', requireAuth, async (req, res) => {
     try {
       const { currency, amount, toUser } = req.body
       if (!currency || !amount || !toUser) return res.status(400).json({ error: 'Missing fields' })
+      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
       const amt = parseFloat(amount)
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
+      if (toUser === req.user.id) return res.status(400).json({ error: 'Cannot tip yourself' })
+
+      const balCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
+
+      // Check sender balance
+      const senderProfile = await db.get(`SELECT ${balCol} FROM beast_profiles WHERE user_id = ?`, [req.user.id])
+      const senderBal = parseFloat(senderProfile?.[balCol] || 0)
+      if (amt > senderBal) return res.status(400).json({ error: `Insufficient ${currency} balance (have ${senderBal.toFixed(6)})` })
+
+      // Deduct from sender
+      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} - ? WHERE user_id = ?`, [amt, req.user.id])
+
+      // Credit recipient (create profile if needed)
+      await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING', [toUser, 'Player'])
+      await db.run(`UPDATE beast_profiles SET ${balCol} = ${balCol} + ? WHERE user_id = ?`, [amt, toUser])
+
+      // Record tip
       await db.run('INSERT INTO beast_tips (from_user, to_user, currency, amount) VALUES (?, ?, ?, ?)',
         [req.user.id, toUser, currency, amt])
-      res.json({ ok: true, message: `Tipped ${amt} ${currency} to ${toUser}` })
+
+      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      res.json({
+        ok: true, message: `Tipped ${amt} ${currency} to ${toUser}`,
+        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) }
+      })
     } catch (err) {
+      console.error('[Beast] tip error:', err)
       res.status(500).json({ error: 'Tip failed' })
     }
   })
@@ -5487,7 +5668,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // ── Beast Wallet: Deposit from DCB ──
+  // ── Beast Wallet: Deposit from DCB (REAL on-chain transfer) ──
   app.get('/api/beast/wallet/dcb-balance', requireAuth, async (req, res) => {
     try {
       const link = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
@@ -5504,96 +5685,76 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     try {
       const { currency, amount } = req.body
       if (!currency || !amount) return res.status(400).json({ error: 'Missing fields' })
-      if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
+      if (currency !== 'SOL') return res.status(400).json({ error: 'Only SOL deposits supported for on-chain transfer' })
       const amt = parseFloat(amount)
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
       const link = await db.get('SELECT * FROM beast_dcb_links WHERE user_id = ?', [req.user.id])
       if (!link) return res.status(400).json({ error: 'Link your DCB wallet first' })
-      // Check user_wallets first, then guild_wallets
-      let dcbAddress = null
-      const uw = await db.get('SELECT solana_address FROM user_wallets WHERE discord_id = ?', [req.user.id])
-      if (uw && uw.solana_address) { dcbAddress = uw.solana_address }
-      else {
-        const gw = await db.get('SELECT wallet_address FROM guild_wallets WHERE guild_id = ?', [link.guild_id])
-        if (gw && gw.wallet_address) dcbAddress = gw.wallet_address
-      }
-      if (!dcbAddress) return res.status(400).json({ error: 'No DCB wallet found' })
 
-      // ── Verify on-chain SOL balance of linked DCB wallet ──
-      let onChainSol = 0
-      try {
-        const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
-        const conn = new Connection(rpcUrl, 'confirmed')
-        const lamports = await conn.getBalance(new PublicKey(dcbAddress))
-        onChainSol = lamports / LAMPORTS_PER_SOL
-      } catch (rpcErr) {
-        console.error('[Beast] Solana RPC balance check failed:', rpcErr.message)
-        return res.status(400).json({ error: 'Unable to verify DCB wallet balance. Try again later.' })
-      }
+      // Get treasury wallet (required for real transfers)
+      const tw = await getBeastTreasuryWallet()
+      if (!tw) return res.status(400).json({ error: 'Treasury wallet not configured. Contact admin.' })
 
-      // Convert USD/USDC amounts to SOL equivalent for balance storage
-      let solAmt = amt
-      let solPrice = 0
-      if (currency === 'USD' || currency === 'USDC') {
-        solPrice = await getSolPrice()
-        if (!solPrice || solPrice <= 0) return res.status(400).json({ error: 'Unable to fetch SOL price for conversion' })
-        solAmt = parseFloat((amt / solPrice).toFixed(9))
-      }
-
-      // Check total already deposited vs on-chain balance
-      const totalDeposited = await db.get(
-        `SELECT COALESCE(SUM(amount), 0) as total FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`,
-        [req.user.id]
-      )
-      let alreadyDepositedSol = parseFloat(totalDeposited?.total || 0)
-
-      // Auto-reset stale tracking: if tracked deposits >= on-chain balance, these were phantom deposits
-      // from before balance verification existed — clear them so user can deposit their real balance
-      if (alreadyDepositedSol > 0 && alreadyDepositedSol >= onChainSol) {
-        console.log(`[Beast] Auto-clearing stale deposit tracking for ${req.user.id}: tracked ${alreadyDepositedSol} >= on-chain ${onChainSol}`)
-        await db.run(`DELETE FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`, [req.user.id])
-        alreadyDepositedSol = 0
-      }
-
-      const availableSol = Math.max(0, onChainSol - alreadyDepositedSol)
-
-      if (solAmt > availableSol + 0.000001) {
-        const availDisplay = currency === 'SOL' ? `${availableSol.toFixed(6)} SOL` : `$${(availableSol * (solPrice || await getSolPrice())).toFixed(2)} ${currency}`
+      // Get user's DCB wallet address + secret for signing
+      const uw = await db.get('SELECT solana_address, wallet_secret FROM user_wallets WHERE discord_id = ?', [req.user.id])
+      if (!uw?.solana_address) return res.status(400).json({ error: 'No DCB wallet found' })
+      if (!uw?.wallet_secret) {
         return res.status(400).json({
-          error: `Insufficient DCB wallet balance. Available: ${availDisplay} (on-chain: ${onChainSol.toFixed(6)} SOL, already deposited: ${alreadyDepositedSol.toFixed(6)} SOL)`,
-          onChainBalance: onChainSol,
-          alreadyDeposited: alreadyDepositedSol,
-          available: availableSol
+          error: 'Private key not imported. Go to DCB Event Manager → Wallet → Import Private Key to enable on-chain deposits.',
+          needs_key: true
         })
       }
 
-      await db.run(
-        `INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING`,
-        [req.user.id, req.user.username || 'Player']
-      )
-      // Always credit balance_sol (all deposits convert to SOL)
-      await db.run(`UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?`, [solAmt, req.user.id])
+      // Verify on-chain balance
+      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const conn = new Connection(rpcUrl, 'confirmed')
+      const lamports = await conn.getBalance(new PublicKey(uw.solana_address))
+      const onChainSol = lamports / LAMPORTS_PER_SOL
+      const minNeeded = amt + (BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL
+
+      if (onChainSol < minNeeded) {
+        return res.status(400).json({
+          error: `Insufficient DCB wallet balance. Have ${onChainSol.toFixed(6)} SOL, need ${minNeeded.toFixed(6)} SOL (${amt} + fees + rent reserve).`,
+          onChainBalance: onChainSol, needed: minNeeded
+        })
+      }
+
+      // Execute real on-chain transfer: user's DCB wallet → treasury wallet
+      console.log(`[Beast] DCB deposit: ${amt.toFixed(6)} SOL from ${uw.solana_address.slice(0, 8)}... → treasury`)
+      const result = await sendSolBeast(uw.wallet_secret, tw.wallet_address, amt)
+
+      if (!result.ok) {
+        return res.status(400).json({ error: `On-chain transfer failed: ${result.error}` })
+      }
+
+      // Credit user beast balance + treasury
+      await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING',
+        [req.user.id, req.user.username || 'Player'])
+      await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [amt, req.user.id])
+      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [amt])
       await db.run('INSERT INTO beast_dcb_transfers (user_id, currency, amount, direction) VALUES (?, ?, ?, ?)',
-        [req.user.id, currency, solAmt, 'dcb_to_beast'])
+        [req.user.id, 'SOL', amt, 'dcb_to_beast'])
 
-      // ── Record in treasury ledger ──
+      // Treasury ledger
       await db.run(
-        `INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details) VALUES (?,?,?,?,?,?)`,
-        ['deposit_from_dcb', 'SOL', solAmt, req.user.id, req.user.username || 'Player',
-         `DCB→Beast deposit: ${solAmt.toFixed(6)} SOL${currency !== 'SOL' ? ` (from ${amt} ${currency} @ $${solPrice})` : ''} | wallet: ${dcbAddress.slice(0,8)}...`]
+        'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
+        ['deposit_from_dcb', 'SOL', amt, req.user.id, req.user.username || 'Player',
+         `DCB→Beast deposit: ${amt.toFixed(6)} SOL | on-chain TX confirmed | from ${uw.solana_address.slice(0, 8)}...`,
+         result.signature]
       )
 
+      console.log(`[Beast] ✅ DCB deposit confirmed: ${result.signature}`)
       const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
-      const conversionNote = (currency !== 'SOL' && solPrice) ? ` (${amt} ${currency} ≈ ${solAmt.toFixed(6)} SOL @ $${solPrice})` : ''
       res.json({
-        ok: true, message: `Deposited ${solAmt.toFixed(6)} SOL from DCB wallet to Beast wallet${conversionNote}`,
+        ok: true,
+        message: `Deposited ${amt.toFixed(6)} SOL from DCB wallet (on-chain confirmed)`,
+        tx_signature: result.signature,
         balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) },
-        conversion: solPrice ? { inputAmount: amt, inputCurrency: currency, solAmount: solAmt, solPrice } : undefined,
-        dcbBalance: { onChain: onChainSol, deposited: alreadyDepositedSol + solAmt, available: availableSol - solAmt }
+        dcbBalance: { onChain: onChainSol - amt }
       })
     } catch (err) {
       console.error('[Beast] deposit-from-dcb error:', err)
-      res.status(500).json({ error: 'Transfer failed' })
+      res.status(500).json({ error: 'Transfer failed: ' + (err?.message || 'unknown') })
     }
   })
 
@@ -5943,13 +6104,23 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     } catch { res.json({ sol: 0, usdc: 0, usd: 0 }) }
   })
 
-  // GET /api/beast/treasury - owner only: full treasury view
+  // GET /api/beast/treasury - owner only: full treasury view with on-chain balance
   app.get('/api/beast/treasury', requireAuth, async (req, res) => {
     try {
       if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
       const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
       const txns = await db.all('SELECT * FROM beast_treasury_txns ORDER BY created_at DESC LIMIT 200')
-      res.json({ treasury, transactions: txns || [] })
+      // Include on-chain balance if wallet is configured
+      let onChainSol = null
+      if (treasury?.wallet_address) {
+        try {
+          const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+          const conn = new Connection(rpcUrl, 'confirmed')
+          const lam = await conn.getBalance(new PublicKey(treasury.wallet_address))
+          onChainSol = lam / LAMPORTS_PER_SOL
+        } catch {}
+      }
+      res.json({ treasury, transactions: txns || [], onChainSol, walletAddress: treasury?.wallet_address || null })
     } catch (err) {
       res.status(500).json({ error: 'Failed to load treasury' })
     }
@@ -6007,7 +6178,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  // POST /api/beast/treasury/load - owner loads funds into treasury
+  // POST /api/beast/treasury/load - owner loads funds by verifying on-chain balance increase
   app.post('/api/beast/treasury/load', requireAuth, async (req, res) => {
     try {
       if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
@@ -6015,14 +6186,146 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       if (!['SOL', 'USDC', 'USD'].includes(currency)) return res.status(400).json({ error: 'Invalid currency' })
       const amt = parseFloat(amount)
       if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' })
+
+      // For SOL loads, verify treasury wallet has sufficient on-chain balance
+      if (currency === 'SOL') {
+        const tw = await getBeastTreasuryWallet()
+        if (!tw) return res.status(400).json({ error: 'Treasury wallet not set up. Use Setup Wallet first.' })
+        const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+        const conn = new Connection(rpcUrl, 'confirmed')
+        const onChainLamports = await conn.getBalance(new PublicKey(tw.wallet_address))
+        const onChainSol = onChainLamports / LAMPORTS_PER_SOL
+        const currentDbBal = parseFloat((await db.get('SELECT balance_sol FROM beast_treasury WHERE id = ?', ['beast_main']))?.balance_sol || 0)
+        if (onChainSol < currentDbBal + amt) {
+          return res.status(400).json({
+            error: `On-chain balance (${onChainSol.toFixed(6)} SOL) cannot cover DB balance (${currentDbBal.toFixed(6)}) + load (${amt}). Send SOL to ${tw.wallet_address} first.`,
+            treasuryAddress: tw.wallet_address, onChainBalance: onChainSol, dbBalance: currentDbBal
+          })
+        }
+      }
+
       const tBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd'
       await db.run(`UPDATE beast_treasury SET ${tBalCol} = ${tBalCol} + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [amt])
       const updated = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
       await db.run('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details) VALUES (?,?,?,?,?,?,?)',
-        ['load', currency, amt, parseFloat(updated?.[tBalCol] || 0), req.user.id, req.user.username || 'Owner', `Owner loaded ${amt} ${currency}`])
+        ['load', currency, amt, parseFloat(updated?.[tBalCol] || 0), req.user.id, req.user.username || 'Owner', `Owner loaded ${amt} ${currency} (on-chain verified)`])
       res.json({ ok: true, treasury: updated })
     } catch (err) {
+      console.error('[Beast] treasury load error:', err)
       res.status(500).json({ error: 'Failed to load treasury' })
+    }
+  })
+
+  // POST /api/beast/treasury/setup-wallet - owner generates or sets treasury wallet keypair
+  app.post('/api/beast/treasury/setup-wallet', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const existing = await getBeastTreasuryWallet()
+      if (existing) {
+        return res.json({ ok: true, address: existing.wallet_address, message: 'Treasury wallet already configured', existing: true })
+      }
+      // Generate a real Solana keypair for the treasury
+      const kp = Keypair.generate()
+      const addr = kp.publicKey.toBase58()
+      const encSecret = encryptSecret(Buffer.from(kp.secretKey).toString('base64'))
+      await db.run('UPDATE beast_treasury SET wallet_address = ?, wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [addr, encSecret, 'beast_main'])
+      console.log(`[Beast] Treasury wallet created: ${addr.slice(0, 8)}...${addr.slice(-4)}`)
+      res.json({ ok: true, address: addr, message: 'Treasury wallet generated. Send SOL to this address to fund the house.' })
+    } catch (err) {
+      console.error('[Beast] setup-wallet error:', err)
+      res.status(500).json({ error: 'Failed to set up treasury wallet' })
+    }
+  })
+
+  // GET /api/beast/treasury/wallet-info - owner views treasury wallet address + on-chain balance
+  app.get('/api/beast/treasury/wallet-info', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const tw = await getBeastTreasuryWallet()
+      if (!tw) return res.json({ configured: false })
+      let onChainSol = 0
+      try {
+        const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+        const conn = new Connection(rpcUrl, 'confirmed')
+        const lamports = await conn.getBalance(new PublicKey(tw.wallet_address))
+        onChainSol = lamports / LAMPORTS_PER_SOL
+      } catch (rpcErr) {
+        console.error('[Beast] RPC balance check failed:', rpcErr.message)
+      }
+      const treasury = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_treasury WHERE id = ?', ['beast_main'])
+      res.json({
+        configured: true, address: tw.wallet_address, onChainSol,
+        dbBalance: { sol: parseFloat(treasury?.balance_sol || 0), usdc: parseFloat(treasury?.balance_usdc || 0), usd: parseFloat(treasury?.balance_usd || 0) }
+      })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to get wallet info' })
+    }
+  })
+
+  // POST /api/beast/wallet/confirm-deposit - sweep funds from user's deposit address to treasury
+  app.post('/api/beast/wallet/confirm-deposit', requireAuth, async (req, res) => {
+    try {
+      const { currency } = req.body
+      const cur = currency || 'SOL'
+      if (cur !== 'SOL') return res.status(400).json({ error: 'Only SOL deposits supported for on-chain sweep' })
+
+      const tw = await getBeastTreasuryWallet()
+      if (!tw) return res.status(400).json({ error: 'Treasury wallet not configured. Contact admin.' })
+
+      // Get user's deposit address + secret
+      const depRow = await db.get('SELECT deposit_address, secret_key FROM beast_deposit_addresses WHERE user_id = ? AND currency = ?', [req.user.id, cur])
+      if (!depRow || !depRow.deposit_address || !depRow.secret_key) {
+        return res.status(400).json({ error: 'No deposit address found. Generate one first.' })
+      }
+
+      // Check on-chain balance of deposit address
+      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const conn = new Connection(rpcUrl, 'confirmed')
+      const depLamports = await conn.getBalance(new PublicKey(depRow.deposit_address))
+      const depSol = depLamports / LAMPORTS_PER_SOL
+      const sweepable = depSol - (BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL
+
+      if (sweepable <= 0.000001) {
+        return res.status(400).json({
+          error: `No sweepable balance. Deposit address has ${depSol.toFixed(6)} SOL (need > ${((BEAST_RENT_EXEMPT_MIN + BEAST_FEE_BUFFER) / LAMPORTS_PER_SOL).toFixed(6)} for rent+fees).`,
+          depositAddress: depRow.deposit_address, balance: depSol
+        })
+      }
+
+      const sweepAmt = parseFloat(sweepable.toFixed(9))
+
+      // Transfer from deposit address → treasury wallet
+      console.log(`[Beast] Sweeping ${sweepAmt} SOL from deposit ${depRow.deposit_address.slice(0, 8)}... → treasury`)
+      const result = await sendSolBeast(depRow.secret_key, tw.wallet_address, sweepAmt)
+      if (!result.ok) {
+        return res.status(400).json({ error: `Sweep failed: ${result.error}`, depositAddress: depRow.deposit_address })
+      }
+
+      // Credit user balance + treasury
+      await db.run('INSERT INTO beast_profiles (user_id, username) VALUES (?, ?) ON CONFLICT(user_id) DO NOTHING',
+        [req.user.id, req.user.username || 'Player'])
+      await db.run('UPDATE beast_profiles SET balance_sol = balance_sol + ? WHERE user_id = ?', [sweepAmt, req.user.id])
+      await db.run(`UPDATE beast_treasury SET balance_sol = balance_sol + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [sweepAmt])
+
+      // Ledger entry
+      await db.run(
+        'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?)',
+        ['deposit_sweep', 'SOL', sweepAmt, req.user.id, req.user.username || 'Player',
+         `Deposit sweep: ${sweepAmt.toFixed(6)} SOL from ${depRow.deposit_address.slice(0, 8)}... | TX: ${result.signature}`,
+         result.signature]
+      )
+
+      console.log(`[Beast] ✅ Sweep ${sweepAmt} SOL confirmed: ${result.signature}`)
+      const updated = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id])
+      res.json({
+        ok: true, message: `Deposited ${sweepAmt.toFixed(6)} SOL (on-chain confirmed)`,
+        tx_signature: result.signature, amount: sweepAmt,
+        balance: { sol: parseFloat(updated?.balance_sol || 0), usdc: parseFloat(updated?.balance_usdc || 0), usd: parseFloat(updated?.balance_usd || 0) }
+      })
+    } catch (err) {
+      console.error('[Beast] confirm-deposit error:', err)
+      res.status(500).json({ error: 'Deposit confirmation failed: ' + (err?.message || 'unknown') })
     }
   })
 
@@ -6039,7 +6342,71 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       await db.run(`DELETE FROM beast_dcb_transfers WHERE user_id = ? AND direction = 'dcb_to_beast'`, [targetId])
       console.log(`[Beast] Owner reset deposit tracking for ${targetId} (was ${before?.total || 0} SOL)`)
       res.json({ ok: true, cleared: parseFloat(before?.total || 0), userId: targetId })
+    
+
+  // POST /api/beast/admin/fresh-start - owner resets ALL phantom data for clean on-chain start
+  app.post('/api/beast/admin/fresh-start', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const { confirm } = req.body
+      if (confirm !== 'FRESH_START') return res.status(400).json({ error: 'Send { confirm: "FRESH_START" } to proceed' })
+
+      // Preserve treasury wallet keypair but reset all balances
+      const tw = await getBeastTreasuryWallet()
+
+      // Reset treasury balances to 0 (keep wallet)
+      await db.run(`UPDATE beast_treasury SET balance_sol = 0, balance_usdc = 0, balance_usd = 0, total_wagered = 0, total_payouts = 0, total_collected = 0, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`)
+
+      // Reset all user beast balances
+      await db.run('UPDATE beast_profiles SET balance_sol = 0, balance_usdc = 0, balance_usd = 0')
+
+      // Clear phantom ledger entries (no tx_signature = phantom)
+      const phantomDeleted = await db.run('DELETE FROM beast_treasury_txns WHERE tx_signature IS NULL')
+
+      // Clear phantom DCB transfers
+      await db.run('DELETE FROM beast_dcb_transfers')
+
+      // Clear phantom withdrawals (no tx_signature = never sent)
+      await db.run('DELETE FROM beast_withdrawals WHERE tx_signature IS NULL')
+
+      // Clear phantom bets (all were internal)
+      await db.run('DELETE FROM beast_bets')
+      await db.run('DELETE FROM beast_live_wins')
+      await db.run('DELETE FROM beast_tips')
+
+      // Insert fresh-start ledger entry
+      await db.run(
+        'INSERT INTO beast_treasury_txns (type, currency, amount, user_id, username, details) VALUES (?,?,?,?,?,?)',
+        ['fresh_start', 'SOL', 0, req.user.id, req.user.username || 'Owner',
+         `Fresh start: all phantom data cleared. On-chain mode active. Treasury wallet: ${tw?.wallet_address || 'NOT SET'}`]
+      )
+
+      console.log(`[Beast] 🔄 FRESH START executed by owner. All phantom data cleared.`)
+      res.json({
+        ok: true, message: 'Fresh start complete. All phantom data cleared.',
+        phantomLedgerEntriesRemoved: phantomDeleted?.changes || 0,
+        treasuryWallet: tw?.wallet_address || null
+      })
     } catch (err) {
+      console.error('[Beast] fresh-start error:', err)
+      res.status(500).json({ error: 'Fresh start failed' })
+    }
+  })
+
+  // GET /api/beast/fee-schedule - public: shows the Illy Beast fee tiers
+  app.get('/api/beast/fee-schedule', (req, res) => {
+    res.json({
+      name: 'Illy Beast Transaction Fee',
+      tiers: [
+        { maxSol: 0.1, percent: 5, label: '≤ 0.1 SOL' },
+        { maxSol: 1, percent: 3, label: '≤ 1 SOL' },
+        { maxSol: 10, percent: 2, label: '≤ 10 SOL' },
+        { maxSol: Infinity, percent: 1, label: '> 10 SOL' }
+      ],
+      appliesTo: ['withdrawals'],
+      note: 'Fees are deducted from withdrawal amount before on-chain transfer.'
+    })
+  })} catch (err) {
       console.error('[Beast] reset-deposit-tracking error:', err)
       res.status(500).json({ error: 'Reset failed' })
     }
