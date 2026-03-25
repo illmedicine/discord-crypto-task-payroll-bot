@@ -2160,3 +2160,293 @@
     display: none;
   }
 }
+
+/* ── Multi-Wallet & Transaction Display ── */
+
+/* Game result transaction links */
+.beast-result-txns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.beast-tx-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+.beast-tx-link:hover { opacity: 0.8; }
+.beast-tx-link.wager {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+.beast-tx-link.payout {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+
+/* New winnings wallet callout in game result */
+.beast-result-new-wallet {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: rgba(168, 85, 247, 0.1);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: #c084fc;
+}
+.beast-result-new-wallet a {
+  color: #a78bfa;
+  text-decoration: underline;
+}
+.beast-result-wallet-icon { font-size: 1rem; }
+.beast-result-wallet-amt {
+  font-weight: 700;
+  color: var(--beast-accent-green, #22c55e);
+  margin-left: 4px;
+}
+
+/* Bet history chain link */
+.beast-history-tx {
+  font-size: 0.7rem;
+  text-decoration: none;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+.beast-history-tx:hover { opacity: 1; }
+
+/* Wallet breakdown panel in game player controls */
+.beast-wallets-panel {
+  margin-top: 12px;
+  border: 1px solid var(--beast-border, rgba(255,255,255,0.08));
+  border-radius: var(--beast-radius, 8px);
+  overflow: hidden;
+}
+.beast-wallets-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  color: var(--beast-text-muted, #a0a0b0);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+}
+.beast-wallets-toggle:hover { background: rgba(255, 255, 255, 0.06); }
+.beast-wallets-total {
+  margin-left: auto;
+  color: var(--beast-accent-green, #22c55e);
+  font-weight: 600;
+}
+.beast-wallets-list {
+  padding: 4px 8px 8px;
+}
+.beast-wallet-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+.beast-wallet-row.deposit { background: rgba(99, 102, 241, 0.06); }
+.beast-wallet-row.winnings { background: rgba(245, 158, 11, 0.06); }
+.beast-wallet-type-badge { font-size: 0.85rem; }
+.beast-wallet-label {
+  flex: 1;
+  color: var(--beast-text, #e0e0e0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+.beast-wallet-addr {
+  color: var(--beast-accent, #a78bfa);
+  text-decoration: none;
+  font-family: monospace;
+  font-size: 0.7rem;
+}
+.beast-wallet-addr:hover { text-decoration: underline; }
+.beast-wallet-bal {
+  font-weight: 600;
+  color: var(--beast-accent-green, #22c55e);
+  font-family: monospace;
+  min-width: 80px;
+  text-align: right;
+}
+
+/* Cashier wallet tab - wallets list cards */
+.beast-wallet-overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.beast-wallet-overview-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--beast-text, #e0e0e0);
+}
+.beast-wallet-refresh-btn {
+  background: rgba(168, 85, 247, 0.12);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  color: #a78bfa;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+.beast-wallet-refresh-btn:hover { background: rgba(168, 85, 247, 0.2); }
+.beast-wallet-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.beast-wallet-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--beast-text-muted, #a0a0b0);
+}
+
+.beast-wallet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.beast-wallet-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--beast-border, rgba(255,255,255,0.08));
+  border-radius: 10px;
+  padding: 12px;
+  transition: border-color 0.2s;
+}
+.beast-wallet-card:hover { border-color: rgba(168, 85, 247, 0.3); }
+.beast-wallet-card.deposit { border-left: 3px solid #6366f1; }
+.beast-wallet-card.winnings { border-left: 3px solid #f59e0b; }
+
+.beast-wallet-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.beast-wallet-card-icon { font-size: 1.1rem; }
+.beast-wallet-card-label {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--beast-text, #e0e0e0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.beast-wallet-card-type {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+.beast-wallet-card-type.deposit {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+}
+.beast-wallet-card-type.winnings {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.beast-wallet-card-addr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.beast-wallet-card-addr a {
+  color: #a78bfa;
+  font-family: monospace;
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+.beast-wallet-card-addr a:hover { text-decoration: underline; }
+
+.beast-wallet-copy-sm {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+.beast-wallet-copy-sm:hover { opacity: 1; }
+
+.beast-wallet-card-bal {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.beast-wallet-card-sol {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--beast-accent-green, #22c55e);
+  font-family: monospace;
+}
+.beast-wallet-card-usd {
+  font-size: 0.78rem;
+  color: var(--beast-text-muted, #a0a0b0);
+}
+
+.beast-wallet-total-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--beast-text-muted, #a0a0b0);
+  margin-top: 4px;
+}
+.beast-wallet-total-val {
+  font-weight: 700;
+  color: var(--beast-accent-green, #22c55e);
+  font-family: monospace;
+}
+
+/* Multi-wallet note in withdraw/tip */
+.beast-wallet-multi-note {
+  font-size: 0.72rem;
+  color: #a78bfa;
+  margin-left: 4px;
+}
+
+/* TX confirmation link in message bar */
+.beast-tx-confirm-link {
+  display: inline-block;
+  margin-left: 8px;
+  color: #a78bfa;
+  text-decoration: underline;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.beast-tx-confirm-link:hover { color: #c084fc; }

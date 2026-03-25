@@ -12,6 +12,24 @@ interface Game {
   maxBet: number
 }
 
+interface WalletInfo {
+  type: string
+  address: string
+  balance: number
+  label: string
+}
+
+interface GameResult {
+  won: boolean
+  payout: number
+  multiplier: number
+  details: string
+  wagerTx?: string
+  payoutTx?: string
+  newWinningsWallet?: { address: string; amount: number }
+  wallets?: WalletInfo[]
+}
+
 interface Props {
   game: Game
   balance: { sol: number; usdc: number; usd: number }
@@ -19,6 +37,10 @@ interface Props {
 }
 
 type Currency = 'SOL' | 'USDC' | 'USD'
+
+const SOLSCAN_TX = 'https://solscan.io/tx/'
+const SOLSCAN_ADDR = 'https://solscan.io/account/'
+const truncAddr = (a: string) => a ? `${a.slice(0, 6)}...${a.slice(-4)}` : ''
 
 /**
  * Game player UI – renders the interactive game canvas for each game type.
@@ -28,11 +50,12 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   const [betAmount, setBetAmount] = useState(game.minBet.toString())
   const [currency, setCurrency] = useState<Currency>('USDC')
   const [playing, setPlaying] = useState(false)
-  const [result, setResult] = useState<{ won: boolean; payout: number; multiplier: number; details: string } | null>(null)
-  const [history, setHistory] = useState<Array<{ won: boolean; payout: number; multiplier: number; timestamp: number }>>([])
+  const [result, setResult] = useState<GameResult | null>(null)
+  const [history, setHistory] = useState<Array<{ won: boolean; payout: number; multiplier: number; timestamp: number; wagerTx?: string; payoutTx?: string }>>([])              
   const [autoPlay, setAutoPlay] = useState(false)
   const [autoCount, setAutoCount] = useState(0)
-
+  const [userWallets, setUserWallets] = useState<WalletInfo[]>([])
+  const [showWallets, setShowWallets] = useState(false)
   // Treasury limits
   const [treasuryLimits, setTreasuryLimits] = useState<{ sol: number; usdc: number; usd: number } | null>(null)
   const [solPrice, setSolPrice] = useState(0)
@@ -134,7 +157,8 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       const r = await api.post('/beast/games/play', payload)
       const res = r.data
       setResult(res)
-      setHistory(prev => [{ won: res.won, payout: res.payout, multiplier: res.multiplier, timestamp: Date.now() }, ...prev].slice(0, 20))
+      setHistory(prev => [{ won: res.won, payout: res.payout, multiplier: res.multiplier, timestamp: Date.now(), wagerTx: res.wagerTx, payoutTx: res.payoutTx }, ...prev].slice(0, 20))
+      if (res.wallets) setUserWallets(res.wallets)
       if (res.balance) onBalanceChange(res.balance)
       // Refresh treasury limits after each bet
       api.get('/beast/treasury/max-payout').then(r2 => setTreasuryLimits(r2.data)).catch(() => {})
@@ -182,6 +206,13 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                     <div className="beast-result-label">YOU WON!</div>
                     <div className="beast-result-payout">+{result.payout.toFixed(4)} {currency}</div>
                     <div className="beast-result-multi">{result.multiplier}x</div>
+                    {result.newWinningsWallet && (
+                      <div className="beast-result-new-wallet">
+                        <span className="beast-result-wallet-icon">💰</span>
+                        New winnings wallet: <a href={`${SOLSCAN_ADDR}${result.newWinningsWallet.address}`} target="_blank" rel="noopener noreferrer">{truncAddr(result.newWinningsWallet.address)}</a>
+                        <span className="beast-result-wallet-amt">+{result.newWinningsWallet.amount.toFixed(6)} SOL</span>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -189,6 +220,19 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                     <div className="beast-result-detail">{result.details}</div>
                   </>
                 )}
+                {/* On-chain transaction links */}
+                <div className="beast-result-txns">
+                  {result.wagerTx && (
+                    <a href={`${SOLSCAN_TX}${result.wagerTx}`} target="_blank" rel="noopener noreferrer" className="beast-tx-link wager">
+                      ⛓ Wager TX: {truncAddr(result.wagerTx)}
+                    </a>
+                  )}
+                  {result.payoutTx && (
+                    <a href={`${SOLSCAN_TX}${result.payoutTx}`} target="_blank" rel="noopener noreferrer" className="beast-tx-link payout">
+                      ⛓ Payout TX: {truncAddr(result.payoutTx)}
+                    </a>
+                  )}
+                </div>
               </div>
             )}
             {!result && !playing && (
@@ -306,6 +350,28 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
             {playing ? 'Playing...' : `BET ${betAmount} ${currency}`}
           </button>
 
+          {/* Wallet Breakdown Toggle */}
+          {userWallets.length > 0 && (
+            <div className="beast-wallets-panel">
+              <button className="beast-wallets-toggle" onClick={() => setShowWallets(!showWallets)}>
+                {showWallets ? '▾' : '▸'} My Wallets ({userWallets.length})
+                <span className="beast-wallets-total">{userWallets.reduce((s, w) => s + w.balance, 0).toFixed(6)} SOL</span>
+              </button>
+              {showWallets && (
+                <div className="beast-wallets-list">
+                  {userWallets.map((w, i) => (
+                    <div key={i} className={`beast-wallet-row ${w.type}`}>
+                      <span className="beast-wallet-type-badge">{w.type === 'deposit' ? '📥' : '🏆'}</span>
+                      <span className="beast-wallet-label">{w.label || (w.type === 'deposit' ? 'Deposit Wallet' : 'Winnings')}</span>
+                      <a href={`${SOLSCAN_ADDR}${w.address}`} target="_blank" rel="noopener noreferrer" className="beast-wallet-addr">{truncAddr(w.address)}</a>
+                      <span className="beast-wallet-bal">{w.balance.toFixed(6)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Bet History */}
           {history.length > 0 && (
             <div className="beast-bet-history">
@@ -317,6 +383,9 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                   <span className={h.won ? 'beast-win-amount' : 'beast-loss-amount'}>
                     {h.won ? '+' : '-'}{h.payout.toFixed(4)}
                   </span>
+                  {h.wagerTx && (
+                    <a href={`${SOLSCAN_TX}${h.wagerTx}`} target="_blank" rel="noopener noreferrer" className="beast-history-tx" title="View wager TX">⛓</a>
+                  )}
                 </div>
               ))}
             </div>

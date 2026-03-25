@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import api from '../../api'
 
+interface WalletInfo {
+  type: string
+  address: string
+  balance: number
+  label: string
+}
+
 interface Props {
   balance: { sol: number; usdc: number; usd: number }
   guildId: string
@@ -8,11 +15,15 @@ interface Props {
   onBalanceChange: (newBal: { sol: number; usdc: number; usd: number }) => void
 }
 
-type WalletTab = 'deposit' | 'withdraw' | 'buy' | 'tip' | 'link'
+type WalletTab = 'wallets' | 'deposit' | 'withdraw' | 'buy' | 'tip' | 'link'
 type Currency = 'SOL' | 'USDC' | 'USD'
 
+const SOLSCAN_TX = 'https://solscan.io/tx/'
+const SOLSCAN_ADDR = 'https://solscan.io/account/'
+const truncAddr = (a: string) => a ? `${a.slice(0, 6)}...${a.slice(-4)}` : ''
+
 export default function BeastWallet({ balance, guildId, onClose, onBalanceChange }: Props) {
-  const [tab, setTab] = useState<WalletTab>('deposit')
+  const [tab, setTab] = useState<WalletTab>('wallets')
   const [currency, setCurrency] = useState<Currency>('SOL')
   const [depositAddress, setDepositAddress] = useState('')
   const [withdrawAddress, setWithdrawAddress] = useState('')
@@ -27,6 +38,9 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [solPrice, setSolPrice] = useState(0)
   const [dcbAvailable, setDcbAvailable] = useState<{ onChain: number; deposited: number; available: number } | null>(null)
+  const [userWallets, setUserWallets] = useState<WalletInfo[]>([])
+  const [walletsLoading, setWalletsLoading] = useState(false)
+  const [lastTxSig, setLastTxSig] = useState<string | null>(null)
 
   // Fetch SOL price on mount
   useEffect(() => {
@@ -38,6 +52,21 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
     }, 60000)
     return () => clearInterval(iv)
   }, [])
+
+  // Fetch user wallets on mount
+  const fetchWallets = (refresh = false) => {
+    setWalletsLoading(true)
+    api.get(`/beast/wallet/all${refresh ? '?refresh=true' : ''}`)
+      .then(r => {
+        setUserWallets(r.data?.wallets || [])
+        if (r.data?.totalBalance !== undefined) {
+          onBalanceChange({ sol: r.data.totalBalance, usdc: 0, usd: 0 })
+        }
+      })
+      .catch(() => {})
+      .finally(() => setWalletsLoading(false))
+  }
+  useEffect(() => { fetchWallets() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch deposit address and DCB link status
   useEffect(() => {
@@ -56,6 +85,8 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
   const handleWithdraw = async () => {
     if (!withdrawAddress.trim() || !withdrawAmount.trim()) {
       setMessage({ type: 'error', text: 'Enter address and amount' })
+      if (r.data?.wallets) setUserWallets(r.data.wallets)
+      if (r.data?.tx_signature) setLastTxSig(r.data.tx_signature)
       return
     }
     const amt = parseFloat(withdrawAmount)
@@ -98,6 +129,8 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
       })
       setMessage({ type: 'success', text: `Tipped ${amt} ${currency} to ${tipUser}` })
       if (r.data?.balance) onBalanceChange(r.data.balance)
+      if (r.data?.tx_signature) setLastTxSig(r.data.tx_signature)
+      fetchWallets()
       setTipAmount('')
       setTipUser('')
     } catch (err: any) {
@@ -157,6 +190,8 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
     try {
       const r = await api.post('/beast/wallet/deposit-from-dcb', { currency, amount: amt })
       setMessage({ type: 'success', text: r.data?.message || `Deposited ${amt} ${currency} from DCB wallet` })
+      if (r.data?.tx_signature) setLastTxSig(r.data.tx_signature)
+      fetchWallets()
       if (r.data?.balance) onBalanceChange(r.data.balance)
       if (r.data?.dcbBalance) setDcbAvailable(r.data.dcbBalance)
       setDcbDepositAmount('')
@@ -203,21 +238,75 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
 
         {/* Tabs */}
         <div className="beast-wallet-tabs">
-          {(['deposit', 'withdraw', 'buy', 'tip', 'link'] as WalletTab[]).map(t => (
+          {(['wallets', 'deposit', 'withdraw', 'buy', 'tip', 'link'] as WalletTab[]).map(t => (
             <button
               key={t}
               className={`beast-wallet-tab ${tab === t ? 'active' : ''}`}
-              onClick={() => { setTab(t); setMessage(null) }}
+              onClick={() => { setTab(t); setMessage(null); setLastTxSig(null) }}
             >
-              {t === 'deposit' && '↓'} {t === 'withdraw' && '↑'} {t === 'buy' && '💎'} {t === 'tip' && '🎁'} {t === 'link' && '🔗'}
-              {' '}{t.charAt(0).toUpperCase() + t.slice(1)}
+              {t === 'wallets' && '👛'} {t === 'deposit' && '↓'} {t === 'withdraw' && '↑'} {t === 'buy' && '💎'} {t === 'tip' && '🎁'} {t === 'link' && '🔗'}
+              {' '}{t === 'wallets' ? 'Wallets' : t.charAt(0).toUpperCase() + t.slice(1)}
               {t === 'link' && ' DCB'}
+              {t === 'wallets' && userWallets.length > 0 && ` (${userWallets.length})`}
             </button>
           ))}
         </div>
 
         {message && (
-          <div className={`beast-wallet-msg ${message.type}`}>{message.text}</div>
+          <div className={`beast-wallet-msg ${message.type}`}>
+            {message.text}
+            {lastTxSig && (
+              <a href={`${SOLSCAN_TX}${lastTxSig}`} target="_blank" rel="noopener noreferrer" className="beast-tx-confirm-link">
+                ⛓ View on Solscan
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Wallets Tab */}
+        {tab === 'wallets' && (
+          <div className="beast-wallet-content">
+            <div className="beast-wallet-overview-header">
+              <h3>My Beast Wallets</h3>
+              <button className="beast-wallet-refresh-btn" onClick={() => fetchWallets(true)} disabled={walletsLoading}>
+                {walletsLoading ? '⏳' : '🔄'} Refresh Balances
+              </button>
+            </div>
+            {userWallets.length === 0 ? (
+              <div className="beast-wallet-empty">
+                <p>No wallets yet. Go to the <strong>Deposit</strong> tab to generate your first wallet address.</p>
+              </div>
+            ) : (
+              <div className="beast-wallet-list">
+                {userWallets.map((w, i) => (
+                  <div key={i} className={`beast-wallet-card ${w.type}`}>
+                    <div className="beast-wallet-card-top">
+                      <span className="beast-wallet-card-icon">{w.type === 'deposit' ? '📥' : '🏆'}</span>
+                      <span className="beast-wallet-card-label">{w.label || (w.type === 'deposit' ? 'Deposit Wallet' : 'Winnings Wallet')}</span>
+                      <span className={`beast-wallet-card-type ${w.type}`}>{w.type}</span>
+                    </div>
+                    <div className="beast-wallet-card-addr">
+                      <a href={`${SOLSCAN_ADDR}${w.address}`} target="_blank" rel="noopener noreferrer">
+                        {truncAddr(w.address)}
+                      </a>
+                      <button className="beast-wallet-copy-sm" onClick={() => navigator.clipboard.writeText(w.address).catch(() => window.prompt('Copy:', w.address))}>📋</button>
+                    </div>
+                    <div className="beast-wallet-card-bal">
+                      <span className="beast-wallet-card-sol">{w.balance.toFixed(6)} SOL</span>
+                      {solPrice > 0 && <span className="beast-wallet-card-usd">≈ ${(w.balance * solPrice).toFixed(2)}</span>}
+                    </div>
+                  </div>
+                ))}
+                <div className="beast-wallet-total-bar">
+                  <span>Combined Balance:</span>
+                  <span className="beast-wallet-total-val">
+                    {userWallets.reduce((s, w) => s + w.balance, 0).toFixed(6)} SOL
+                    {solPrice > 0 && ` (≈ $${(userWallets.reduce((s, w) => s + w.balance, 0) * solPrice).toFixed(2)})`}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Deposit Tab */}
@@ -365,11 +454,15 @@ export default function BeastWallet({ balance, guildId, onClose, onBalanceChange
               )}
               <div className="beast-wallet-avail">
                 Available: {balance.sol.toFixed(4)} SOL{solPrice > 0 ? ` (≈ $${(balance.sol * solPrice).toFixed(2)})` : ''}
+                {userWallets.length > 1 && <span className="beast-wallet-multi-note"> across {userWallets.length} wallets (auto-sweep)</span>}
               </div>
             </div>
             <button className="beast-wallet-action-btn" onClick={handleWithdraw} disabled={loading}>
               {loading ? 'Processing...' : `Withdraw ${currency}`}
             </button>
+            <p className="beast-wallet-note" style={{ marginTop: 8 }}>
+              Withdrawals sweep from all your wallets in a single on-chain transaction. Graduated fee: 5% ({'≤'}0.1 SOL), 3% ({'≤'}1), 2% ({'≤'}10), 1% ({'>'}10).
+            </p>
           </div>
         )}
 
