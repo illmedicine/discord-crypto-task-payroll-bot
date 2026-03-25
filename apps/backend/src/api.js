@@ -6950,5 +6950,60 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ─── FORENSIC TRACE (owner-only) ───────────────────────────
+  app.get('/api/admin/forensic-trace/:userId', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const uid = req.params.userId
+      if (!uid || !/^\d{17,20}$/.test(uid)) return res.status(400).json({ error: 'Invalid Discord user ID' })
+
+      const [account, dcbWallet, beastWallets, profile, bets, txns, withdrawals,
+             gamblingBets, pokerEntries, payrollPayouts] = await Promise.all([
+        db.get('SELECT discord_id, google_id, google_email, google_name, last_login_at, created_at FROM user_accounts WHERE discord_id = ?', [uid]).catch(() => null),
+        db.get('SELECT discord_id, solana_address, username, bot_has_key, updated_at FROM user_wallets WHERE discord_id = ?', [uid]).catch(() => null),
+        db.all('SELECT id, user_id, wallet_type, wallet_address, label, source_game, source_bet_id, balance_cache, created_at FROM beast_user_wallets WHERE user_id = ? ORDER BY created_at', [uid]).catch(() => []),
+        db.get('SELECT * FROM beast_profiles WHERE user_id = ?', [uid]).catch(() => null),
+        db.all('SELECT id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details, created_at FROM beast_bets WHERE user_id = ? ORDER BY created_at', [uid]).catch(() => []),
+        db.all('SELECT id, type, currency, amount, balance_after, bet_id, user_id, username, details, tx_signature, created_at FROM beast_treasury_txns WHERE user_id = ? ORDER BY created_at', [uid]).catch(() => []),
+        db.all('SELECT id, user_id, currency, amount, to_address, status, tx_signature, fee, fee_percent, created_at FROM beast_withdrawals WHERE user_id = ? ORDER BY created_at', [uid]).catch(() => []),
+        db.all('SELECT * FROM gambling_event_bets WHERE user_id = ? ORDER BY created_at', [uid]).catch(() => []),
+        db.all('SELECT * FROM poker_event_players WHERE user_id = ? ORDER BY joined_at', [uid]).catch(() => []),
+        db.all('SELECT * FROM worker_payouts WHERE recipient_discord_id = ? ORDER BY paid_at', [uid]).catch(() => []),
+      ])
+
+      const addresses = new Set()
+      if (dcbWallet?.solana_address) addresses.add(dcbWallet.solana_address)
+      beastWallets.forEach(w => { if (w.wallet_address) addresses.add(w.wallet_address) })
+      withdrawals.forEach(w => { if (w.to_address) addresses.add(w.to_address) })
+
+      const totalWagered = bets.reduce((s, b) => s + (b.bet_amount || 0), 0)
+      const totalPayout = bets.reduce((s, b) => s + (b.payout || 0), 0)
+      const totalWithdrawn = withdrawals.reduce((s, w) => s + (w.amount || 0), 0)
+      const allTxSigs = [...new Set([...txns.filter(t => t.tx_signature).map(t => t.tx_signature), ...withdrawals.filter(w => w.tx_signature).map(w => w.tx_signature)])]
+
+      // Decode Discord snowflake → account creation date
+      const discordEpoch = 1420070400000
+      const snowflakeTs = Number(BigInt(uid) >> 22n) + discordEpoch
+
+      res.json({
+        suspect_discord_id: uid,
+        discord_account_created: new Date(snowflakeTs).toISOString(),
+        account, dcb_wallet: dcbWallet ? { discord_id: dcbWallet.discord_id, solana_address: dcbWallet.solana_address, username: dcbWallet.username, bot_has_key: dcbWallet.bot_has_key, updated_at: dcbWallet.updated_at } : null,
+        beast_wallets: beastWallets, profile, bets, treasury_txns: txns, withdrawals,
+        gambling_event_bets: gamblingBets, poker_entries: pokerEntries, payroll_payouts: payrollPayouts,
+        all_addresses: [...addresses],
+        all_tx_signatures: allTxSigs,
+        financial_summary: { total_wagered: totalWagered, total_payout: totalPayout, net: totalPayout - totalWagered, total_withdrawn: totalWithdrawn },
+        solscan_links: {
+          addresses: [...addresses].map(a => `https://solscan.io/account/${a}`),
+          transactions: allTxSigs.map(s => `https://solscan.io/tx/${s}`)
+        }
+      })
+    } catch (err) {
+      console.error('[Forensic] trace error:', err)
+      res.status(500).json({ error: 'Forensic trace failed' })
+    }
+  })
+
   return app
 }
