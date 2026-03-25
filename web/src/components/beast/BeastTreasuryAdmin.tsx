@@ -6,7 +6,10 @@ interface Props {
 }
 
 type LedgerTab = 'overview' | 'ledger' | 'deposits' | 'load'
-type TxnFilter = 'all' | 'wager_in' | 'payout' | 'deposit_from_dcb' | 'load' | 'withdrawal'
+type TxnFilter = 'all' | 'wager_in' | 'payout' | 'deposit_from_dcb' | 'load' | 'withdrawal' | 'fee_collected'
+
+const SOLSCAN_TX = 'https://solscan.io/tx/'
+const truncSig = (s: string) => s ? `${s.slice(0, 6)}…${s.slice(-4)}` : ''
 
 export default function BeastTreasuryAdmin({ onClose }: Props) {
   const [treasury, setTreasury] = useState<any>(null)
@@ -76,6 +79,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
       case 'deposit_from_dcb': return '📥 DCB Deposit'
       case 'load': return '🏦 Treasury Load'
       case 'withdrawal': return '📤 Withdrawal'
+      case 'fee_collected': return '💎 Fee'
       default: return type
     }
   }
@@ -86,6 +90,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
       case 'deposit_from_dcb': return '#3b82f6'
       case 'load': return '#f59e0b'
       case 'withdrawal': return '#a855f7'
+      case 'fee_collected': return '#06b6d4'
       default: return '#888'
     }
   }
@@ -168,6 +173,11 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                       <span style={{ color: txnTypeColor(tx.type), minWidth: 110 }}>{txnTypeLabel(tx.type)}</span>
                       <span style={{ flex: 1, color: '#ccc', marginLeft: 8 }}>{tx.username || tx.user_id?.slice(0, 8) || '—'}</span>
                       <span style={{ fontWeight: 600, minWidth: 80, textAlign: 'right' }}>{parseFloat(tx.amount || 0).toFixed(4)} {tx.currency}</span>
+                      {tx.tx_signature ? (
+                        <a href={`${SOLSCAN_TX}${tx.tx_signature}`} target="_blank" rel="noopener noreferrer" style={{ color: '#a78bfa', fontSize: '0.7rem', marginLeft: 6, textDecoration: 'none', whiteSpace: 'nowrap' }} title={tx.tx_signature}>⛓ {truncSig(tx.tx_signature)}</a>
+                      ) : (
+                        <span style={{ color: '#555', fontSize: '0.7rem', marginLeft: 6, minWidth: 40 }}>—</span>
+                      )}
                       <span style={{ color: '#666', marginLeft: 8, fontSize: '0.7rem', minWidth: 90, textAlign: 'right' }}>{new Date(tx.created_at).toLocaleString()}</span>
                     </div>
                   ))}
@@ -180,7 +190,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
           {tab === 'ledger' && (
             <>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
-                {(['all', 'wager_in', 'payout', 'deposit_from_dcb', 'load', 'withdrawal'] as TxnFilter[]).map(f => (
+                {(['all', 'wager_in', 'payout', 'deposit_from_dcb', 'load', 'withdrawal', 'fee_collected'] as TxnFilter[]).map(f => (
                   <button key={f} onClick={() => { setLedgerFilter(f); setLedgerPage(0) }} style={{
                     padding: '4px 10px', borderRadius: 6, border: 'none', fontSize: '0.75rem', cursor: 'pointer',
                     background: ledgerFilter === f ? '#a78bfa' : 'rgba(255,255,255,0.08)',
@@ -203,6 +213,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                       <th style={{ padding: '6px 4px', textAlign: 'left' }}>User</th>
                       <th style={{ padding: '6px 4px', textAlign: 'right' }}>Amount</th>
                       <th style={{ padding: '6px 4px', textAlign: 'left' }}>Currency</th>
+                      <th style={{ padding: '6px 4px', textAlign: 'center' }}>TX</th>
                       <th style={{ padding: '6px 4px', textAlign: 'left' }}>Details</th>
                       <th style={{ padding: '6px 4px', textAlign: 'right' }}>Date/Time</th>
                     </tr>
@@ -216,6 +227,17 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                           {tx.type === 'payout' || tx.type === 'withdrawal' ? '-' : '+'}{parseFloat(tx.amount || 0).toFixed(6)}
                         </td>
                         <td style={{ padding: '5px 4px', color: '#a78bfa' }}>{tx.currency}</td>
+                        <td style={{ padding: '5px 4px', textAlign: 'center' }}>
+                          {tx.tx_signature ? (
+                            <a href={`${SOLSCAN_TX}${tx.tx_signature}`} target="_blank" rel="noopener noreferrer"
+                              style={{ color: '#a78bfa', fontSize: '0.72rem', textDecoration: 'none', fontFamily: 'monospace', padding: '2px 6px', background: 'rgba(168,85,247,0.1)', borderRadius: 4, border: '1px solid rgba(168,85,247,0.25)' }}
+                              title={`View on Solscan: ${tx.tx_signature}`}>
+                              ⛓ {truncSig(tx.tx_signature)}
+                            </a>
+                          ) : (
+                            <span style={{ color: '#444', fontSize: '0.7rem' }}>—</span>
+                          )}
+                        </td>
                         <td style={{ padding: '5px 4px', color: '#999', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tx.details}>{tx.details || '—'}</td>
                         <td style={{ padding: '5px 4px', textAlign: 'right', color: '#666', whiteSpace: 'nowrap', fontSize: '0.72rem' }}>{new Date(tx.created_at).toLocaleString()}</td>
                       </tr>
