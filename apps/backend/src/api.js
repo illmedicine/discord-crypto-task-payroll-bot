@@ -6486,16 +6486,25 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   // ── Beast Treasury ──
   const BEAST_OWNER_ID = '1075818871149305966'
 
-  // GET /api/beast/treasury/max-payout - public: treasury balance available per currency
+  // GET /api/beast/treasury/max-payout - public: on-chain treasury balance (single source of truth)
   app.get('/api/beast/treasury/max-payout', async (req, res) => {
     try {
-      const treasury = await db.get('SELECT balance_sol, balance_usdc, balance_usd FROM beast_treasury WHERE id = ?', ['beast_main'])
-      res.json({
-        sol: parseFloat(treasury?.balance_sol || 0),
-        usdc: parseFloat(treasury?.balance_usdc || 0),
-        usd: parseFloat(treasury?.balance_usd || 0),
-      })
-    } catch { res.json({ sol: 0, usdc: 0, usd: 0 }) }
+      const tw = await getBeastTreasuryWallet()
+      if (!tw) return res.json({ sol: 0, usdc: 0, usd: 0 })
+      const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+      const conn = new Connection(rpcUrl, 'confirmed')
+      const lamports = await conn.getBalance(new PublicKey(tw.wallet_address))
+      const onChainSol = lamports / LAMPORTS_PER_SOL
+      // Sync DB to on-chain
+      await db.run('UPDATE beast_treasury SET balance_sol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [onChainSol, 'beast_main'])
+      res.json({ sol: onChainSol, usdc: 0, usd: 0 })
+    } catch {
+      // Fallback to DB if RPC fails
+      try {
+        const treasury = await db.get('SELECT balance_sol FROM beast_treasury WHERE id = ?', ['beast_main'])
+        res.json({ sol: parseFloat(treasury?.balance_sol || 0), usdc: 0, usd: 0 })
+      } catch { res.json({ sol: 0, usdc: 0, usd: 0 }) }
+    }
   })
 
   // GET /api/beast/treasury - owner only: full treasury view with on-chain balance

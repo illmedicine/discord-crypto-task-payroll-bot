@@ -5,7 +5,7 @@ interface Props {
   onClose: () => void
 }
 
-type LedgerTab = 'overview' | 'ledger' | 'deposits' | 'load'
+type LedgerTab = 'overview' | 'ledger' | 'deposits'
 type TxnFilter = 'all' | 'wager_in' | 'payout' | 'deposit_from_dcb' | 'load' | 'withdrawal' | 'fee_collected'
 
 const SOLSCAN_TX = 'https://solscan.io/tx/'
@@ -18,8 +18,6 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
   const [ledgerFilter, setLedgerFilter] = useState<TxnFilter>('all')
   const [ledgerPage, setLedgerPage] = useState(0)
   const [tab, setTab] = useState<LedgerTab>('overview')
-  const [loadCurrency, setLoadCurrency] = useState<'SOL' | 'USDC' | 'USD'>('USD')
-  const [loadAmount, setLoadAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [walletInfo, setWalletInfo] = useState<{ configured: boolean; address?: string; onChainSol?: number } | null>(null)
@@ -55,26 +53,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
     }
   }
 
-  const handleLoad = async () => {
-    const amt = parseFloat(loadAmount)
-    if (isNaN(amt) || amt <= 0) {
-      setMessage({ type: 'error', text: 'Enter a valid amount' })
-      return
-    }
-    setLoading(true)
-    setMessage(null)
-    try {
-      const r = await api.post('/beast/treasury/load', { currency: loadCurrency, amount: amt })
-      setTreasury(r.data?.treasury)
-      setMessage({ type: 'success', text: `Loaded ${amt} ${loadCurrency} into treasury` })
-      setLoadAmount('')
-      fetchTreasury()
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err?.response?.data?.error || 'Failed to load funds' })
-    } finally {
-      setLoading(false)
-    }
-  }
+
 
   const profit = treasury
     ? parseFloat(treasury.total_collected || 0) - parseFloat(treasury.total_payouts || 0)
@@ -115,12 +94,12 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
 
         {/* Tabs */}
         <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)', padding: '0 16px' }}>
-          {(['overview', 'ledger', 'deposits', 'load'] as LedgerTab[]).map(t => (
+          {(['overview', 'ledger', 'deposits'] as LedgerTab[]).map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               padding: '10px 16px', background: 'none', border: 'none', color: tab === t ? '#a78bfa' : '#888',
               borderBottom: tab === t ? '2px solid #a78bfa' : '2px solid transparent',
               cursor: 'pointer', fontWeight: tab === t ? 700 : 400, fontSize: '0.85rem', textTransform: 'uppercase'
-            }}>{t === 'overview' ? '📊 Overview' : t === 'ledger' ? '📒 Ledger' : t === 'deposits' ? '📥 Deposits' : '🏦 Load'}</button>
+            }}>{t === 'overview' ? '📊 Overview' : t === 'ledger' ? '📒 Ledger' : '📥 Deposits'}</button>
           ))}
         </div>
 
@@ -357,35 +336,6 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                 </tbody>
               </table>
             </>
-          )}
-
-          {/* ─── LOAD FUNDS TAB ─── */}
-          {tab === 'load' && (
-            <div style={{ maxWidth: 360, margin: '0 auto' }}>
-              <div className="beast-wallet-field">
-                <label>LOAD FUNDS INTO TREASURY</label>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                  <select value={loadCurrency} onChange={e => setLoadCurrency(e.target.value as any)} className="beast-wallet-select" style={{ flex: '0 0 80px' }}>
-                    <option value="SOL">SOL</option>
-                    <option value="USDC">USDC</option>
-                    <option value="USD">USD</option>
-                  </select>
-                  <input
-                    type="number"
-                    value={loadAmount}
-                    onChange={e => setLoadAmount(e.target.value)}
-                    placeholder="Amount"
-                    step="0.01"
-                    min="0"
-                    className="beast-wallet-input"
-                    style={{ flex: 1 }}
-                  />
-                  <button className="beast-wallet-action-btn" onClick={handleLoad} disabled={loading} style={{ flex: '0 0 70px' }}>
-                    {loading ? '...' : 'Load'}
-                  </button>
-                </div>
-              </div>
-            </div>
           )}
 
           {!treasury && tab === 'overview' && (
