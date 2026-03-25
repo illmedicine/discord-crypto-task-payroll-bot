@@ -5282,6 +5282,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         console.log('[Beast] ✅ Phantom data purge complete. All balances reset to 0.')
       }
 
+      // ── One-time USD purge: remove DB-only $10 USD fake balance ──
+      const usdPurgeFlag = await db.get("SELECT 1 FROM beast_treasury_txns WHERE type = 'usd_purge_v1' LIMIT 1")
+      if (!usdPurgeFlag) {
+        console.log('[Beast] 🔄 Purging DB-only USD balance (no on-chain backing)...')
+        await db.run("UPDATE beast_treasury SET balance_usd = 0, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'")
+        await db.run("DELETE FROM beast_treasury_txns WHERE currency = 'USD' AND tx_signature IS NULL")
+        await db.run("INSERT INTO beast_treasury_txns (type, currency, amount, details) VALUES ('usd_purge_v1', 'USD', 0, 'Purged DB-only USD balance with no on-chain backing')")
+        console.log('[Beast] ✅ USD purge complete.')
+      }
+
       // ── Multi-wallet system: beast_user_wallets table ──
       await db.run(`CREATE TABLE IF NOT EXISTS beast_user_wallets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5631,6 +5641,34 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const price = await getSolPrice()
       res.json({ price, currency: 'USD' })
     } catch { res.json({ price: 0, currency: 'USD' }) }
+  })
+
+  // ── Beast Public Stats (transparency ticker) ──
+  app.get('/api/beast/stats', async (req, res) => {
+    try {
+      const treasury = await db.get('SELECT balance_sol, total_wagered, total_payouts FROM beast_treasury WHERE id = ?', ['beast_main'])
+      const betStats = await db.get('SELECT COUNT(*) as total_bets, SUM(CASE WHEN won = 1 THEN 1 ELSE 0 END) as total_wins FROM beast_bets')
+      const recentWins = await db.all(`SELECT b.game_id as game, b.payout as amount, b.multiplier, b.currency, b.created_at, p.username FROM beast_bets b LEFT JOIN beast_profiles p ON b.user_id = p.user_id WHERE b.won = 1 AND b.payout > 0 ORDER BY b.created_at DESC LIMIT 20`)
+      const solPrice = await getSolPrice()
+      res.json({
+        treasury_sol: parseFloat(treasury?.balance_sol || 0),
+        treasury_usd: parseFloat(treasury?.balance_sol || 0) * solPrice,
+        total_wagered: parseFloat(treasury?.total_wagered || 0),
+        total_wagered_usd: parseFloat(treasury?.total_wagered || 0) * solPrice,
+        total_payouts: parseFloat(treasury?.total_payouts || 0),
+        total_payouts_usd: parseFloat(treasury?.total_payouts || 0) * solPrice,
+        total_bets: parseInt(betStats?.total_bets || 0),
+        total_wins: parseInt(betStats?.total_wins || 0),
+        sol_price: solPrice,
+        recent_wins: (recentWins || []).map(w => ({
+          username: w.username, game: w.game, amount: w.amount,
+          multiplier: w.multiplier, currency: w.currency, time: w.created_at
+        }))
+      })
+    } catch (err) {
+      console.error('[Beast] stats error:', err)
+      res.json({ treasury_sol: 0, treasury_usd: 0, total_wagered: 0, total_wagered_usd: 0, total_payouts: 0, total_payouts_usd: 0, total_bets: 0, total_wins: 0, sol_price: 0, recent_wins: [] })
+    }
   })
 
   // ── Beast Live Wins (public) ──

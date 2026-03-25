@@ -317,7 +317,67 @@
   padding: 1px 5px;
   border-radius: 4px;
   font-weight: 700;
-  margin-right: 4px;
+  margin-left: 6px;
+}
+
+/* ─── TRANSPARENCY TICKER ─── */
+.beast-ticker-wrap {
+  background: rgba(15, 15, 30, 0.95);
+  border-bottom: 1px solid var(--beast-border);
+}
+
+.beast-stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.beast-stats-bar::-webkit-scrollbar { display: none; }
+
+.beast-stat-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.beast-stat-icon { font-size: 13px; }
+
+.beast-stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--beast-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.beast-stat-val {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--beast-text);
+}
+.beast-stat-val.green { color: var(--beast-accent-green); }
+.beast-stat-val.gold { color: var(--beast-accent-gold); }
+.beast-stat-val.purple { color: #a78bfa; }
+
+.beast-stat-usd {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--beast-text-muted);
+}
+
+.beast-stat-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.08);
+  flex-shrink: 0;
 }
 
 /* ─── CASINO LAYOUT ─── */
