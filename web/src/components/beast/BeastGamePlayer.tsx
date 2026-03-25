@@ -60,6 +60,17 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   const [treasuryLimits, setTreasuryLimits] = useState<{ sol: number; usdc: number; usd: number } | null>(null)
   const [solPrice, setSolPrice] = useState(0)
 
+  // Game-specific state (must be declared before getMaxMultiplier references them)
+  const [diceTarget, setDiceTarget] = useState(50)
+  const [minesCount, setMinesCount] = useState(3)
+  const [coinSide, setCoinSide] = useState<'heads' | 'tails'>('heads')
+  const [crashMulti, setCrashMulti] = useState(2)
+  const [limboTarget, setLimboTarget] = useState(2)
+
+  // Animation state for game graphics
+  const [animPhase, setAnimPhase] = useState<'idle' | 'running' | 'reveal'>('idle')
+  const [animData, setAnimData] = useState<any>(null)
+
   useEffect(() => {
     api.get('/beast/treasury/max-payout')
       .then(r => setTreasuryLimits(r.data))
@@ -124,13 +135,6 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   const dynamicMaxBet = getDynamicMaxBet()
   const minBet = getMinBet()
 
-  // Game-specific state
-  const [diceTarget, setDiceTarget] = useState(50) // for dice
-  const [minesCount, setMinesCount] = useState(3)   // for mines
-  const [coinSide, setCoinSide] = useState<'heads' | 'tails'>('heads') // for coin flip
-  const [crashMulti, setCrashMulti] = useState(2)   // for crash auto-cashout
-  const [limboTarget, setLimboTarget] = useState(2)  // for limbo
-
   const getAvailableBalance = () => {
     if (currency === 'SOL') return balance.sol
     if (currency === 'USDC') return balance.usdc
@@ -145,6 +149,8 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
 
     setPlaying(true)
     setResult(null)
+    setAnimPhase('running')
+    setAnimData(initAnimData(game.id))
     try {
       const payload: Record<string, any> = { gameId: game.id, betAmount: bet, currency }
       // Add game-specific params
@@ -156,7 +162,11 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
 
       const r = await api.post('/beast/games/play', payload)
       const res = r.data
+      setAnimPhase('reveal')
+      // Brief pause to show reveal animation before showing result
+      await new Promise(resolve => setTimeout(resolve, 800))
       setResult(res)
+      setAnimPhase('idle')
       setHistory(prev => [{ won: res.won, payout: res.payout, multiplier: res.multiplier, timestamp: Date.now(), wagerTx: res.wagerTx, payoutTx: res.payoutTx }, ...prev].slice(0, 20))
       if (res.wallets) setUserWallets(res.wallets)
       if (res.balance) onBalanceChange(res.balance)
@@ -170,6 +180,7 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
         api.get('/beast/treasury/max-payout').then(r2 => setTreasuryLimits(r2.data)).catch(() => {})
       }
       setResult({ won: false, payout: 0, multiplier: 0, details: errData?.error || 'Bet failed' })
+      setAnimPhase('idle')
     } finally {
       setPlaying(false)
     }
@@ -191,15 +202,269 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   }
   const maxBet = () => setBetAmount(Math.min(getAvailableBalance(), dynamicMaxBet).toFixed(betPrec))
 
+  // Initialize animation data per game type
+  const initAnimData = (gameId: string) => {
+    switch (gameId) {
+      case 'coin-flip': return { side: coinSide }
+      case 'dice': return { target: diceTarget }
+      case 'crash': return { cashout: crashMulti }
+      case 'limbo': return { target: limboTarget }
+      case 'mines': return { count: minesCount, revealed: [] as number[] }
+      case 'lamb-chop': case 'ice-fishing': case 'duck-hunters':
+      case 'omaha-flip': case 'coin-race': case 'beast-fortune':
+        return { reels: [0, 0, 0] } // slot reels
+      case 'roulette': case 'lightning-roulette':
+        return { angle: 0 }
+      case 'wheel': return { angle: 0 }
+      case 'blackjack': return { cards: 0 }
+      case 'baccarat': return { cards: 0 }
+      case 'plinko': return { row: 0 }
+      case 'keno': return { drawn: 0 }
+      case 'hilo': return { card: 0 }
+      case 'tower': return { floor: 0 }
+      default: return {}
+    }
+  }
+
+  // Slot symbols per theme
+  const slotSymbols: Record<string, string[]> = {
+    'lamb-chop': ['🐑', '🐄', '🌾', '🥕', '🐓', '🌻', '💰'],
+    'ice-fishing': ['🐟', '🎣', '❄️', '🐋', '🧊', '🦈', '💎'],
+    'duck-hunters': ['🦆', '🔫', '🌿', '🐕', '🎯', '🦅', '💰'],
+    'omaha-flip': ['🂡', '🂮', '🂫', '🂭', '♠️', '♥️', '💰'],
+    'coin-race': ['🏎️', '🪙', '🏁', '⚡', '🔥', '🚀', '💎'],
+    'beast-fortune': ['🐾', '👑', '💎', '🔥', '⚡', '🌟', '💰'],
+  }
+
+  const getGameSymbols = () => slotSymbols[game.id] || ['⭐', '🔥', '💎', '🍀', '🎯', '⚡', '💰']
+
+  // Render game-specific animation canvas
+  const renderGameAnimation = () => {
+    const isSlot = ['lamb-chop', 'ice-fishing', 'duck-hunters', 'omaha-flip', 'coin-race', 'beast-fortune'].includes(game.id)
+
+    if (isSlot) {
+      const syms = getGameSymbols()
+      return (
+        <div className="beast-anim-slots">
+          <div className="beast-slots-frame">
+            <div className="beast-slot-reel spinning">{syms.concat(syms).map((s, i) => <span key={i} className="beast-slot-sym">{s}</span>)}</div>
+            <div className="beast-slot-reel spinning delay1">{syms.concat(syms).map((s, i) => <span key={i} className="beast-slot-sym">{s}</span>)}</div>
+            <div className="beast-slot-reel spinning delay2">{syms.concat(syms).map((s, i) => <span key={i} className="beast-slot-sym">{s}</span>)}</div>
+          </div>
+          <div className="beast-slots-label">SPINNING...</div>
+        </div>
+      )
+    }
+
+    switch (game.id) {
+      case 'coin-flip':
+        return (
+          <div className="beast-anim-coin">
+            <div className="beast-coin-3d">
+              <div className="beast-coin-face heads">🪙</div>
+              <div className="beast-coin-face tails">🪙</div>
+            </div>
+            <div className="beast-anim-label">Flipping coin...</div>
+          </div>
+        )
+
+      case 'dice':
+        return (
+          <div className="beast-anim-dice">
+            <div className="beast-dice-cube">
+              <div className="beast-dice-face">🎲</div>
+            </div>
+            <div className="beast-anim-label">Rolling dice... Target: under {diceTarget}</div>
+          </div>
+        )
+
+      case 'crash':
+        return (
+          <div className="beast-anim-crash">
+            <div className="beast-crash-graph">
+              <div className="beast-crash-line" />
+              <div className="beast-crash-multiplier">
+                <span className="beast-crash-value">📈</span>
+              </div>
+            </div>
+            <div className="beast-anim-label">Multiplier rising... Cash out at {crashMulti}x</div>
+          </div>
+        )
+
+      case 'limbo':
+        return (
+          <div className="beast-anim-limbo">
+            <div className="beast-limbo-meter">
+              <div className="beast-limbo-fill" />
+              <div className="beast-limbo-target">{limboTarget}x</div>
+            </div>
+            <div className="beast-anim-label">Generating multiplier...</div>
+          </div>
+        )
+
+      case 'mines':
+        return (
+          <div className="beast-anim-mines">
+            <div className="beast-mines-grid">
+              {Array.from({ length: 25 }).map((_, i) => (
+                <div key={i} className={`beast-mine-cell ${i % 7 === 0 ? 'reveal' : ''}`}>
+                  <span className="beast-mine-hidden">❓</span>
+                </div>
+              ))}
+            </div>
+            <div className="beast-anim-label">Placing {minesCount} mines...</div>
+          </div>
+        )
+
+      case 'plinko':
+        return (
+          <div className="beast-anim-plinko">
+            <div className="beast-plinko-board">
+              {Array.from({ length: 5 }).map((_, row) => (
+                <div key={row} className="beast-plinko-row">
+                  {Array.from({ length: row + 3 }).map((_, pin) => (
+                    <span key={pin} className="beast-plinko-pin">●</span>
+                  ))}
+                </div>
+              ))}
+              <div className="beast-plinko-ball">⚪</div>
+            </div>
+            <div className="beast-anim-label">Ball dropping...</div>
+          </div>
+        )
+
+      case 'keno':
+        return (
+          <div className="beast-anim-keno">
+            <div className="beast-keno-board">
+              {Array.from({ length: 40 }).map((_, i) => (
+                <span key={i} className={`beast-keno-num ${i < 10 ? 'drawn' : ''}`}>{i + 1}</span>
+              ))}
+            </div>
+            <div className="beast-anim-label">Drawing numbers...</div>
+          </div>
+        )
+
+      case 'hilo':
+        return (
+          <div className="beast-anim-hilo">
+            <div className="beast-hilo-cards">
+              <div className="beast-hilo-card current">🃏</div>
+              <div className="beast-hilo-card next flipping">❓</div>
+            </div>
+            <div className="beast-anim-label">Revealing next card...</div>
+          </div>
+        )
+
+      case 'wheel':
+        return (
+          <div className="beast-anim-wheel">
+            <div className="beast-wheel-spinner">
+              <div className="beast-wheel-inner">🎡</div>
+            </div>
+            <div className="beast-anim-label">Spinning wheel...</div>
+          </div>
+        )
+
+      case 'tower':
+        return (
+          <div className="beast-anim-tower">
+            <div className="beast-tower-stack">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className={`beast-tower-floor ${i < 2 ? 'cleared' : ''}`}>
+                  <span>{i < 2 ? '✅' : '🔲'}</span>
+                  Floor {5 - i}
+                </div>
+              ))}
+            </div>
+            <div className="beast-anim-label">Climbing tower...</div>
+          </div>
+        )
+
+      case 'blackjack':
+        return (
+          <div className="beast-anim-blackjack">
+            <div className="beast-bj-table">
+              <div className="beast-bj-dealer">
+                <span className="beast-bj-card dealt">🂠</span>
+                <span className="beast-bj-card dealt delay1">🂠</span>
+              </div>
+              <div className="beast-bj-vs">VS</div>
+              <div className="beast-bj-player">
+                <span className="beast-bj-card dealt delay2">🃏</span>
+                <span className="beast-bj-card dealt delay3">🃏</span>
+              </div>
+            </div>
+            <div className="beast-anim-label">Dealing cards...</div>
+          </div>
+        )
+
+      case 'roulette': case 'lightning-roulette':
+        return (
+          <div className="beast-anim-roulette">
+            <div className="beast-roulette-wheel">
+              <div className="beast-roulette-inner">
+                {game.id === 'lightning-roulette' && <span className="beast-roulette-bolt">⚡</span>}
+                <span className="beast-roulette-ball">⚪</span>
+              </div>
+            </div>
+            <div className="beast-anim-label">{game.id === 'lightning-roulette' ? 'Lightning strikes!' : 'Ball spinning...'}</div>
+          </div>
+        )
+
+      case 'baccarat':
+        return (
+          <div className="beast-anim-baccarat">
+            <div className="beast-bacc-table">
+              <div className="beast-bacc-hand">
+                <div className="beast-bacc-label">PLAYER</div>
+                <span className="beast-bj-card dealt">🃏</span>
+                <span className="beast-bj-card dealt delay1">🃏</span>
+              </div>
+              <div className="beast-bacc-hand">
+                <div className="beast-bacc-label">BANKER</div>
+                <span className="beast-bj-card dealt delay2">🂠</span>
+                <span className="beast-bj-card dealt delay3">🂠</span>
+              </div>
+            </div>
+            <div className="beast-anim-label">Dealing baccarat...</div>
+          </div>
+        )
+
+      default:
+        return (
+          <div className="beast-anim-generic">
+            <div className="beast-generic-pulse">{game.img}</div>
+            <div className="beast-anim-label">Processing bet...</div>
+          </div>
+        )
+    }
+  }
+
   return (
     <div className="beast-player">
       <div className="beast-player-layout">
         {/* ─── LEFT: Game Canvas ─── */}
         <div className="beast-player-canvas">
           <div className="beast-game-visual">
-            <span className="beast-game-big-emoji">{game.img}</span>
-            <h2>{game.name}</h2>
-            {result && (
+            {/* Idle state: show game icon + name */}
+            {!playing && !result && (
+              <>
+                <span className="beast-game-big-emoji">{game.img}</span>
+                <h2>{game.name}</h2>
+                <div className="beast-game-desc">{game.desc}</div>
+              </>
+            )}
+
+            {/* Playing state: show game-specific animation */}
+            {playing && (
+              <div className="beast-game-anim-container">
+                {renderGameAnimation()}
+              </div>
+            )}
+
+            {/* Result state */}
+            {result && !playing && (
               <div className={`beast-result ${result.won ? 'win' : 'loss'}`}>
                 {result.won ? (
                   <>
@@ -220,7 +485,6 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                     <div className="beast-result-detail">{result.details}</div>
                   </>
                 )}
-                {/* On-chain transaction links */}
                 <div className="beast-result-txns">
                   {result.wagerTx && (
                     <a href={`${SOLSCAN_TX}${result.wagerTx}`} target="_blank" rel="noopener noreferrer" className="beast-tx-link wager">
@@ -233,15 +497,6 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                     </a>
                   )}
                 </div>
-              </div>
-            )}
-            {!result && !playing && (
-              <div className="beast-game-desc">{game.desc}</div>
-            )}
-            {playing && (
-              <div className="beast-playing-anim">
-                <div className="beast-spinner" />
-                <span>Playing...</span>
               </div>
             )}
           </div>
