@@ -6464,9 +6464,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   app.get('/api/beast/treasury', requireAuth, async (req, res) => {
     try {
       if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
-      const treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
+      let treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
       const txns = await db.all('SELECT * FROM beast_treasury_txns ORDER BY created_at DESC LIMIT 200')
-      // Include on-chain balance if wallet is configured
+      // Auto-sync DB balance_sol to on-chain (single source of truth)
       let onChainSol = null
       if (treasury?.wallet_address) {
         try {
@@ -6474,6 +6474,9 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           const conn = new Connection(rpcUrl, 'confirmed')
           const lam = await conn.getBalance(new PublicKey(treasury.wallet_address))
           onChainSol = lam / LAMPORTS_PER_SOL
+          // Sync DB to on-chain so treasury balance always reflects real funds
+          await db.run('UPDATE beast_treasury SET balance_sol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [onChainSol, 'beast_main'])
+          treasury = await db.get('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main'])
         } catch {}
       }
       res.json({ treasury, transactions: txns || [], onChainSol, walletAddress: treasury?.wallet_address || null })
@@ -6613,9 +6616,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         const conn = new Connection(rpcUrl, 'confirmed')
         const lamports = await conn.getBalance(new PublicKey(dcbWallet.solana_address))
         onChainSol = lamports / LAMPORTS_PER_SOL
-        // Set the DB balance_sol to match on-chain (minus rent)
-        const usable = Math.max(0, onChainSol - 0.002) // reserve ~0.002 SOL for rent/fees
-        await db.run('UPDATE beast_treasury SET balance_sol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [usable, 'beast_main'])
+        // Set the DB balance_sol to match on-chain exactly (unified balance)
+        await db.run('UPDATE beast_treasury SET balance_sol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [onChainSol, 'beast_main'])
       } catch (rpcErr) {
         console.error('[Beast] RPC check failed during DCB wallet link:', rpcErr.message)
       }
@@ -6641,6 +6643,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         const conn = new Connection(rpcUrl, 'confirmed')
         const lamports = await conn.getBalance(new PublicKey(tw.wallet_address))
         onChainSol = lamports / LAMPORTS_PER_SOL
+        // Auto-sync DB balance_sol to on-chain
+        await db.run('UPDATE beast_treasury SET balance_sol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [onChainSol, 'beast_main'])
       } catch (rpcErr) {
         console.error('[Beast] RPC balance check failed:', rpcErr.message)
       }

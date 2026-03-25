@@ -139,7 +139,6 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                 {walletInfo?.configured ? (
                   <div style={{ fontSize: '0.78rem', color: '#aaa' }}>
                     <div>Address: <a href={`https://solscan.io/account/${walletInfo.address}`} target="_blank" rel="noopener noreferrer" style={{ color: '#a78bfa', textDecoration: 'none' }}>{walletInfo.address}</a></div>
-                    <div>On-chain SOL: <strong style={{ color: '#22c55e' }}>{(walletInfo.onChainSol || 0).toFixed(6)}</strong></div>
                   </div>
                 ) : (
                   <div>
