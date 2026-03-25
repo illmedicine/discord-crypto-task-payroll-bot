@@ -161,7 +161,7 @@ function badgeClass(status: string): string {
 /* ================================================================== */
 /*  Component                                                          */
 /* ================================================================== */
-export default function EventManager({ guildId, isOwner = true }: Props) {
+export default function EventManager({ guildId, isOwner = false }: Props) {
   useTick(1000)
 
   /* ---- Tab state ---- */

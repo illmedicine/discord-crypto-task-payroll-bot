@@ -1601,7 +1601,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/tasks', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const { recipient_address, amount, description } = req.body || {}
     if (!recipient_address || amount == null) return res.status(400).json({ error: 'missing_fields' })
     const r = await db.run(
@@ -1617,7 +1617,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/contests', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const {
       channel_id,
       title,
@@ -1659,7 +1659,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(contest)
   })
 
-  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/contests/:contestId/publish', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const contestId = Number(req.params.contestId)
     const contest = await db.get('SELECT * FROM contests WHERE id = ?', [contestId])
     if (!contest || contest.guild_id !== req.guild.id) return res.status(404).json({ error: 'contest_not_found' })
@@ -1708,7 +1708,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(rows)
   })
 
-  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/bulk-tasks', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const { title, description, payout_amount, payout_currency, total_slots } = req.body || {}
     if (!title || payout_amount == null || !total_slots) return res.status(400).json({ error: 'missing_fields' })
     const r = await db.run(
@@ -1720,7 +1720,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     res.json(task)
   })
 
-  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/bulk-tasks/:taskId/publish', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     const taskId = Number(req.params.taskId)
     const task = await db.get('SELECT * FROM bulk_tasks WHERE id = ?', [taskId])
     if (!task || task.guild_id !== req.guild.id) return res.status(404).json({ error: 'bulk_task_not_found' })
@@ -2197,7 +2197,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // ---- Vote Event Cancel ----
-  app.patch('/api/admin/guilds/:guildId/vote-events/:eventId/cancel', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/vote-events/:eventId/cancel', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM vote_events WHERE id = ?', [eventId])
@@ -2233,7 +2233,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/qualifications/:qualId/review', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/qualifications/:qualId/review', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const qualId = Number(req.params.qualId)
       const { status } = req.body || {}
@@ -2627,7 +2627,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/gambling-events/:eventId/cancel', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/gambling-events/:eventId/cancel', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM gambling_events WHERE id = ?', [eventId])
@@ -2662,7 +2662,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/gambling-qualifications/:qualId/review', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/gambling-qualifications/:qualId/review', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const qualId = Number(req.params.qualId)
       const { status } = req.body || {}
@@ -2930,7 +2930,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   /* ---- Cancel poker event ---- */
-  app.patch('/api/admin/guilds/:guildId/poker-events/:eventId/cancel', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/poker-events/:eventId/cancel', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const event = await db.get('SELECT * FROM poker_events WHERE id = ?', [eventId])
@@ -3249,7 +3249,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, async (req, res) => {
+  app.post('/api/admin/guilds/:guildId/events', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const { channel_id, title, description, event_type, prize_amount, currency, max_participants, starts_at, ends_at } = req.body || {}
       if (!title) return res.status(400).json({ error: 'missing_title' })
@@ -3270,7 +3270,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.patch('/api/admin/guilds/:guildId/events/:eventId/status', requireAuth, requireGuildOwner, async (req, res) => {
+  app.patch('/api/admin/guilds/:guildId/events/:eventId/status', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       const { status } = req.body || {}
@@ -3282,7 +3282,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
-  app.delete('/api/admin/guilds/:guildId/events/:eventId', requireAuth, requireGuildOwner, async (req, res) => {
+  app.delete('/api/admin/guilds/:guildId/events/:eventId', requireAuth, requireGuildOwner, requireStrictOwner, async (req, res) => {
     try {
       const eventId = Number(req.params.eventId)
       await db.run('DELETE FROM events WHERE id = ?', [eventId])

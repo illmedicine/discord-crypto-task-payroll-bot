@@ -55,7 +55,7 @@ function badgeClass(status: string): string {
 /* ================================================================== */
 /*  Component                                                          */
 /* ================================================================== */
-export default function GamblingEvents({ guildId, isOwner = true }: Props) {
+export default function GamblingEvents({ guildId, isOwner = false }: Props) {
   useTick(1000)
 
   /* ---- data state ---- */

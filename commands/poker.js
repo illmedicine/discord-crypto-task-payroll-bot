@@ -593,6 +593,12 @@ module.exports = {
 // ─── Subcommand Handlers ────────────────────────────────────────────────────
 
 async function handleCreate(interaction) {
+  // Only server owner can create poker tables
+  const guild = interaction.guild || await interaction.client.guilds.fetch(interaction.guildId).catch(() => null);
+  if (!guild || interaction.user.id !== guild.ownerId) {
+    return interaction.reply({ content: '❌ Only the **server owner** can create poker tables.', ephemeral: true });
+  }
+
   const channelId = interaction.channelId;
 
   const existingTable = tables.get(channelId);
@@ -708,11 +714,10 @@ async function handleClose(interaction) {
     return interaction.reply({ content: '❌ No poker table in this channel.', ephemeral: true });
   }
 
-  // Only the host or a server admin can close
-  const isHost = interaction.user.id === table.hostId;
-  const isAdmin = interaction.memberPermissions?.has('Administrator');
-  if (!isHost && !isAdmin) {
-    return interaction.reply({ content: '❌ Only the table host or a server admin can close the table.', ephemeral: true });
+  // Only server owner can close poker tables
+  const guild = interaction.guild || await interaction.client.guilds.fetch(interaction.guildId).catch(() => null);
+  if (!guild || interaction.user.id !== guild.ownerId) {
+    return interaction.reply({ content: '❌ Only the **server owner** can close poker tables.', ephemeral: true });
   }
 
   destroyTable(table);
@@ -1234,10 +1239,10 @@ async function sendHoleCards(table, channel) {
 // ─── Retry Payout Handler ───────────────────────────────────────────────────
 
 async function handleRetryPayout(interaction) {
-  // Only server admins can retry payouts
-  const isAdmin = interaction.memberPermissions?.has('Administrator');
-  if (!isAdmin) {
-    return interaction.reply({ content: '❌ Only server administrators can retry failed payouts.', ephemeral: true });
+  // Only server owner can retry payouts
+  const guild = interaction.guild || await interaction.client.guilds.fetch(interaction.guildId).catch(() => null);
+  if (!guild || interaction.user.id !== guild.ownerId) {
+    return interaction.reply({ content: '❌ Only the **server owner** can retry failed payouts.', ephemeral: true });
   }
 
   const eventId = interaction.options.getInteger('event-id');

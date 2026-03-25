@@ -21,11 +21,12 @@ type Channel = { id: string, name: string }
 
 type Props = {
   guildId: string
+  isOwner?: boolean
 }
 
 // timeLeft is now handled by the Countdown component (auto-updating)
 
-export default function Contests({ guildId }: Props) {
+export default function Contests({ guildId, isOwner = false }: Props) {
   useTick(1000)
 
   const [contests, setContests] = useState<Contest[]>([])
@@ -193,8 +194,8 @@ export default function Contests({ guildId }: Props) {
         </div>
       )}
 
-      {/* Create form */}
-      <div className="card">
+      {/* Create form — owner only */}
+      {isOwner && <div className="card">
         <div className="card-header">
           <div className="card-title">Create Contest</div>
         </div>
@@ -242,7 +243,7 @@ export default function Contests({ guildId }: Props) {
           </div>
           <button type="submit" className="btn btn-primary" disabled={!channelId}>Create Contest</button>
         </form>
-      </div>
+      </div>}
     </div>
   )
 }
