@@ -70,6 +70,7 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   // Animation state for game graphics
   const [animPhase, setAnimPhase] = useState<'idle' | 'running' | 'reveal'>('idle')
   const [animData, setAnimData] = useState<any>(null)
+  const [houseWalletOk, setHouseWalletOk] = useState(true)
 
   useEffect(() => {
     api.get('/beast/treasury/max-payout')
@@ -78,6 +79,9 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
     api.get('/beast/sol-price')
       .then(r => setSolPrice(r.data?.price || 0))
       .catch(() => {})
+    api.get('/beast/treasury/wallet-info')
+      .then(r => setHouseWalletOk(r.data?.configured === true))
+      .catch(() => setHouseWalletOk(false))
   }, [])
 
   const getMaxMultiplier = () => {
@@ -444,7 +448,15 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   return (
     <div className="beast-player">
       <div className="beast-player-layout">
-        {/* ─── LEFT: Game Canvas ─── */}
+        {/* ─── House wallet warning */}
+            {!houseWalletOk && (
+              <div style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 10, padding: '12px 16px', marginBottom: 12, textAlign: 'center', width: '100%', maxWidth: 400 }}>
+                <div style={{ color: '#ef4444', fontWeight: 700, fontSize: '0.9rem', marginBottom: 4 }}>⚠️ House Wallet Not Connected</div>
+                <div style={{ color: '#ccc', fontSize: '0.78rem' }}>Bets are disabled. The treasury owner must connect a house wallet in the Treasury Admin panel.</div>
+              </div>
+            )}
+
+            {/* LEFT: Game Canvas ─── */}
         <div className="beast-player-canvas">
           <div className="beast-game-visual">
             {/* Idle state: show game icon + name */}
@@ -600,9 +612,9 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
           <button
             className="beast-play-btn"
             onClick={placeBet}
-            disabled={playing || !betAmount || parseFloat(betAmount) <= 0 || parseFloat(betAmount) > getAvailableBalance() || parseFloat(betAmount) > dynamicMaxBet * 1.001 || parseFloat(betAmount) < minBet * 0.99}
+            disabled={playing || !houseWalletOk || !betAmount || parseFloat(betAmount) <= 0 || parseFloat(betAmount) > getAvailableBalance() || parseFloat(betAmount) > dynamicMaxBet * 1.001 || parseFloat(betAmount) < minBet * 0.99}
           >
-            {playing ? 'Playing...' : `BET ${betAmount} ${currency}`}
+            {!houseWalletOk ? '⚠️ House Wallet Not Connected' : playing ? 'Playing...' : `BET ${betAmount} ${currency}`}
           </button>
 
           {/* Wallet Breakdown Toggle */}

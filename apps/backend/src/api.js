@@ -6594,6 +6594,41 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // POST /api/beast/treasury/use-dcb-wallet - owner links their existing DCB wallet as treasury wallet
+  app.post('/api/beast/treasury/use-dcb-wallet', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      // Look up the owner's existing DCB wallet
+      const dcbWallet = await db.get('SELECT solana_address, wallet_secret FROM user_wallets WHERE discord_id = ?', [req.user.id])
+      if (!dcbWallet?.solana_address || !dcbWallet?.wallet_secret) {
+        return res.status(400).json({ error: 'No DCB wallet found. Link a wallet via DCB Link first.' })
+      }
+      // Set the treasury wallet to use the same keypair
+      await db.run('UPDATE beast_treasury SET wallet_address = ?, wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [dcbWallet.solana_address, dcbWallet.wallet_secret, 'beast_main'])
+      // Sync on-chain balance to treasury DB
+      let onChainSol = 0
+      try {
+        const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+        const conn = new Connection(rpcUrl, 'confirmed')
+        const lamports = await conn.getBalance(new PublicKey(dcbWallet.solana_address))
+        onChainSol = lamports / LAMPORTS_PER_SOL
+        // Set the DB balance_sol to match on-chain (minus rent)
+        const usable = Math.max(0, onChainSol - 0.002) // reserve ~0.002 SOL for rent/fees
+        await db.run('UPDATE beast_treasury SET balance_sol = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [usable, 'beast_main'])
+      } catch (rpcErr) {
+        console.error('[Beast] RPC check failed during DCB wallet link:', rpcErr.message)
+      }
+      console.log(`[Beast] Treasury linked to owner DCB wallet: ${dcbWallet.solana_address.slice(0, 8)}...${dcbWallet.solana_address.slice(-4)} (${onChainSol.toFixed(6)} SOL on-chain)`)
+      await db.run('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details) VALUES (?,?,?,?,?,?,?)',
+        ['load', 'SOL', onChainSol, onChainSol, req.user.id, req.user.username || 'Owner', `Linked DCB wallet as treasury (${dcbWallet.solana_address})`])
+      res.json({ ok: true, address: dcbWallet.solana_address, onChainSol, message: `DCB wallet linked as treasury. On-chain balance: ${onChainSol.toFixed(6)} SOL` })
+    } catch (err) {
+      console.error('[Beast] use-dcb-wallet error:', err)
+      res.status(500).json({ error: 'Failed to link DCB wallet' })
+    }
+  })
+
   // GET /api/beast/treasury/wallet-info - owner views treasury wallet address + on-chain balance
   app.get('/api/beast/treasury/wallet-info', requireAuth, async (req, res) => {
     try {

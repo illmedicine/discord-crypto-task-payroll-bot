@@ -22,9 +22,17 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
   const [loadAmount, setLoadAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [walletInfo, setWalletInfo] = useState<{ configured: boolean; address?: string; onChainSol?: number } | null>(null)
 
-  useEffect(() => { fetchTreasury() }, [])
+  useEffect(() => { fetchTreasury(); fetchWalletInfo() }, [])
   useEffect(() => { if (tab === 'ledger' || tab === 'deposits') fetchLedger() }, [tab, ledgerFilter, ledgerPage])
+
+  const fetchWalletInfo = async () => {
+    try {
+      const r = await api.get('/beast/treasury/wallet-info')
+      setWalletInfo(r.data)
+    } catch { setWalletInfo({ configured: false }) }
+  }
 
   const fetchTreasury = async () => {
     try {
@@ -118,8 +126,65 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
           {/* ─── OVERVIEW TAB ─── */}
-          {tab === 'overview' && treasury && (
+          {tab === 'overview' && (
             <>
+              {/* Wallet Configuration Status */}
+              <div style={{ background: walletInfo?.configured ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.1)', border: `1px solid ${walletInfo?.configured ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: '1.1rem' }}>{walletInfo?.configured ? '✅' : '⚠️'}</span>
+                  <strong style={{ color: walletInfo?.configured ? '#22c55e' : '#ef4444', fontSize: '0.85rem' }}>
+                    {walletInfo?.configured ? 'House Wallet Connected' : 'House Wallet NOT Connected'}
+                  </strong>
+                </div>
+                {walletInfo?.configured ? (
+                  <div style={{ fontSize: '0.78rem', color: '#aaa' }}>
+                    <div>Address: <a href={`https://solscan.io/account/${walletInfo.address}`} target="_blank" rel="noopener noreferrer" style={{ color: '#a78bfa', textDecoration: 'none' }}>{walletInfo.address}</a></div>
+                    <div>On-chain SOL: <strong style={{ color: '#22c55e' }}>{(walletInfo.onChainSol || 0).toFixed(6)}</strong></div>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: '0.78rem', color: '#ccc', marginBottom: 10 }}>
+                      No treasury wallet is configured. Players cannot place bets until a house wallet is connected.
+                      Use your existing DCB Link wallet or generate a new one.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        disabled={loading}
+                        onClick={async () => {
+                          setLoading(true); setMessage(null)
+                          try {
+                            const r = await api.post('/beast/treasury/use-dcb-wallet')
+                            setMessage({ type: 'success', text: r.data?.message || 'DCB wallet linked!' })
+                            fetchWalletInfo(); fetchTreasury()
+                          } catch (err: any) { setMessage({ type: 'error', text: err?.response?.data?.error || 'Failed to link DCB wallet' }) }
+                          finally { setLoading(false) }
+                        }}
+                        style={{ padding: '8px 16px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff' }}
+                      >
+                        🔗 Use My DCB Wallet
+                      </button>
+                      <button
+                        disabled={loading}
+                        onClick={async () => {
+                          setLoading(true); setMessage(null)
+                          try {
+                            const r = await api.post('/beast/treasury/setup-wallet')
+                            setMessage({ type: 'success', text: r.data?.message || 'Wallet generated!' })
+                            fetchWalletInfo(); fetchTreasury()
+                          } catch (err: any) { setMessage({ type: 'error', text: err?.response?.data?.error || 'Failed to generate wallet' }) }
+                          finally { setLoading(false) }
+                        }}
+                        style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: '#ccc' }}
+                      >
+                        🆕 Generate New Wallet
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {treasury && (
+                <>
               <div className="beast-wallet-balance" style={{ marginBottom: 16 }}>
                 <div className="beast-wallet-balance-label">TREASURY BALANCE</div>
                 <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
@@ -182,6 +247,8 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                     </div>
                   ))}
                 </div>
+              )}
+                </>
               )}
             </>
           )}
