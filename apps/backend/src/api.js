@@ -6679,11 +6679,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   })
 
   // GET /api/beast/treasury/wallet-info - owner views treasury wallet address + on-chain balance
+  // Non-owners get limited response (just configured status) so the game player can check house wallet
   app.get('/api/beast/treasury/wallet-info', requireAuth, async (req, res) => {
     try {
-      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' })
+      const isOwner = req.user.id === BEAST_OWNER_ID
       const tw = await getBeastTreasuryWallet()
       if (!tw) return res.json({ configured: false })
+
+      // Non-owners only need to know the wallet is configured
+      if (!isOwner) return res.json({ configured: true })
+
       let onChainSol = 0
       try {
         const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
