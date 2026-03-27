@@ -103,6 +103,30 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
       .finally(() => setLoading(false))
   }, [])
 
+  // Auto-refresh balance and SOL price every 15 seconds
+  useEffect(() => {
+    const refreshData = () => {
+      api.get('/beast/sol-price').then(r => setSolPrice(r.data?.price || 0)).catch(() => {})
+      api.get('/beast/wallet/all?refresh=true')
+        .then(r => {
+          if (r.data?.totalBalance !== undefined && beastUser) {
+            setBeastUser(prev => prev ? { ...prev, beastBalance: { ...prev.beastBalance, sol: r.data.totalBalance } } : prev)
+          }
+        })
+        .catch(() => {})
+    }
+    const iv = setInterval(refreshData, 15000)
+    // Also refresh when tab becomes visible (user switching back from another browser/tab)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshData()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(iv)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [beastUser])
+
   const toggleFavorite = useCallback((gameId: string) => {
     if (!beastUser) return
     const isFav = beastUser.favorites.includes(gameId)

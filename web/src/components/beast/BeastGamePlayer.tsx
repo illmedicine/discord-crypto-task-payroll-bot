@@ -51,7 +51,7 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
   const [currency, setCurrency] = useState<Currency>('USDC')
   const [playing, setPlaying] = useState(false)
   const [result, setResult] = useState<GameResult | null>(null)
-  const [history, setHistory] = useState<Array<{ won: boolean; payout: number; multiplier: number; timestamp: number; wagerTx?: string; payoutTx?: string }>>([])              
+  const [history, setHistory] = useState<Array<{ won: boolean; payout: number; multiplier: number; timestamp: number; wagerTx?: string; payoutTx?: string; betAmount: number; currency: Currency }>>([])              
   const [autoPlay, setAutoPlay] = useState(false)
   const [autoCount, setAutoCount] = useState(0)
   const [userWallets, setUserWallets] = useState<WalletInfo[]>([])
@@ -83,6 +83,36 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       .then(r => setHouseWalletOk(r.data?.configured === true))
       .catch(() => setHouseWalletOk(false))
   }, [])
+
+  // Auto-refresh balance and treasury limits every 15 seconds
+  useEffect(() => {
+    const refreshBalance = () => {
+      api.get('/beast/wallet/all?refresh=true')
+        .then(r => {
+          if (r.data?.wallets) setUserWallets(r.data.wallets)
+          if (r.data?.totalBalance !== undefined) {
+            onBalanceChange({ sol: r.data.totalBalance, usdc: 0, usd: 0 })
+          }
+        })
+        .catch(() => {})
+      api.get('/beast/treasury/max-payout')
+        .then(r => setTreasuryLimits(r.data))
+        .catch(() => {})
+      api.get('/beast/sol-price')
+        .then(r => setSolPrice(r.data?.price || 0))
+        .catch(() => {})
+    }
+    const iv = setInterval(refreshBalance, 15000)
+    // Refresh immediately when tab becomes visible
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshBalance()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(iv)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [onBalanceChange])
 
   const getMaxMultiplier = () => {
     switch (game.id) {
@@ -156,6 +186,23 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
     setAnimPhase('running')
     setAnimData(initAnimData(game.id))
     try {
+      // Fetch fresh balance before placing bet to prevent stale-balance failures
+      try {
+        const freshBal = await api.get('/beast/wallet/all?refresh=true')
+        if (freshBal.data?.totalBalance !== undefined) {
+          const freshSol = freshBal.data.totalBalance
+          onBalanceChange({ sol: freshSol, usdc: 0, usd: 0 })
+          if (freshBal.data?.wallets) setUserWallets(freshBal.data.wallets)
+          // Re-check if bet is still affordable with fresh balance
+          if (currency === 'SOL' && bet > freshSol) {
+            setResult({ won: false, payout: 0, multiplier: 0, details: `Insufficient balance. Available: ${freshSol.toFixed(6)} SOL` })
+            setAnimPhase('idle')
+            setPlaying(false)
+            return
+          }
+        }
+      } catch (_) { /* proceed with cached balance */ }
+
       const payload: Record<string, any> = { gameId: game.id, betAmount: bet, currency }
       // Add game-specific params
       if (game.id === 'dice') payload.target = diceTarget
@@ -171,7 +218,7 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       await new Promise(resolve => setTimeout(resolve, 800))
       setResult(res)
       setAnimPhase('idle')
-      setHistory(prev => [{ won: res.won, payout: res.payout, multiplier: res.multiplier, timestamp: Date.now(), wagerTx: res.wagerTx, payoutTx: res.payoutTx }, ...prev].slice(0, 20))
+      setHistory(prev => [{ won: res.won, payout: res.payout, multiplier: res.multiplier, timestamp: Date.now(), wagerTx: res.wagerTx, payoutTx: res.payoutTx, betAmount: bet, currency }, ...prev].slice(0, 20))
       if (res.wallets) setUserWallets(res.wallets)
       if (res.balance) onBalanceChange(res.balance)
       // Refresh treasury limits after each bet
@@ -495,7 +542,8 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                 ) : (
                   <>
                     <div className="beast-result-label">NO WIN</div>
-                    <div className="beast-result-detail">{result.details}</div>
+                    <div className="beast-result-payout" style={{ color: 'var(--beast-accent-red)' }}>-{parseFloat(betAmount).toFixed(4)} {currency}</div>
+                    <div className="beast-result-detail">{result.details || 'No win this spin'}</div>
                   </>
                 )}
                 <div className="beast-result-txns">
@@ -649,8 +697,9 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
                   <span>{h.won ? '✅' : '❌'}</span>
                   <span>{h.multiplier}x</span>
                   <span className={h.won ? 'beast-win-amount' : 'beast-loss-amount'}>
-                    {h.won ? '+' : '-'}{h.payout.toFixed(4)}
+                    {h.won ? `+${h.payout.toFixed(4)}` : `-${h.betAmount.toFixed(4)}`}
                   </span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--beast-text-muted)' }}>{h.currency}</span>
                   {h.wagerTx && (
                     <a href={`${SOLSCAN_TX}${h.wagerTx}`} target="_blank" rel="noopener noreferrer" className="beast-history-tx" title="View wager TX">⛓</a>
                   )}

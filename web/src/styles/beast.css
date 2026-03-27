@@ -35,6 +35,10 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 /* Transparent watermark background */
@@ -65,12 +69,17 @@
   top: 0;
   z-index: 100;
   gap: 16px;
+  max-width: 100%;
+  box-sizing: border-box;
+  flex-wrap: wrap;
 }
 
 .beast-topbar-left {
   display: flex;
   align-items: center;
   gap: 20px;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .beast-logo {
@@ -124,6 +133,7 @@
 .beast-topbar-center {
   flex: 1;
   max-width: 400px;
+  min-width: 0;
 }
 
 .beast-search {
@@ -158,6 +168,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex-shrink: 1;
+  flex-wrap: wrap;
 }
 
 .beast-vip-badge {
@@ -244,6 +257,8 @@
   background: rgba(21, 21, 40, 0.8);
   border-bottom: 1px solid var(--beast-border);
   overflow: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .beast-live-wins-label {
@@ -324,6 +339,9 @@
 .beast-ticker-wrap {
   background: rgba(15, 15, 30, 0.95);
   border-bottom: 1px solid var(--beast-border);
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .beast-stats-bar {
@@ -333,7 +351,10 @@
   gap: 6px;
   padding: 8px 16px;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .beast-stats-bar::-webkit-scrollbar { display: none; }
 
@@ -384,6 +405,11 @@
 .beast-casino {
   display: flex;
   flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .beast-sidebar-cats {
@@ -439,14 +465,19 @@
   flex: 1;
   padding: 20px;
   overflow-y: auto;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* ─── HERO BANNER ─── */
 .beast-hero {
   display: grid;
-  grid-template-columns: 1fr 1.2fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 16px;
   margin-bottom: 32px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .beast-hero-balance {
@@ -638,6 +669,7 @@
   overflow-x: auto;
   padding-bottom: 8px;
   scroll-snap-type: x mandatory;
+  max-width: 100%;
 }
 
 .beast-game-scroll::-webkit-scrollbar {
@@ -840,6 +872,10 @@
   min-height: 100vh;
   color: var(--beast-text);
   position: relative;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .beast-game-active::before {
@@ -864,6 +900,9 @@
   padding: 16px 20px;
   background: var(--beast-bg-secondary);
   border-bottom: 1px solid var(--beast-border);
+  flex-wrap: wrap;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .beast-game-header h2 {
@@ -871,6 +910,10 @@
   font-size: 20px;
   font-weight: 700;
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .beast-back-btn {
@@ -917,14 +960,19 @@
 
 .beast-player {
   padding: 20px;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .beast-player-layout {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 340px);
   gap: 20px;
-  max-width: 1200px;
+  width: 100%;
+  max-width: 100%;
   margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .beast-player-canvas {
@@ -932,6 +980,9 @@
   border: 1px solid var(--beast-border);
   border-radius: var(--beast-radius-lg);
   overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .beast-game-visual {
@@ -1093,6 +1144,10 @@
   border: 1px solid var(--beast-border);
   border-radius: var(--beast-radius-lg);
   padding: 20px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .beast-bet-section {
@@ -1122,10 +1177,13 @@
 .beast-bet-input-row {
   display: flex;
   gap: 8px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .beast-bet-input {
   flex: 1;
+  min-width: 0;
   padding: 10px 12px;
   background: var(--beast-bg);
   border: 1px solid var(--beast-border);
@@ -1167,6 +1225,8 @@
   font-size: 11px;
   color: var(--beast-text-muted);
   margin-top: 4px;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .beast-play-btn {
@@ -2181,6 +2241,10 @@
   .beast-sport-btn span ~ * {
     display: none;
   }
+  .beast-player-layout {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+  }
 }
 
 @media (max-width: 768px) {
@@ -2205,6 +2269,7 @@
   }
   .beast-player-layout {
     grid-template-columns: 1fr;
+    max-width: 100%;
   }
   .beast-game-grid {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
