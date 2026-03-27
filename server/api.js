@@ -1543,6 +1543,16 @@ module.exports = (client) => {
   //  Casino / Sports portal with Discord SSO, Beast Wallet, DCB link
   // ══════════════════════════════════════════════════════════════════
 
+  const BEAST_OWNER_ID = '1075818871149305966';
+  const { encryptSecret, decryptSecret } = require('../utils/encryption');
+  const cryptoUtils = require('../utils/crypto');
+
+  // Helper: get beast treasury wallet (returns { wallet_address, wallet_secret } or null)
+  async function getBeastTreasuryWallet() {
+    const row = await db.dbGet('SELECT wallet_address, wallet_secret FROM beast_treasury WHERE id = ?', ['beast_main']);
+    return (row?.wallet_address && row?.wallet_secret) ? row : null;
+  }
+
   // ── Beast: Init tables ──
   (async () => {
     try {
@@ -1628,6 +1638,46 @@ module.exports = (client) => {
         direction TEXT DEFAULT 'dcb_to_beast',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`);
+      await db.dbRun(`CREATE TABLE IF NOT EXISTS beast_treasury (
+        id TEXT PRIMARY KEY DEFAULT 'beast_main',
+        balance_sol REAL DEFAULT 0,
+        balance_usdc REAL DEFAULT 0,
+        balance_usd REAL DEFAULT 0,
+        total_wagered REAL DEFAULT 0,
+        total_payouts REAL DEFAULT 0,
+        total_collected REAL DEFAULT 0,
+        wallet_address TEXT,
+        wallet_secret TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`);
+      await db.dbRun(`CREATE TABLE IF NOT EXISTS beast_treasury_txns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT,
+        currency TEXT DEFAULT 'SOL',
+        amount REAL DEFAULT 0,
+        balance_after REAL DEFAULT 0,
+        user_id TEXT,
+        username TEXT,
+        details TEXT,
+        tx_signature TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`);
+      // Ensure beast_treasury has a default row
+      await db.dbRun(`INSERT OR IGNORE INTO beast_treasury (id) VALUES ('beast_main')`);
+      // Backfill: if treasury has no totals, compute from beast_bets history
+      const bt = await db.dbGet('SELECT total_wagered, total_collected FROM beast_treasury WHERE id = ?', ['beast_main']);
+      if (bt && (bt.total_wagered || 0) === 0) {
+        const stats = await db.dbGet(`SELECT
+          COALESCE(SUM(bet_amount), 0) AS total_wagered,
+          COALESCE(SUM(bet_amount), 0) AS total_collected,
+          COALESCE(SUM(CASE WHEN won = 1 THEN payout ELSE 0 END), 0) AS total_payouts
+        FROM beast_bets WHERE currency = 'SOL'`);
+        if (stats && stats.total_wagered > 0) {
+          await db.dbRun(`UPDATE beast_treasury SET total_wagered = ?, total_collected = ?, total_payouts = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`,
+            [stats.total_wagered, stats.total_collected, stats.total_payouts]);
+          console.log(`[Beast] Treasury backfilled: wagered=${stats.total_wagered}, payouts=${stats.total_payouts}, profit=${(stats.total_collected - stats.total_payouts).toFixed(6)}`);
+        }
+      }
       console.log('[Beast] Tables initialized');
     } catch (err) {
       console.error('[Beast] Table init error:', err);
@@ -2065,6 +2115,21 @@ module.exports = (client) => {
         await db.dbRun(`UPDATE beast_profiles SET ${balCol} = ${balCol} + ? WHERE user_id = ?`, [payout, req.user.id]);
       }
 
+      // Track treasury: wager comes in, payout goes out
+      const tBalCol = currency === 'SOL' ? 'balance_sol' : currency === 'USDC' ? 'balance_usdc' : 'balance_usd';
+      // Wager in: treasury collects the full bet
+      await db.dbRun(`UPDATE beast_treasury SET ${tBalCol} = ${tBalCol} + ?, total_wagered = total_wagered + ?, total_collected = total_collected + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [bet, bet, bet]);
+      const afterWager = await db.dbGet(`SELECT ${tBalCol} FROM beast_treasury WHERE id = 'beast_main'`);
+      await db.dbRun('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details) VALUES (?,?,?,?,?,?,?)',
+        ['wager_in', currency, bet, parseFloat(afterWager?.[tBalCol] || 0), req.user.id, req.user.username || 'Player', `${gameId}: bet ${bet} ${currency}`]);
+      // Payout: treasury pays out winnings
+      if (payout > 0) {
+        await db.dbRun(`UPDATE beast_treasury SET ${tBalCol} = ${tBalCol} - ?, total_payouts = total_payouts + ?, updated_at = CURRENT_TIMESTAMP WHERE id = 'beast_main'`, [payout, payout]);
+        const afterPayout = await db.dbGet(`SELECT ${tBalCol} FROM beast_treasury WHERE id = 'beast_main'`);
+        await db.dbRun('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details) VALUES (?,?,?,?,?,?,?)',
+          ['payout', currency, payout, parseFloat(afterPayout?.[tBalCol] || 0), req.user.id, req.user.username || 'Player', `${gameId}: won ${payout} ${currency} (${multiplier}x)`]);
+      }
+
       // Log the bet
       await db.dbRun(
         'INSERT INTO beast_bets (user_id, game_id, bet_amount, currency, won, multiplier, payout, server_seed, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -2160,6 +2225,213 @@ module.exports = (client) => {
     } catch (err) {
       console.error('[Beast] share error:', err);
       res.status(500).json({ error: 'Failed to share' });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  ILLY BEAST TREASURY – API Routes
+  // ══════════════════════════════════════════════════════════════════
+
+  // GET /api/beast/sol-price — public SOL price
+  app.get('/api/beast/sol-price', async (req, res) => {
+    try {
+      const price = await cryptoUtils.getSolanaPrice();
+      res.json({ price: price || 0 });
+    } catch { res.json({ price: 0 }); }
+  });
+
+  // GET /api/beast/wallet/all — user's beast wallet balances
+  app.get('/api/beast/wallet/all', requireAuth, async (req, res) => {
+    try {
+      const profile = await db.dbGet('SELECT balance_sol, balance_usdc, balance_usd FROM beast_profiles WHERE user_id = ?', [req.user.id]);
+      const totalBalance = parseFloat(profile?.balance_sol || 0);
+      res.json({
+        wallets: [],
+        totalBalance,
+        balance: {
+          sol: parseFloat(profile?.balance_sol || 0),
+          usdc: parseFloat(profile?.balance_usdc || 0),
+          usd: parseFloat(profile?.balance_usd || 0),
+        },
+      });
+    } catch { res.json({ wallets: [], totalBalance: 0, balance: { sol: 0, usdc: 0, usd: 0 } }); }
+  });
+
+  // GET /api/beast/treasury/max-payout — public: treasury balance (max payout limit)
+  app.get('/api/beast/treasury/max-payout', async (req, res) => {
+    try {
+      const treasury = await db.dbGet('SELECT balance_sol, balance_usdc, balance_usd FROM beast_treasury WHERE id = ?', ['beast_main']);
+      res.json({
+        sol: parseFloat(treasury?.balance_sol || 0),
+        usdc: parseFloat(treasury?.balance_usdc || 0),
+        usd: parseFloat(treasury?.balance_usd || 0),
+      });
+    } catch { res.json({ sol: 0, usdc: 0, usd: 0 }); }
+  });
+
+  // GET /api/beast/treasury/wallet-info — wallet configuration status
+  app.get('/api/beast/treasury/wallet-info', requireAuth, async (req, res) => {
+    try {
+      const isOwner = req.user.id === BEAST_OWNER_ID;
+      const tw = await getBeastTreasuryWallet();
+      if (!tw) return res.json({ configured: false });
+      if (!isOwner) return res.json({ configured: true });
+      res.json({ configured: true, address: tw.wallet_address });
+    } catch { res.json({ configured: false }); }
+  });
+
+  // GET /api/beast/treasury — owner only: full treasury view
+  app.get('/api/beast/treasury', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+      const treasury = await db.dbGet('SELECT * FROM beast_treasury WHERE id = ?', ['beast_main']);
+      const txns = await new Promise((resolve, reject) => {
+        db.db.all('SELECT * FROM beast_treasury_txns ORDER BY created_at DESC LIMIT 200', [], (err, rows) => {
+          if (err) reject(err); else resolve(rows || []);
+        });
+      });
+      res.json({ treasury, transactions: txns, walletAddress: treasury?.wallet_address || null });
+    } catch (err) {
+      console.error('[Beast] treasury error:', err);
+      res.status(500).json({ error: 'Failed to load treasury' });
+    }
+  });
+
+  // GET /api/beast/treasury/ledger — owner only: full audit ledger
+  app.get('/api/beast/treasury/ledger', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+      const { type, limit, offset } = req.query;
+      const lim = Math.min(parseInt(limit) || 100, 500);
+      const off = parseInt(offset) || 0;
+      let whereClause = '';
+      const params = [];
+      if (type && type !== 'all') { whereClause = 'WHERE type = ?'; params.push(type); }
+
+      const total = await db.dbGet(`SELECT COUNT(*) as count FROM beast_treasury_txns ${whereClause}`, params);
+      const rows = await new Promise((resolve, reject) => {
+        db.db.all(`SELECT * FROM beast_treasury_txns ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`, [...params, lim, off], (err, r) => {
+          if (err) reject(err); else resolve(r || []);
+        });
+      });
+      const stats = await db.dbGet(`SELECT
+        COUNT(*) as total_txns,
+        SUM(CASE WHEN type = 'wager_in' THEN amount ELSE 0 END) as total_wagers,
+        SUM(CASE WHEN type = 'payout' THEN amount ELSE 0 END) as total_payouts,
+        SUM(CASE WHEN type = 'deposit_from_dcb' THEN amount ELSE 0 END) as total_deposits,
+        SUM(CASE WHEN type = 'load' THEN amount ELSE 0 END) as total_loaded,
+        SUM(CASE WHEN type = 'withdrawal' THEN amount ELSE 0 END) as total_withdrawals
+      FROM beast_treasury_txns`);
+      const dcbTransfers = await new Promise((resolve, reject) => {
+        db.db.all(`SELECT t.*, bp.username FROM beast_dcb_transfers t LEFT JOIN beast_profiles bp ON t.user_id = bp.user_id ORDER BY t.created_at DESC LIMIT ?`, [lim], (err, r) => {
+          if (err) reject(err); else resolve(r || []);
+        });
+      });
+      res.json({ transactions: rows, total: total?.count || 0, stats: stats || {}, dcbTransfers, limit: lim, offset: off });
+    } catch (err) {
+      console.error('[Beast] ledger error:', err);
+      res.status(500).json({ error: 'Failed to load ledger' });
+    }
+  });
+
+  // POST /api/beast/treasury/setup-wallet — owner generates a new treasury wallet
+  app.post('/api/beast/treasury/setup-wallet', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+      const existing = await getBeastTreasuryWallet();
+      if (existing) return res.json({ ok: true, address: existing.wallet_address, message: 'Treasury wallet already configured', existing: true });
+      const { Keypair } = require('@solana/web3.js');
+      const kp = Keypair.generate();
+      const addr = kp.publicKey.toBase58();
+      const encSecret = encryptSecret(Buffer.from(kp.secretKey).toString('base64'));
+      await db.dbRun('UPDATE beast_treasury SET wallet_address = ?, wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [addr, encSecret, 'beast_main']);
+      console.log(`[Beast] Treasury wallet created: ${addr.slice(0, 8)}...${addr.slice(-4)}`);
+      res.json({ ok: true, address: addr, message: 'Treasury wallet generated. Send SOL to this address to fund the house.' });
+    } catch (err) {
+      console.error('[Beast] setup-wallet error:', err);
+      res.status(500).json({ error: 'Failed to set up treasury wallet' });
+    }
+  });
+
+  // POST /api/beast/treasury/use-dcb-wallet — owner links their DCB wallet as beast treasury
+  app.post('/api/beast/treasury/use-dcb-wallet', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+      const dcbUser = await db.getUser(req.user.id);
+      if (!dcbUser?.solana_address) return res.status(400).json({ error: 'No DCB wallet found. Connect a wallet via /user-wallet connect first.' });
+      // Get the encrypted secret from user_wallets
+      const userWallet = await db.dbGet('SELECT wallet_secret FROM user_wallets WHERE discord_id = ?', [req.user.id]);
+      if (!userWallet?.wallet_secret) return res.status(400).json({ error: 'No private key stored for your DCB wallet.' });
+      await db.dbRun('UPDATE beast_treasury SET wallet_address = ?, wallet_secret = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [dcbUser.solana_address, userWallet.wallet_secret, 'beast_main']);
+      console.log(`[Beast] Treasury linked to DCB wallet: ${dcbUser.solana_address.slice(0, 8)}...${dcbUser.solana_address.slice(-4)}`);
+      await db.dbRun('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details) VALUES (?,?,?,?,?,?,?)',
+        ['load', 'SOL', 0, 0, req.user.id, req.user.username || 'Owner', `Linked DCB wallet as treasury (${dcbUser.solana_address})`]);
+      res.json({ ok: true, address: dcbUser.solana_address, message: `DCB wallet linked as Beast treasury: ${dcbUser.solana_address}` });
+    } catch (err) {
+      console.error('[Beast] use-dcb-wallet error:', err);
+      res.status(500).json({ error: 'Failed to link DCB wallet' });
+    }
+  });
+
+  // POST /api/beast/treasury/sweep-to-guild — owner transfers beast treasury profit to DCB guild treasury
+  app.post('/api/beast/treasury/sweep-to-guild', requireAuth, async (req, res) => {
+    try {
+      if (req.user.id !== BEAST_OWNER_ID) return res.status(403).json({ error: 'Not authorized' });
+      const { guildId, amount, currency } = req.body;
+      if (!guildId || !amount || !currency) return res.status(400).json({ error: 'Missing guildId, amount, or currency' });
+      if (currency !== 'SOL') return res.status(400).json({ error: 'Only SOL transfers are supported' });
+      const amt = parseFloat(amount);
+      if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount' });
+
+      // Check beast treasury balance
+      const treasury = await db.dbGet('SELECT balance_sol FROM beast_treasury WHERE id = ?', ['beast_main']);
+      const beastBal = parseFloat(treasury?.balance_sol || 0);
+      if (amt > beastBal) return res.status(400).json({ error: `Insufficient beast treasury balance. Available: ${beastBal.toFixed(6)} SOL` });
+
+      // Get beast treasury wallet for on-chain transfer
+      const beastWallet = await getBeastTreasuryWallet();
+      // Get guild treasury wallet
+      const guildWallet = await db.getGuildWallet(guildId);
+      if (!guildWallet?.wallet_address) return res.status(400).json({ error: 'No guild treasury wallet configured for this server.' });
+
+      let txSignature = null;
+
+      // If beast treasury has a real wallet with private key, do on-chain transfer
+      if (beastWallet?.wallet_secret) {
+        try {
+          const keypair = cryptoUtils.getKeypairFromSecret(beastWallet.wallet_secret);
+          if (keypair) {
+            const txResult = await cryptoUtils.sendSolFrom(keypair, guildWallet.wallet_address, amt);
+            if (txResult?.success) {
+              txSignature = txResult.signature;
+            } else {
+              return res.status(500).json({ error: `On-chain transfer failed: ${txResult?.error || 'Unknown error'}` });
+            }
+          }
+        } catch (txErr) {
+          return res.status(500).json({ error: `On-chain transfer error: ${txErr.message}` });
+        }
+      }
+
+      // Deduct from beast treasury
+      await db.dbRun('UPDATE beast_treasury SET balance_sol = balance_sol - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [amt, 'beast_main']);
+      const afterSweep = await db.dbGet('SELECT balance_sol FROM beast_treasury WHERE id = ?', ['beast_main']);
+      // Log transaction
+      await db.dbRun('INSERT INTO beast_treasury_txns (type, currency, amount, balance_after, user_id, username, details, tx_signature) VALUES (?,?,?,?,?,?,?,?)',
+        ['withdrawal', currency, amt, parseFloat(afterSweep?.balance_sol || 0), req.user.id, req.user.username || 'Owner',
+         `Swept ${amt} SOL to guild treasury (${guildWallet.wallet_address.slice(0, 8)}...)`, txSignature]);
+      // Log in guild activity
+      await db.logActivity(guildId, 'wallet', 'Beast Treasury Sweep', `Received ${amt.toFixed(6)} SOL from illy Beast Gaming treasury`, `@${req.user.username}`, amt, 'SOL', txSignature);
+      if (txSignature) {
+        await db.recordTransaction(guildId, beastWallet?.wallet_address || 'beast_treasury', guildWallet.wallet_address, amt, txSignature);
+      }
+
+      res.json({ ok: true, signature: txSignature, amount: amt, remaining: parseFloat(afterSweep?.balance_sol || 0),
+        message: `Transferred ${amt.toFixed(6)} SOL from Beast Treasury to Guild Treasury${txSignature ? ' (on-chain)' : ' (ledger only)'}` });
+    } catch (err) {
+      console.error('[Beast] sweep-to-guild error:', err);
+      res.status(500).json({ error: 'Transfer failed: ' + (err.message || 'Unknown error') });
     }
   });
 

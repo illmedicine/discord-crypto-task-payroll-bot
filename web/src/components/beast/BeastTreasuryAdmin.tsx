@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import api from '../../api'
 
 interface Props {
+  guildId?: string
   onClose: () => void
 }
 
@@ -11,7 +12,7 @@ type TxnFilter = 'all' | 'wager_in' | 'payout' | 'deposit_from_dcb' | 'load' | '
 const SOLSCAN_TX = 'https://solscan.io/tx/'
 const truncSig = (s: string) => s ? `${s.slice(0, 6)}…${s.slice(-4)}` : ''
 
-export default function BeastTreasuryAdmin({ onClose }: Props) {
+export default function BeastTreasuryAdmin({ guildId, onClose }: Props) {
   const [treasury, setTreasury] = useState<any>(null)
   const [transactions, setTransactions] = useState<any[]>([])
   const [ledgerData, setLedgerData] = useState<any>(null)
@@ -21,6 +22,7 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [walletInfo, setWalletInfo] = useState<{ configured: boolean; address?: string; onChainSol?: number } | null>(null)
+  const [sweepAmount, setSweepAmount] = useState('')
 
   useEffect(() => { fetchTreasury(); fetchWalletInfo() }, [])
   useEffect(() => { if (tab === 'ledger' || tab === 'deposits') fetchLedger() }, [tab, ledgerFilter, ledgerPage])
@@ -191,6 +193,55 @@ export default function BeastTreasuryAdmin({ onClose }: Props) {
                   <div style={{ fontWeight: 700, color: profit >= 0 ? '#22c55e' : '#ef4444' }}>{profit.toFixed(4)}</div>
                 </div>
               </div>
+
+              {/* Transfer to Guild Treasury */}
+              {guildId && profit > 0 && (
+                <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#3b82f6', marginBottom: 8 }}>💸 Transfer to Guild Treasury</div>
+                  <div style={{ fontSize: '0.78rem', color: '#aaa', marginBottom: 10 }}>
+                    Move Beast Gaming profits to your DCB Guild Treasury wallet.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max={parseFloat(treasury?.balance_sol || 0)}
+                      value={sweepAmount}
+                      onChange={e => setSweepAmount(e.target.value)}
+                      placeholder={`Max: ${parseFloat(treasury?.balance_sol || 0).toFixed(4)} SOL`}
+                      style={{ flex: 1, minWidth: 120, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(0,0,0,0.3)', color: '#fff', fontSize: '0.85rem' }}
+                    />
+                    <button
+                      disabled={loading || !sweepAmount || parseFloat(sweepAmount) <= 0}
+                      onClick={async () => {
+                        const amt = parseFloat(sweepAmount)
+                        if (!amt || amt <= 0) return
+                        if (!confirm(`Transfer ${amt.toFixed(6)} SOL from Beast Treasury to your Guild Treasury?`)) return
+                        setLoading(true); setMessage(null)
+                        try {
+                          const r = await api.post('/beast/treasury/sweep-to-guild', { guildId, amount: amt, currency: 'SOL' })
+                          setMessage({ type: 'success', text: r.data?.message || `Transferred ${amt} SOL` })
+                          setSweepAmount('')
+                          fetchTreasury()
+                        } catch (err: any) {
+                          setMessage({ type: 'error', text: err?.response?.data?.error || 'Transfer failed' })
+                        } finally { setLoading(false) }
+                      }}
+                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff', opacity: (!sweepAmount || parseFloat(sweepAmount) <= 0) ? 0.5 : 1 }}
+                    >
+                      {loading ? '...' : '➡️ Transfer to Guild'}
+                    </button>
+                    <button
+                      disabled={loading}
+                      onClick={() => setSweepAmount(String(parseFloat(treasury?.balance_sol || 0).toFixed(6)))}
+                      style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.05)', color: '#ccc', fontSize: '0.78rem', cursor: 'pointer' }}
+                    >
+                      Max
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Ledger summary stats */}
               {ledgerData?.stats && (

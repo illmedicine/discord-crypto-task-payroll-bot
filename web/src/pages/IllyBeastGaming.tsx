@@ -285,7 +285,7 @@ export default function IllyBeastGaming({ guildId }: { guildId: string }) {
 
       {/* ─── TREASURY ADMIN MODAL ─── */}
       {showTreasury && (
-        <BeastTreasuryAdmin onClose={() => setShowTreasury(false)} />
+        <BeastTreasuryAdmin guildId={guildId} onClose={() => setShowTreasury(false)} />
       )}
 
       {/* ─── LIVE WINS TICKER ─── */}
