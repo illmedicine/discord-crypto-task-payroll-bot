@@ -6262,21 +6262,24 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           [req.user.username || 'Player', gameId, payout, multiplier, currency])
       }
 
-      // Refresh all wallet balance caches
-      const newTotal = await refreshWalletCachesBeast(req.user.id)
+      // Get current wallets without slow RPC refresh — send response immediately
       const allWallets = await getUserWalletsBeast(req.user.id)
+      const cachedTotal = allWallets.reduce((s, w) => s + (w.balance_cache || 0), 0)
 
       res.json({
         won, payout, multiplier, details, serverSeed,
-        balance: { sol: newTotal, usdc: 0, usd: 0 },
+        balance: { sol: cachedTotal, usdc: 0, usd: 0 },
         wagerTx: wagerResult.signature,
         payoutTx: payoutTxSig,
         newWinningsWallet: newWinningsWallet ? { address: newWinningsWallet.address, amount: newWinningsWallet.amount } : null,
         wallets: allWallets.map(w => ({ type: w.wallet_type, address: w.wallet_address, balance: w.balance_cache, label: w.label }))
       })
+
+      // Refresh wallet caches in background (non-blocking)
+      refreshWalletCachesBeast(req.user.id).catch(e => console.error('[Beast] bg wallet refresh error:', e?.message))
     } catch (err) {
       console.error('[Beast] play error:', err)
-      res.status(500).json({ error: 'Game error' })
+      res.status(500).json({ error: err?.message || 'Game error' })
     }
   })
 

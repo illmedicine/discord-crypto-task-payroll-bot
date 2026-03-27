@@ -164,7 +164,7 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
       if (game.id === 'crash') payload.autoCashout = crashMulti
       if (game.id === 'limbo') payload.targetMultiplier = limboTarget
 
-      const r = await api.post('/beast/games/play', payload)
+      const r = await api.post('/beast/games/play', payload, { timeout: 90000 })
       const res = r.data
       setAnimPhase('reveal')
       // Brief pause to show reveal animation before showing result
@@ -183,7 +183,8 @@ export default function BeastGamePlayer({ game, balance, onBalanceChange }: Prop
         setBetAmount(Math.max(0, errData.maxBet).toFixed(prec))
         api.get('/beast/treasury/max-payout').then(r2 => setTreasuryLimits(r2.data)).catch(() => {})
       }
-      setResult({ won: false, payout: 0, multiplier: 0, details: errData?.error || 'Bet failed' })
+      const isTimeout = err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')
+      setResult({ won: false, payout: 0, multiplier: 0, details: isTimeout ? 'Request timed out — check your balance, the bet may still process.' : (errData?.error || 'Bet failed') })
       setAnimPhase('idle')
     } finally {
       setPlaying(false)
