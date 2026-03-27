@@ -155,6 +155,10 @@ export default function App() {
   }, [])
 
   const navigate = (p: Page) => {
+    // Block non-owners from navigating to treasury
+    if (p === 'treasury' && !isOwner) {
+      p = 'dashboard' as Page
+    }
     setPage(p)
     window.location.hash = p
     setSidebarOpen(false)
@@ -168,6 +172,17 @@ export default function App() {
 
   const userRole = guilds.find(g => g.id === guildId)?.role || 'member'
   const isOwner = userRole === 'owner'
+
+  // Filter nav items: hide Treasury for non-owners
+  const visibleNavItems = NAV_ITEMS.filter(item => item.id !== 'treasury' || isOwner)
+
+  // Redirect non-owners away from treasury page (e.g. via URL hash or guild change)
+  useEffect(() => {
+    if (page === 'treasury' && !isOwner) {
+      setPage('dashboard')
+      window.location.hash = 'dashboard'
+    }
+  }, [page, isOwner])
 
   // Detect Capacitor / mobile environment for token-paste fallback
   const isCapacitorEnv = isMobileApp
@@ -417,7 +432,7 @@ export default function App() {
 
         {/* Bottom tab bar */}
         <nav className="mobile-tab-bar">
-          {NAV_ITEMS.map(item => (
+          {visibleNavItems.map(item => (
             <button
               key={item.id}
               className={`mobile-tab ${page === item.id ? 'active' : ''}`}
@@ -449,7 +464,7 @@ export default function App() {
         </div>
 
         <nav className="sidebar-nav">
-          {NAV_ITEMS.map(item => (
+          {visibleNavItems.map(item => (
             <button
               key={item.id}
               className={`sidebar-nav-item ${page === item.id ? 'active' : ''}`}

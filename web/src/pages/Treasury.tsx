@@ -35,7 +35,7 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
-export default function Treasury({ guildId, isOwner = true }: Props) {
+export default function Treasury({ guildId, isOwner = false }: Props) {
   const [wallet, setWallet] = useState<Wallet | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -266,6 +266,16 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
   const budgetSpent = wallet?.budget_spent || 0
   const budgetRemaining = Math.max(budgetTotal - budgetSpent, 0)
   const budgetPct = budgetTotal > 0 ? Math.min((budgetSpent / budgetTotal) * 100, 100) : 0
+
+  // Block non-owners from accessing treasury
+  if (!isOwner) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center' }}>
+        <h2>Access Denied</h2>
+        <p style={{ color: 'var(--text-muted)' }}>Only the server owner can access Guild Treasury.</p>
+      </div>
+    )
+  }
 
   return (
     <div className="container">
