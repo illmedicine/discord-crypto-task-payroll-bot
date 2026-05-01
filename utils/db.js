@@ -195,6 +195,18 @@ const initDb = () => {
         FOREIGN KEY(guild_id) REFERENCES guild_wallets(guild_id)
       )
     `);
+    // Add extra columns for richer transaction data (safe if already exist)
+    db.run(`ALTER TABLE transactions ADD COLUMN currency TEXT DEFAULT 'SOL'`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN original_amount REAL`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN original_currency TEXT`, () => {});
+    // Audit / accounting columns (populated by audit-sync against on-chain data)
+    db.run(`ALTER TABLE transactions ADD COLUMN network_fee REAL`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN block_time INTEGER`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN slot INTEGER`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN direction TEXT`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN counterparty TEXT`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN treasury_address TEXT`, () => {});
+    db.run(`ALTER TABLE transactions ADD COLUMN audit_synced_at DATETIME`, () => {});
 
     // Wallet history table
     db.run(`

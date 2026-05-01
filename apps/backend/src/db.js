@@ -181,6 +181,18 @@ db.serialize(() => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   )
+  // Add extra columns for richer transaction data (safe if already exist)
+  db.run(`ALTER TABLE transactions ADD COLUMN currency TEXT DEFAULT 'SOL'`, () => {})
+  db.run(`ALTER TABLE transactions ADD COLUMN original_amount REAL`, () => {})
+  db.run(`ALTER TABLE transactions ADD COLUMN original_currency TEXT`, () => {})
+  // Audit / accounting columns (populated by audit-sync against on-chain data)
+  db.run(`ALTER TABLE transactions ADD COLUMN network_fee REAL`, () => {})        // SOL paid as Solana network fee
+  db.run(`ALTER TABLE transactions ADD COLUMN block_time INTEGER`, () => {})       // unix seconds, on-chain
+  db.run(`ALTER TABLE transactions ADD COLUMN slot INTEGER`, () => {})             // on-chain slot
+  db.run(`ALTER TABLE transactions ADD COLUMN direction TEXT`, () => {})           // 'payout' | 'deposit' | 'self' | 'fee_only'
+  db.run(`ALTER TABLE transactions ADD COLUMN counterparty TEXT`, () => {})        // non-treasury side of the transfer
+  db.run(`ALTER TABLE transactions ADD COLUMN treasury_address TEXT`, () => {})    // the treasury wallet involved
+  db.run(`ALTER TABLE transactions ADD COLUMN audit_synced_at DATETIME`, () => {}) // last on-chain enrichment
 
   // Task assignments
   db.run(

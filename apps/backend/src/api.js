@@ -3239,6 +3239,374 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
     }
   })
 
+  // ════════════════════════════════════════════════════════════════════
+  //  AUDIT REPORT — full on-chain ledger for accounting / bank audits.
+  //  Sync pulls every signature for every treasury wallet of a guild,
+  //  classifies direction (payout / deposit / self), captures network
+  //  fees, and persists into the `transactions` table. Report endpoint
+  //  emits CSV (default) or JSON for download.
+  // ════════════════════════════════════════════════════════════════════
+
+  const LAMPORTS_PER_SOL = 1_000_000_000
+  const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+  const AUDIT_RPC_DELAY_MS = Number(process.env.AUDIT_RPC_DELAY_MS) || 120
+  const AUDIT_RPC_MAX_RETRIES = Number(process.env.AUDIT_RPC_MAX_RETRIES) || 6
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+  async function rpcCall(method, params, timeout = 20000) {
+    let attempt = 0
+    let backoff = 500
+    while (true) {
+      try {
+        const res = await axios.post(SOLANA_RPC_URL, { jsonrpc: '2.0', id: 1, method, params }, { timeout })
+        if (res.data?.error) throw new Error(res.data.error.message || 'rpc_error')
+        if (AUDIT_RPC_DELAY_MS) await sleep(AUDIT_RPC_DELAY_MS)
+        return res.data?.result
+      } catch (err) {
+        const status = err?.response?.status
+        const retriable = status === 429 || status === 502 || status === 503 || status === 504 || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT'
+        if (!retriable || attempt >= AUDIT_RPC_MAX_RETRIES) throw err
+        await sleep(backoff + Math.floor(Math.random() * 250))
+        backoff = Math.min(backoff * 2, 10000)
+        attempt++
+      }
+    }
+  }
+
+  // Walk every signature for `address` (newest → oldest), paginating with `before`.
+  // Optional `untilSignature` halts pagination once seen (incremental sync).
+  async function fetchAllSignatures(address, { untilSignature = null, hardCap = 20000 } = {}) {
+    const out = []
+    let before = null
+    while (out.length < hardCap) {
+      const params = [address, { limit: 1000, ...(before ? { before } : {}) }]
+      const page = await rpcCall('getSignaturesForAddress', params)
+      if (!Array.isArray(page) || page.length === 0) break
+      let stop = false
+      for (const item of page) {
+        if (untilSignature && item.signature === untilSignature) { stop = true; break }
+        out.push(item)
+      }
+      if (stop) break
+      if (page.length < 1000) break
+      before = page[page.length - 1].signature
+    }
+    return out
+  }
+
+  // Given a parsed Solana tx and the treasury address, return the net SOL
+  // change for the treasury wallet (positive = inflow / deposit, negative
+  // = outflow / payout) plus the dominant counterparty.
+  function classifyTx(tx, treasuryAddress) {
+    try {
+      const accountKeys = tx.transaction?.message?.accountKeys || []
+      const idx = accountKeys.findIndex(k => (typeof k === 'string' ? k : k?.pubkey) === treasuryAddress)
+      if (idx === -1) return null
+      const pre = tx.meta?.preBalances?.[idx] ?? 0
+      const post = tx.meta?.postBalances?.[idx] ?? 0
+      const fee = tx.meta?.fee ?? 0
+      const isFeePayer = idx === 0
+      // Net change includes the fee when the treasury is fee payer.
+      const netLamports = post - pre
+      // Transfer amount excluding fee: if treasury paid the fee, the visible
+      // outflow on-chain is (transfer + fee). Reconstruct transfer.
+      const transferLamports = isFeePayer ? netLamports + fee : netLamports
+      const sol = transferLamports / LAMPORTS_PER_SOL
+      const feeSol = isFeePayer ? fee / LAMPORTS_PER_SOL : 0
+      let direction = 'self'
+      if (transferLamports < 0) direction = 'payout'
+      else if (transferLamports > 0) direction = 'deposit'
+      else if (isFeePayer && fee > 0) direction = 'fee_only'
+
+      // Find counterparty: the account whose balance moved in the opposite
+      // direction by the largest magnitude (excluding system program / vote).
+      let counterparty = null
+      let bestDelta = 0
+      const pres = tx.meta?.preBalances || []
+      const posts = tx.meta?.postBalances || []
+      for (let i = 0; i < accountKeys.length; i++) {
+        if (i === idx) continue
+        const key = typeof accountKeys[i] === 'string' ? accountKeys[i] : accountKeys[i]?.pubkey
+        if (!key) continue
+        const delta = (posts[i] ?? 0) - (pres[i] ?? 0)
+        if (transferLamports < 0 && delta > 0 && delta > bestDelta) { bestDelta = delta; counterparty = key }
+        if (transferLamports > 0 && delta < 0 && -delta > bestDelta) { bestDelta = -delta; counterparty = key }
+      }
+
+      return {
+        direction,
+        sol: Math.abs(sol),
+        fee: feeSol,
+        counterparty,
+        slot: tx.slot ?? null,
+        blockTime: tx.blockTime ?? null,
+        feePayer: isFeePayer,
+      }
+    } catch (_) {
+      return null
+    }
+  }
+
+  async function runAuditSync(guildId, { hardCap = 20000, full = false } = {}) {
+    const wallets = await db.all(
+      'SELECT guild_id, wallet_address FROM guild_wallets WHERE guild_id = ? AND wallet_address IS NOT NULL',
+      [guildId]
+    )
+    if (!wallets.length) return { wallets: 0, scanned: 0, inserted: 0, updated: 0 }
+
+    let scanned = 0, inserted = 0, updated = 0
+    for (const w of wallets) {
+      // Determine pagination cutoff for incremental sync.
+      let untilSignature = null
+      if (!full) {
+        const last = await db.get(
+          `SELECT signature FROM transactions
+            WHERE guild_id = ? AND treasury_address = ? AND audit_synced_at IS NOT NULL
+              AND block_time IS NOT NULL
+            ORDER BY block_time DESC LIMIT 1`,
+          [guildId, w.wallet_address]
+        )
+        untilSignature = last?.signature || null
+      }
+
+      let sigs
+      try {
+        sigs = await fetchAllSignatures(w.wallet_address, { untilSignature, hardCap })
+      } catch (err) {
+        console.warn(`[audit] signature scan failed for ${w.wallet_address}:`, err.message)
+        continue
+      }
+
+      for (const sigInfo of sigs) {
+        if (sigInfo.err) continue
+        scanned++
+        let tx
+        try {
+          tx = await rpcCall('getTransaction', [sigInfo.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }])
+        } catch (err) {
+          console.warn(`[audit] getTransaction failed ${sigInfo.signature}:`, err.message)
+          continue
+        }
+        if (!tx?.meta || !tx?.transaction) continue
+
+        const c = classifyTx(tx, w.wallet_address)
+        if (!c) continue
+
+        // Skip self-transfers with no fee impact (rare).
+        if (c.direction === 'self' && !c.fee) continue
+
+        // For deposit/payout we want to record the transfer amount (already
+        // absolute SOL). For fee_only rows we still record so the fee is
+        // captured for accounting.
+        const fromAddr = c.direction === 'deposit' ? (c.counterparty || '') : w.wallet_address
+        const toAddr = c.direction === 'payout' ? (c.counterparty || '') : w.wallet_address
+        const amount = c.sol
+
+        // Prefer UPDATE when a row with this signature already exists
+        const existing = await db.get('SELECT id, amount, from_address, to_address FROM transactions WHERE signature = ?', [sigInfo.signature])
+        const blockIso = c.blockTime ? new Date(c.blockTime * 1000).toISOString() : null
+
+        if (existing) {
+          await db.run(
+            `UPDATE transactions SET
+               network_fee = ?, block_time = ?, slot = ?, direction = ?,
+               counterparty = ?, treasury_address = ?, audit_synced_at = CURRENT_TIMESTAMP
+             WHERE signature = ?`,
+            [c.fee, c.blockTime, c.slot, c.direction, c.counterparty, w.wallet_address, sigInfo.signature]
+          )
+          updated++
+        } else {
+          await db.run(
+            `INSERT INTO transactions
+               (guild_id, from_address, to_address, amount, signature, status,
+                currency, created_at, network_fee, block_time, slot, direction,
+                counterparty, treasury_address, audit_synced_at)
+             VALUES (?, ?, ?, ?, ?, 'confirmed', 'SOL', COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(signature) DO NOTHING`,
+            [guildId, fromAddr, toAddr, amount, sigInfo.signature, blockIso, c.fee, c.blockTime, c.slot, c.direction, c.counterparty, w.wallet_address]
+          )
+          inserted++
+        }
+      }
+    }
+    return { wallets: wallets.length, scanned, inserted, updated }
+  }
+
+  // ---- Audit Report Endpoints ----
+
+  // POST /api/admin/guilds/:guildId/audit/sync
+  // Body: { full?: boolean, hardCap?: number }
+  // Walks on-chain history for every treasury wallet and refreshes the
+  // `transactions` table with direction, fee, slot, block_time, counterparty.
+  app.post('/api/admin/guilds/:guildId/audit/sync', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const full = !!req.body?.full
+      const hardCap = Math.min(Number(req.body?.hardCap) || 20000, 100000)
+      const stats = await runAuditSync(req.guild.id, { full, hardCap })
+      res.json({ ok: true, ...stats })
+    } catch (err) {
+      console.error('[audit/sync] error:', err?.message || err)
+      res.status(500).json({ error: 'audit_sync_failed', message: String(err?.message || err) })
+    }
+  })
+
+  // GET /api/admin/guilds/:guildId/audit/report
+  //   ?format=csv|json (default csv)
+  //   &from=YYYY-MM-DD  (inclusive, applied to block_time / created_at)
+  //   &to=YYYY-MM-DD    (inclusive)
+  //   &sync=1           (run sync first; full=1 forces full re-scan)
+  //   &full=1
+  // Returns a downloadable CSV (or JSON) with every recorded transaction
+  // for the guild, including network fees, direction, and totals.
+  app.get('/api/admin/guilds/:guildId/audit/report', requireAuth, requireGuildOwner, async (req, res) => {
+    try {
+      const format = (req.query.format || 'csv').toString().toLowerCase()
+      const from = (req.query.from || '').toString().trim()
+      const to = (req.query.to || '').toString().trim()
+      const doSync = req.query.sync === '1' || req.query.sync === 'true'
+      const full = req.query.full === '1' || req.query.full === 'true'
+
+      let syncStats = null
+      if (doSync) {
+        try { syncStats = await runAuditSync(req.guild.id, { full }) }
+        catch (e) { console.warn('[audit/report] sync failed but continuing:', e.message) }
+      }
+
+      // Build query. Use block_time when present, otherwise created_at.
+      const where = ['t.guild_id = ?']
+      const params = [req.guild.id]
+      if (from) {
+        where.push(`(COALESCE(datetime(t.block_time, 'unixepoch'), t.created_at) >= datetime(?))`)
+        params.push(from)
+      }
+      if (to) {
+        // inclusive end-of-day
+        where.push(`(COALESCE(datetime(t.block_time, 'unixepoch'), t.created_at) <= datetime(?, '+1 day'))`)
+        params.push(to)
+      }
+      const sql = `
+        SELECT t.id, t.guild_id, t.signature, t.direction, t.from_address, t.to_address,
+               t.counterparty, t.treasury_address, t.amount, t.currency,
+               t.original_amount, t.original_currency, t.network_fee, t.status,
+               t.block_time, t.slot,
+               COALESCE(datetime(t.block_time, 'unixepoch'), t.created_at) AS occurred_at,
+               t.created_at, t.audit_synced_at,
+               gw.label AS treasury_label
+          FROM transactions t
+          LEFT JOIN guild_wallets gw
+                 ON gw.guild_id = t.guild_id AND gw.wallet_address = t.treasury_address
+         WHERE ${where.join(' AND ')}
+         ORDER BY occurred_at ASC, t.id ASC
+      `
+      const rows = await db.all(sql, params)
+
+      // Inferred direction for legacy rows that predate audit-sync: if the
+      // `from_address` matches a known treasury for this guild, treat as payout.
+      const treasuries = new Set(
+        (await db.all('SELECT wallet_address FROM guild_wallets WHERE guild_id = ? AND wallet_address IS NOT NULL', [req.guild.id]))
+          .map(r => r.wallet_address)
+      )
+      const enriched = rows.map(r => {
+        let direction = r.direction
+        if (!direction) {
+          if (treasuries.has(r.from_address)) direction = 'payout'
+          else if (treasuries.has(r.to_address)) direction = 'deposit'
+          else direction = 'unknown'
+        }
+        const counterparty = r.counterparty || (direction === 'payout' ? r.to_address : direction === 'deposit' ? r.from_address : null)
+        const treasuryAddress = r.treasury_address || (treasuries.has(r.from_address) ? r.from_address : treasuries.has(r.to_address) ? r.to_address : null)
+        return { ...r, direction, counterparty, treasury_address: treasuryAddress }
+      })
+
+      // Summary totals
+      const summary = {
+        guild_id: req.guild.id,
+        generated_at: new Date().toISOString(),
+        from: from || null,
+        to: to || null,
+        row_count: enriched.length,
+        total_payouts_sol: 0,
+        total_deposits_sol: 0,
+        total_network_fees_sol: 0,
+        net_outflow_sol: 0, // payouts + fees - deposits
+        payouts_count: 0,
+        deposits_count: 0,
+        unknown_count: 0,
+        sync_stats: syncStats,
+      }
+      for (const r of enriched) {
+        const amt = Number(r.amount) || 0
+        const fee = Number(r.network_fee) || 0
+        if (r.direction === 'payout') { summary.total_payouts_sol += amt; summary.payouts_count++ }
+        else if (r.direction === 'deposit') { summary.total_deposits_sol += amt; summary.deposits_count++ }
+        else summary.unknown_count++
+        summary.total_network_fees_sol += fee
+      }
+      summary.net_outflow_sol = +(summary.total_payouts_sol + summary.total_network_fees_sol - summary.total_deposits_sol).toFixed(9)
+      summary.total_payouts_sol = +summary.total_payouts_sol.toFixed(9)
+      summary.total_deposits_sol = +summary.total_deposits_sol.toFixed(9)
+      summary.total_network_fees_sol = +summary.total_network_fees_sol.toFixed(9)
+
+      const filenameStamp = new Date().toISOString().slice(0, 10)
+      const rangeStamp = from || to ? `_${from || 'all'}_to_${to || 'now'}` : '_all-time'
+
+      if (format === 'json') {
+        res.json({ summary, transactions: enriched })
+        return
+      }
+
+      // CSV — includes a summary header block, then a full ledger.
+      const csvEscape = (v) => {
+        if (v === null || v === undefined) return ''
+        const s = String(v)
+        if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
+        return s
+      }
+      const lines = []
+      lines.push('# DCB Treasury Audit Report')
+      lines.push(`# Guild,${csvEscape(req.guild.id)}`)
+      lines.push(`# Generated,${summary.generated_at}`)
+      lines.push(`# Range,${from || 'all-time'} to ${to || 'now'}`)
+      lines.push(`# RowCount,${summary.row_count}`)
+      lines.push(`# TotalPayoutsSOL,${summary.total_payouts_sol}`)
+      lines.push(`# TotalDepositsSOL,${summary.total_deposits_sol}`)
+      lines.push(`# TotalNetworkFeesSOL,${summary.total_network_fees_sol}`)
+      lines.push(`# NetOutflowSOL,${summary.net_outflow_sol}`)
+      lines.push(`# PayoutsCount,${summary.payouts_count}`)
+      lines.push(`# DepositsCount,${summary.deposits_count}`)
+      lines.push(`# UnknownCount,${summary.unknown_count}`)
+      lines.push('')
+      const headers = [
+        'occurred_at', 'block_time_unix', 'slot', 'direction',
+        'amount_sol', 'network_fee_sol', 'currency',
+        'original_amount', 'original_currency',
+        'treasury_address', 'treasury_label', 'counterparty',
+        'from_address', 'to_address',
+        'signature', 'status', 'guild_id',
+        'recorded_at', 'audit_synced_at',
+      ]
+      lines.push(headers.join(','))
+      for (const r of enriched) {
+        lines.push([
+          r.occurred_at, r.block_time, r.slot, r.direction,
+          r.amount, r.network_fee ?? '', r.currency || 'SOL',
+          r.original_amount ?? '', r.original_currency ?? '',
+          r.treasury_address ?? '', r.treasury_label ?? '', r.counterparty ?? '',
+          r.from_address, r.to_address,
+          r.signature ?? '', r.status ?? '', r.guild_id,
+          r.created_at, r.audit_synced_at ?? '',
+        ].map(csvEscape).join(','))
+      }
+      const csv = lines.join('\r\n') + '\r\n'
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+      res.setHeader('Content-Disposition', `attachment; filename="dcb-audit-${req.guild.id}${rangeStamp}_${filenameStamp}.csv"`)
+      res.send(csv)
+    } catch (err) {
+      console.error('[audit/report] error:', err?.message || err)
+      res.status(500).json({ error: 'audit_report_failed', message: String(err?.message || err) })
+    }
+  })
+
   // ---- Events (Scheduled Events) ----
   app.get('/api/admin/guilds/:guildId/events', requireAuth, requireGuildMember, async (req, res) => {
     try {
