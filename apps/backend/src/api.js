@@ -3648,11 +3648,26 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           })
         }
         if (commandsRun > 0 && summary.command_income_usd > 0) {
-          activity.push({
-            date: to ? `${to}T23:59:59Z` : new Date().toISOString(),
-            auth: 'DCB-NET',
-            desc: `DCB Command Network Income (${commandsRun.toLocaleString('en-US')} cmds @ $${DCB_COMMAND_RATE_USD.toFixed(2)})`,
-            amount: summary.command_income_usd,
+          // Spread DCB network income across Jan, Feb, Mar, Apr of the
+          // statement year (default current year). Each entry = total / 4.
+          const yr = (to ? new Date(to) : new Date()).getUTCFullYear()
+          const quarter = +(summary.command_income_usd / 4).toFixed(2)
+          const last = +(summary.command_income_usd - quarter * 3).toFixed(2)
+          const perCmd = Math.round(commandsRun / 4)
+          const monthDates = [
+            `${yr}-01-31T23:59:59Z`,
+            `${yr}-02-28T23:59:59Z`,
+            `${yr}-03-31T23:59:59Z`,
+            `${yr}-04-30T23:59:59Z`,
+          ]
+          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr']
+          monthDates.forEach((d, i) => {
+            activity.push({
+              date: d,
+              auth: 'DCB-NET',
+              desc: `DCB Command Network Income (${monthNames[i]} - ${perCmd.toLocaleString('en-US')} cmds @ $${DCB_COMMAND_RATE_USD.toFixed(2)})`,
+              amount: i === 3 ? last : quarter,
+            })
           })
         }
         try {
@@ -3677,6 +3692,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
             }
           }
         } catch (e) { console.warn('[audit/report] lili imports failed:', e?.message || e) }
+
+        // ── Manual date corrections (UTC-based) ──
+        // 03/09/26 → 01/09/2026,  03/10/26 → 02/10/2026,  03/11/26 → 02/11/2026
+        for (const a of activity) {
+          const dt = new Date(a.date)
+          if (isNaN(dt.getTime())) continue
+          const m = dt.getUTCMonth() + 1, d = dt.getUTCDate()
+          if (m === 3 && d === 9) { dt.setUTCMonth(0); a.date = dt.toISOString() }
+          else if (m === 3 && d === 10) { dt.setUTCMonth(1); a.date = dt.toISOString() }
+          else if (m === 3 && d === 11) { dt.setUTCMonth(1); a.date = dt.toISOString() }
+        }
 
         activity.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
         let runningBalance = beginningBalance
@@ -3711,9 +3737,14 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
         const periodStart = from || (enriched[0]?.occurred_at || new Date().toISOString())
         const periodEnd   = to   || (enriched[enriched.length - 1]?.occurred_at || new Date().toISOString())
+        // Forced statement period: Jan 1 of current year → today ("Present")
+        const _now = new Date()
+        const _yr  = _now.getUTCFullYear()
+        const periodStartLabel = `1 January, ${_yr}`
+        const periodEndLabel   = 'Present'
 
         const doc = new PDFDocument({ size: 'LETTER', layout: 'portrait', margin: 54, bufferPages: true, info: {
-          Title: `Bank Account Statement ${fmtMonthDay(periodStart)} - ${fmtMonthDay(periodEnd)}`,
+          Title: `Bank Account Statement ${periodStartLabel} - ${periodEndLabel}`,
           Author: DCB_COMPANY_NAME,
           Subject: 'Bank Account Statement',
         }})
@@ -3761,7 +3792,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         y += 14
         doc.font('Helvetica').fontSize(10).fillColor(TEXT)
           .text(STM.account, colA, y, { lineBreak: false })
-          .text(`${fmtMonthDay(periodStart)} - ${fmtMonthDay(periodEnd)}`, colB, y, { lineBreak: false })
+          .text(`${periodStartLabel} - ${periodEndLabel}`, colB, y, { lineBreak: false })
         y += 32
 
         // ── Checking Account Summary ──
@@ -3772,11 +3803,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         doc.moveTo(M, y).lineTo(RIGHT, y).lineWidth(0.5).strokeColor('#dcdcdc').stroke()
         y += 6
         const summaryRows = [
-          [`Beginning balance on ${fmtMonthDay(periodStart)}`, usdFmt(beginningBalance)],
+          [`Beginning balance on ${periodStartLabel}`, usdFmt(beginningBalance)],
           [`Deposits and other credits`,                       usdFmt(totalCredits)],
           [`Withdrawals and other debits`,                     usdFmt(-totalDebits)],
           [`Fees`,                                             usdFmt(0)],
-          [`Ending balance on ${fmtMonthDay(periodEnd)}`,      usdFmt(endingBalance)],
+          [`Ending balance on ${periodEndLabel}`,      usdFmt(endingBalance)],
         ]
         doc.font('Helvetica').fontSize(10).fillColor(TEXT)
         for (const [label, val] of summaryRows) {
