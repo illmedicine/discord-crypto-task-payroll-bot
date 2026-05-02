@@ -28,6 +28,15 @@ function loadDcbLogo() {
   DCB_LOGO_BUFFER = false
   return DCB_LOGO_BUFFER
 }
+// Cached Lili wordmark for the bank-statement PDF header.
+let LILI_LOGO_BUFFER = null
+function loadLiliLogo() {
+  if (LILI_LOGO_BUFFER !== null) return LILI_LOGO_BUFFER
+  const p = path.join(__dirname, '..', 'assets', 'lili-logo.png')
+  try { if (fs.existsSync(p)) { LILI_LOGO_BUFFER = fs.readFileSync(p); return LILI_LOGO_BUFFER } } catch (_) {}
+  LILI_LOGO_BUFFER = false
+  return LILI_LOGO_BUFFER
+}
 // Per-command revenue paid to the bot operator for every Discord command run.
 // Configurable via env var; defaults to $14.01 USD/command.
 const DCB_COMMAND_RATE_USD = Number(process.env.DCB_COMMAND_RATE_USD || 14.01)
@@ -3776,11 +3785,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         const TEXT = '#1a1a1a'
         const SUBTLE = '#6b6b6b'
 
-        // ── Header: logo + title (left), customer support (right) ──
-        const logoBuf = loadDcbLogo()
+        // ── Header: Lili logo (left), customer support (right) ──
+        const logoBuf = loadLiliLogo() || loadDcbLogo()
         const headTop = M
         if (logoBuf) {
-          try { doc.image(logoBuf, M, headTop, { fit: [70, 70] }) } catch (_) {}
+          try { doc.image(logoBuf, M, headTop, { fit: [120, 56] }) } catch (_) {}
         }
         doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(26)
           .text('Bank Account Statement', M, headTop + 78, { width: 380, lineBreak: false })
@@ -3891,23 +3900,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           doc.moveTo(M, y - 2).lineTo(RIGHT, y - 2).lineWidth(0.2).strokeColor('#f3f3f3').stroke()
         }
 
-        // ── Disclaimer footer + Lili disclosures ──
-        const FOOTER_BOTTOM = () => doc.page.height - M - 30
-        const ensureSpace = (h) => {
-          if (y + h > FOOTER_BOTTOM()) { doc.addPage(); y = M }
-        }
+        // ── Disclaimer footer + Lili disclosures (PDFKit-flow, auto-paginates) ──
+        // Trust PDFKit's auto-pagination: after each .text() we sync y = doc.y.
+        // This avoids speculative addPage() calls that produced trailing blank pages.
         const writeBlock = (txt, opts = {}) => {
           const size = opts.size || 9
           const fontName = opts.bold ? 'Helvetica-Bold' : 'Helvetica'
-          doc.font(fontName).fontSize(size)
-          const w = PAGE_W - 2*M
-          const h = doc.heightOfString(txt, { width: w })
-          ensureSpace(h + (opts.gap || 6))
-          doc.fillColor(opts.color || TEXT).text(txt, M, y, { width: w, align: opts.align || 'left' })
-          y += h + (opts.gap || 6)
+          doc.font(fontName).fontSize(size).fillColor(opts.color || TEXT)
+            .text(txt, M, y, { width: PAGE_W - 2*M, align: opts.align || 'left' })
+          y = doc.y + (opts.gap || 6)
         }
         y += 28
-        ensureSpace(20)
         writeBlock('What responsibility do you have to review this account statement?', { bold: true, size: 10, gap: 6 })
         writeBlock('You agree to review this account statement promptly.', { size: 10, gap: 10 })
         writeBlock('You agree 30 days after we make your account statement available to you online is the maximum amount of time for you to review your statement and report any problem or unauthorized transaction related to anything shown on the statement, unless a longer period is provided by federal or state law.', { size: 10, gap: 10 })
@@ -3938,22 +3941,18 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           ['16', 'Figures based on a Lili survey conducted between January 1, 2025 to January 1, 2026. Information available upon request.'],
         ]
         for (const [n, t] of footnotes) {
-          doc.font('Helvetica').fontSize(8)
-          const fnH = doc.heightOfString(t, { width: PAGE_W - 2*M - 16 })
-          ensureSpace(fnH + 4)
-          doc.font('Helvetica-Bold').fontSize(8).fillColor(TEXT).text(n, M, y, { width: 14, lineBreak: false })
-          doc.font('Helvetica').fontSize(8).fillColor(TEXT).text(t, M + 16, y, { width: PAGE_W - 2*M - 16 })
-          y += fnH + 4
+          // Render number + body on same baseline; PDFKit auto-paginates if needed.
+          const startY = y
+          doc.font('Helvetica-Bold').fontSize(8).fillColor(TEXT)
+            .text(n, M, startY, { width: 14, lineBreak: false })
+          doc.font('Helvetica').fontSize(8).fillColor(TEXT)
+            .text(t, M + 16, startY, { width: PAGE_W - 2*M - 16 })
+          y = doc.y + 4
         }
-        ensureSpace(20)
         y += 6
         doc.font('Helvetica').fontSize(9).fillColor(SUBTLE)
           .text('\u00A9 2026 Lili App Inc. All Rights Reserved.', M, y, { width: PAGE_W - 2*M, align: 'center' })
         y = doc.y
-
-        // Strip any trailing blank pages that may have been created speculatively
-        const _range = doc.bufferedPageRange()
-        // (no-op: page numbering loop below handles existing pages)
 
         // Page numbers
         const range = doc.bufferedPageRange()
