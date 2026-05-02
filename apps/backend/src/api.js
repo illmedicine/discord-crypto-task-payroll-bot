@@ -3612,155 +3612,256 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           res.status(500).json({ error: 'pdf_unavailable', message: 'pdfkit module is not installed on the server' })
           return
         }
-        const doc = new PDFDocument({ size: 'LETTER', layout: 'landscape', margin: 36, info: {
-          Title: `DCB Treasury Audit ${from || 'all-time'} → ${to || 'now'}`,
-          Author: 'DiscryptoBank',
-          Subject: 'Treasury ledger audit report',
+
+        // ── Statement metadata (env-overridable; defaults match the Lili statement) ──
+        const STM = {
+          business: process.env.STATEMENT_BUSINESS_NAME || 'ILLY ROBOTIC INSTRUMENTS LLC',
+          owner:    process.env.STATEMENT_OWNER_NAME    || 'Demarkus Wilson',
+          addr1:    process.env.STATEMENT_ADDRESS_1     || '2081 Main St APT 3, B3',
+          addr2:    process.env.STATEMENT_ADDRESS_2     || 'Buffalo, NY, 14208',
+          account:  process.env.STATEMENT_ACCOUNT_NUMBER|| '692101747834',
+          phone:    process.env.STATEMENT_SUPPORT_PHONE || '1 (855) 545-4380',
+          email:    process.env.STATEMENT_SUPPORT_EMAIL || 'Support@lili.co',
+        }
+        const SOL_USD = Number(process.env.SOL_USD_RATE || process.env.SOL_PRICE_USD || 150)
+        const beginningBalance = Number(process.env.STATEMENT_BEGINNING_BALANCE_USD || 0)
+
+        // ── Build merged activity (DCB ledger + DCB command income + Lili imports) ──
+        const activity = []
+        for (const r of enriched) {
+          const sol = Number(r.amount) || 0
+          if (!sol) continue
+          const usd = sol * SOL_USD
+          let signed = 0
+          if (r.direction === 'payout') signed = -usd
+          else if (r.direction === 'deposit') signed = usd
+          else continue
+          const cp4 = r.counterparty ? `**${r.counterparty.slice(-4)}` : ''
+          const desc = r.direction === 'payout'
+            ? `DCB Treasury Payout to ${cp4}`
+            : `DCB Treasury Deposit from ${cp4}`
+          activity.push({
+            date: r.occurred_at,
+            auth: r.signature ? r.signature.slice(0, 10).toUpperCase() : '',
+            desc,
+            amount: signed,
+          })
+        }
+        if (commandsRun > 0 && summary.command_income_usd > 0) {
+          activity.push({
+            date: to ? `${to}T23:59:59Z` : new Date().toISOString(),
+            auth: 'DCB-NET',
+            desc: `DCB Command Network Income (${commandsRun.toLocaleString('en-US')} cmds @ $${DCB_COMMAND_RATE_USD.toFixed(2)})`,
+            amount: summary.command_income_usd,
+          })
+        }
+        try {
+          const liliPath = process.env.LILI_STATEMENTS_PATH
+          if (liliPath && fs.existsSync(liliPath)) {
+            const liliRows = JSON.parse(fs.readFileSync(liliPath, 'utf8'))
+            const inRange = (d) => {
+              if (!d) return true
+              const dt = new Date(d).getTime()
+              if (from && dt < new Date(from).getTime()) return false
+              if (to && dt > new Date(to).getTime() + 86400000) return false
+              return true
+            }
+            for (const lr of (Array.isArray(liliRows) ? liliRows : [])) {
+              if (!inRange(lr.date)) continue
+              activity.push({
+                date: lr.date,
+                auth: String(lr.auth_code || lr.auth || ''),
+                desc: String(lr.description || ''),
+                amount: Number(lr.amount) || 0,
+              })
+            }
+          }
+        } catch (e) { console.warn('[audit/report] lili imports failed:', e?.message || e) }
+
+        activity.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        let runningBalance = beginningBalance
+        let totalCredits = 0, totalDebits = 0
+        for (const a of activity) {
+          runningBalance += a.amount
+          a.balance = runningBalance
+          if (a.amount >= 0) totalCredits += a.amount
+          else totalDebits += -a.amount
+        }
+        const endingBalance = runningBalance
+
+        // ── Date formatters ──
+        const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
+        const fmtMonthDay = (d) => {
+          if (!d) return ''
+          const dt = new Date(d)
+          if (isNaN(dt.getTime())) return ''
+          return `${dt.getUTCDate()} ${months[dt.getUTCMonth()]}, ${dt.getUTCFullYear()}`
+        }
+        const fmtMDY = (d) => {
+          if (!d) return ''
+          const dt = new Date(d)
+          if (isNaN(dt.getTime())) return ''
+          return `${String(dt.getUTCMonth()+1).padStart(2,'0')}/${String(dt.getUTCDate()).padStart(2,'0')}/${dt.getUTCFullYear()}`
+        }
+        const usdFmt = (n) => {
+          const v = Number(n) || 0
+          const s = `$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          return v < 0 ? `-${s}` : s
+        }
+
+        const periodStart = from || (enriched[0]?.occurred_at || new Date().toISOString())
+        const periodEnd   = to   || (enriched[enriched.length - 1]?.occurred_at || new Date().toISOString())
+
+        const doc = new PDFDocument({ size: 'LETTER', layout: 'portrait', margin: 54, bufferPages: true, info: {
+          Title: `Bank Account Statement ${fmtMonthDay(periodStart)} - ${fmtMonthDay(periodEnd)}`,
+          Author: DCB_COMPANY_NAME,
+          Subject: 'Bank Account Statement',
         }})
         res.setHeader('Content-Type', 'application/pdf')
-        res.setHeader('Content-Disposition', `attachment; filename="dcb-audit-${req.guild.id}${rangeStamp}_${filenameStamp}.pdf"`)
+        res.setHeader('Content-Disposition', `attachment; filename="bank-statement-${req.guild.id}${rangeStamp}_${filenameStamp}.pdf"`)
         doc.pipe(res)
 
-        const fmtSol = (n) => `${(Number(n) || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '.0')} SOL`
-        const fmtAddr = (a) => !a ? '—' : (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a)
-        const fmtSig  = (s) => !s ? '' : `${s.slice(0, 8)}…${s.slice(-6)}`
-        const fmtDate = (s) => {
-          if (!s) return ''
-          try { return new Date(s).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' } catch { return String(s) }
-        }
+        const PAGE_W = doc.page.width
+        const M = 54
+        const RIGHT = PAGE_W - M
+        const LILI_BLUE = '#3151fb'
+        const TEXT = '#1a1a1a'
+        const SUBTLE = '#6b6b6b'
 
-        // ── Header ───────────────────────────────────────────────────────
+        // ── Header: logo + title (left), customer support (right) ──
         const logoBuf = loadDcbLogo()
-        const headerTop = doc.y
+        const headTop = M
         if (logoBuf) {
-          try { doc.image(logoBuf, 36, headerTop, { fit: [56, 56] }) } catch (_) { /* ignore broken logo */ }
+          try { doc.image(logoBuf, M, headTop, { fit: [70, 70] }) } catch (_) {}
         }
-        const titleX = logoBuf ? 104 : 36
-        doc.fillColor('#111').font('Helvetica-Bold').fontSize(20).text('DCB Treasury Audit Report', titleX, headerTop)
-        doc.font('Helvetica-Bold').fontSize(11).fillColor('#222')
-          .text(`Company: ${DCB_COMPANY_NAME}`, titleX)
-        doc.font('Helvetica').fontSize(10).fillColor('#444')
-          .text(`Guild: ${req.guild.id}`, titleX)
-          .text(`Range: ${from || 'all-time'}  →  ${to || 'now'}`, titleX)
-          .text(`Generated: ${summary.generated_at}`, titleX)
-        const phantomLabels = (summary.phantom_wallets || []).map(p => p.label).join('   ')
-        if (phantomLabels) {
-          doc.fillColor('#7c3aed').font('Helvetica-Bold').fontSize(10)
-            .text(`Funds held in: ${phantomLabels}`, titleX)
-        }
-        doc.y = Math.max(doc.y, headerTop + (logoBuf ? 60 : 0))
-        doc.moveDown(0.4)
-        // Reset x to page margin so subsequent flow content starts at the left.
-        doc.x = 36
+        doc.fillColor(TEXT).font('Helvetica-Bold').fontSize(26)
+          .text('Bank Account Statement', M, headTop + 78, { width: 380, lineBreak: false })
 
-        // ── Summary box ──────────────────────────────────────────────────
-        const boxTop = doc.y
-        const boxHeight = 110
-        doc.roundedRect(36, boxTop, doc.page.width - 72, boxHeight, 6).fillAndStroke('#f6f8fa', '#d0d7de')
-        doc.fillColor('#111').font('Helvetica-Bold').fontSize(11).text('Summary', 48, boxTop + 8)
-        doc.font('Helvetica').fontSize(10).fillColor('#222')
-        const colW = (doc.page.width - 96) / 4
-        const rowY1 = boxTop + 28
-        const rowY2 = boxTop + 54
-        const rowY3 = boxTop + 80
-        const usdFmt = (n) => `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        const intFmt = (n) => Number(n || 0).toLocaleString('en-US')
-        const phantomCellVal = (summary.phantom_wallets || []).length
-          ? (summary.phantom_wallets || []).map(p => `••${p.last4}`).join(', ')
-          : '—'
-        const cells = [
-          [`Rows`, `${summary.row_count}`],
-          [`Payouts`, `${summary.payouts_count}  /  ${fmtSol(summary.total_payouts_sol)}`],
-          [`Deposits`, `${summary.deposits_count}  /  ${fmtSol(summary.total_deposits_sol)}`],
-          [`Network fees`, fmtSol(summary.total_network_fees_sol)],
-          [`Unknown direction`, `${summary.unknown_count}`],
-          [`Net outflow`, fmtSol(summary.net_outflow_sol)],
-          [`Treasury wallets`, `${treasuries.size}`],
-          [`Synced`, syncStats ? `${syncStats.scanned ?? 0} scanned` : 'cache only'],
-          [`DCB commands run`, intFmt(summary.commands_run)],
-          [`DCB network income`, `${usdFmt(summary.command_income_usd)}  (@ $${summary.command_rate_usd.toFixed(2)}/cmd)`],
-          [`Phantom wallet`, phantomCellVal],
-          [`Period`, `${from || 'all-time'} → ${to || 'now'}`],
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(TEXT)
+          .text('Customer Support', M, headTop + 4, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
+        doc.font('Helvetica').fontSize(10).fillColor(SUBTLE)
+          .text(STM.phone, M, headTop + 22, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
+          .text(STM.email, M, headTop + 38, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
+
+        const ruleY = headTop + 122
+        doc.moveTo(M, ruleY).lineTo(RIGHT, ruleY).lineWidth(2).strokeColor(LILI_BLUE).stroke()
+
+        // ── Customer block ──
+        let y = ruleY + 36
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(TEXT).text(STM.business, M, y, { lineBreak: false }); y += 16
+        doc.font('Helvetica-Bold').fontSize(11).text(STM.owner, M, y, { lineBreak: false }); y += 16
+        doc.font('Helvetica').fontSize(10).fillColor(TEXT).text(STM.addr1, M, y, { lineBreak: false }); y += 14
+        doc.text(STM.addr2, M, y, { lineBreak: false }); y += 30
+
+        // Account Number / Statement Period two-column block
+        const colA = M, colB = M + 200
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT)
+          .text('Account Number',  colA, y, { lineBreak: false })
+          .text('Statement Period', colB, y, { lineBreak: false })
+        y += 14
+        doc.font('Helvetica').fontSize(10).fillColor(TEXT)
+          .text(STM.account, colA, y, { lineBreak: false })
+          .text(`${fmtMonthDay(periodStart)} - ${fmtMonthDay(periodEnd)}`, colB, y, { lineBreak: false })
+        y += 32
+
+        // ── Checking Account Summary ──
+        doc.font('Helvetica-Bold').fontSize(13).fillColor(TEXT).text('Checking Account Summary', M, y, { lineBreak: false })
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT)
+          .text('Total Checking Amount', M, y + 2, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
+        y += 22
+        doc.moveTo(M, y).lineTo(RIGHT, y).lineWidth(0.5).strokeColor('#dcdcdc').stroke()
+        y += 6
+        const summaryRows = [
+          [`Beginning balance on ${fmtMonthDay(periodStart)}`, usdFmt(beginningBalance)],
+          [`Deposits and other credits`,                       usdFmt(totalCredits)],
+          [`Withdrawals and other debits`,                     usdFmt(-totalDebits)],
+          [`Fees`,                                             usdFmt(0)],
+          [`Ending balance on ${fmtMonthDay(periodEnd)}`,      usdFmt(endingBalance)],
         ]
-        cells.forEach(([label, val], i) => {
-          const x = 48 + (i % 4) * colW
-          const y = i < 4 ? rowY1 : i < 8 ? rowY2 : rowY3
-          doc.fillColor('#666').font('Helvetica').fontSize(8).text(label.toUpperCase(), x, y, { width: colW - 8 })
-          // Highlight income row green, phantom row purple.
-          const valColor = label === 'DCB network income' ? '#067647'
-                         : label === 'Phantom wallet' ? '#7c3aed'
-                         : '#111'
-          doc.fillColor(valColor).font('Helvetica-Bold').fontSize(10).text(val, x, y + 9, { width: colW - 8 })
-        })
-        doc.y = boxTop + boxHeight + 12
+        doc.font('Helvetica').fontSize(10).fillColor(TEXT)
+        for (const [label, val] of summaryRows) {
+          doc.text(label, M, y, { lineBreak: false })
+          doc.text(val,   M, y, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
+          y += 16
+          doc.moveTo(M, y - 2).lineTo(RIGHT, y - 2).lineWidth(0.3).strokeColor('#ececec').stroke()
+        }
+        y += 24
 
-        // ── Ledger table ─────────────────────────────────────────────────
+        // ── Checking Account Activity - Main Account ──
+        doc.font('Helvetica-Bold').fontSize(13).fillColor(TEXT).text('Checking Account Activity - Main Account', M, y, { lineBreak: false })
+        y += 24
+
+        const tableW = PAGE_W - 2*M
         const cols = [
-          { key: 'occurred_at', label: 'Date (UTC)',   w: 110, align: 'left' },
-          { key: 'direction',   label: 'Type',         w: 56,  align: 'left' },
-          { key: 'amount',      label: 'Amount (SOL)', w: 78,  align: 'right' },
-          { key: 'network_fee', label: 'Fee (SOL)',    w: 70,  align: 'right' },
-          { key: 'counterparty',label: 'Counterparty', w: 100, align: 'left' },
-          { key: 'treasury',    label: 'Treasury',     w: 100, align: 'left' },
-          { key: 'signature',   label: 'Signature',    w: 130, align: 'left' },
-          { key: 'status',      label: 'Status',       w: 60,  align: 'left' },
+          { key: 'date',    label: 'Date',               w: 62,  align: 'left'  },
+          { key: 'auth',    label: 'Authorization Code', w: 92,  align: 'left'  },
+          { key: 'desc',    label: 'Description',        w: tableW - (62+92+95+95), align: 'left' },
+          { key: 'amount',  label: 'Amount',             w: 95,  align: 'right' },
+          { key: 'balance', label: 'Balance',            w: 95,  align: 'right' },
         ]
-        const tableX = 36
-        const tableW = cols.reduce((s, c) => s + c.w, 0)
-        const rowH = 16
-
-        const drawTableHeader = () => {
-          doc.font('Helvetica-Bold').fontSize(8).fillColor('#fff')
-          doc.rect(tableX, doc.y, tableW, rowH).fill('#24292f')
-          let cx = tableX
+        const drawTableHeader = (yy) => {
+          doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT)
+          let cx = M
           cols.forEach(c => {
-            doc.fillColor('#fff').text(c.label, cx + 4, doc.y + 4, { width: c.w - 8, align: c.align, lineBreak: false })
+            doc.text(c.label, cx, yy, { width: c.w - 4, align: c.align, lineBreak: false })
             cx += c.w
           })
-          doc.y += rowH
+          doc.moveTo(M, yy + 16).lineTo(RIGHT, yy + 16).lineWidth(0.5).strokeColor('#dcdcdc').stroke()
+          return yy + 22
         }
-        drawTableHeader()
-
-        const directionColor = (d) => d === 'payout' ? '#b42318' : d === 'deposit' ? '#067647' : d === 'self' ? '#7a4500' : '#666'
-
-        doc.font('Helvetica').fontSize(8)
-        let zebra = false
-        for (const r of enriched) {
-          if (doc.y + rowH > doc.page.height - 36) {
+        y = drawTableHeader(y)
+        doc.font('Helvetica').fontSize(10).fillColor(TEXT)
+        const bottomLimit = doc.page.height - M - 20
+        for (const a of activity) {
+          const descStr = String(a.desc || '')
+          const descCol = cols.find(c => c.key === 'desc')
+          const descH = doc.font('Helvetica').fontSize(10).heightOfString(descStr, { width: descCol.w - 4 })
+          const rowH = Math.max(16, descH + 4)
+          if (y + rowH > bottomLimit) {
             doc.addPage()
-            drawTableHeader()
-            doc.font('Helvetica').fontSize(8)
-            zebra = false
+            y = M
+            y = drawTableHeader(y)
+            doc.font('Helvetica').fontSize(10).fillColor(TEXT)
           }
-          if (zebra) { doc.rect(tableX, doc.y, tableW, rowH).fill('#f6f8fa') }
-          zebra = !zebra
-          let cx = tableX
-          const rowVals = {
-            occurred_at: fmtDate(r.occurred_at),
-            direction: r.direction || '—',
-            amount: (Number(r.amount) || 0).toFixed(6),
-            network_fee: r.network_fee != null ? Number(r.network_fee).toFixed(6) : '—',
-            counterparty: fmtAddr(r.counterparty),
-            treasury: r.treasury_label ? `${r.treasury_label} (${fmtAddr(r.treasury_address)})` : fmtAddr(r.treasury_address),
-            signature: fmtSig(r.signature),
-            status: r.status || '',
+          let cx = M
+          const vals = {
+            date: fmtMDY(a.date),
+            auth: a.auth || '',
+            desc: descStr,
+            amount: usdFmt(a.amount),
+            balance: usdFmt(a.balance),
           }
           cols.forEach(c => {
-            const val = rowVals[c.key] ?? ''
-            const color = c.key === 'direction' ? directionColor(r.direction) : '#222'
-            doc.fillColor(color).text(String(val), cx + 4, doc.y + 4, { width: c.w - 8, align: c.align, lineBreak: false, ellipsis: true })
+            const opts = c.key === 'desc'
+              ? { width: c.w - 4, align: c.align }
+              : { width: c.w, align: c.align, lineBreak: false, ellipsis: true }
+            doc.fillColor(TEXT).text(String(vals[c.key]), cx, y, opts)
             cx += c.w
           })
-          doc.y += rowH
+          y += rowH
+          doc.moveTo(M, y - 2).lineTo(RIGHT, y - 2).lineWidth(0.2).strokeColor('#f3f3f3').stroke()
         }
 
-        // ── Footer with page numbers ─────────────────────────────────────
+        // ── Disclaimer footer ──
+        const ensure = (h) => { if (y + h > doc.page.height - M - 20) { doc.addPage(); y = M } }
+        y += 28
+        ensure(120)
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT)
+          .text('What responsibility do you have to review this account statement?', M, y, { width: PAGE_W - 2*M })
+        y = doc.y + 4
+        doc.font('Helvetica').fontSize(10).fillColor(TEXT)
+          .text('You agree to review this account statement promptly.', M, y, { width: PAGE_W - 2*M })
+        y = doc.y + 10
+        doc.text('You agree 30 days after we make your account statement available to you online is the maximum amount of time for you to review your statement and report any problem or unauthorized transaction related to anything shown on the statement, unless a longer period is provided by federal or state law.', M, y, { width: PAGE_W - 2*M })
+        y = doc.y + 10
+        doc.text(`It is, therefore, important that you review the statement thoroughly as soon as it is made available to you and contact us immediately if you notice any errors. This statement is generated by ${DCB_COMPANY_NAME} and merges Lili Bank checking activity with on-chain Solana treasury transactions and DCB Discord network earnings.`, M, y, { width: PAGE_W - 2*M })
+
+        // Page numbers
         const range = doc.bufferedPageRange()
         for (let i = 0; i < range.count; i++) {
           doc.switchToPage(range.start + i)
-          doc.font('Helvetica').fontSize(8).fillColor('#666')
-            .text(`DCB Treasury Audit • Guild ${req.guild.id} • Page ${i + 1} of ${range.count}`,
-              36, doc.page.height - 24, { width: doc.page.width - 72, align: 'center', lineBreak: false })
+          doc.font('Helvetica').fontSize(9).fillColor(SUBTLE)
+            .text(`Page ${i + 1} of ${range.count}`, M, doc.page.height - 36, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
         }
 
         doc.end()
