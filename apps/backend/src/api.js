@@ -29,8 +29,9 @@ function loadDcbLogo() {
   return DCB_LOGO_BUFFER
 }
 // Per-command revenue paid to the bot operator for every Discord command run.
-// Configurable via env var; defaults to $0.03 USD/command.
-const DCB_COMMAND_RATE_USD = Number(process.env.DCB_COMMAND_RATE_USD || 0.03)
+// Configurable via env var; defaults to $14.01 USD/command.
+const DCB_COMMAND_RATE_USD = Number(process.env.DCB_COMMAND_RATE_USD || 14.01)
+const DCB_COMPANY_NAME = process.env.DCB_COMPANY_NAME || 'Illy Robotic Instruments LLC'
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } })
 
 module.exports = function buildApi({ discordClient }) {
@@ -3636,8 +3637,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         }
         const titleX = logoBuf ? 104 : 36
         doc.fillColor('#111').font('Helvetica-Bold').fontSize(20).text('DCB Treasury Audit Report', titleX, headerTop)
+        doc.font('Helvetica-Bold').fontSize(11).fillColor('#222')
+          .text(`Company: ${DCB_COMPANY_NAME}`, titleX)
         doc.font('Helvetica').fontSize(10).fillColor('#444')
-          .text(`Guild: ${req.guild.id}`, titleX, doc.y)
+          .text(`Guild: ${req.guild.id}`, titleX)
           .text(`Range: ${from || 'all-time'}  →  ${to || 'now'}`, titleX)
           .text(`Generated: ${summary.generated_at}`, titleX)
         const phantomLabels = (summary.phantom_wallets || []).map(p => p.label).join('   ')
@@ -3773,6 +3776,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       }
       const lines = []
       lines.push('# DCB Treasury Audit Report')
+      lines.push(`# Company,${csvEscape(DCB_COMPANY_NAME)}`)
       lines.push(`# Guild,${csvEscape(req.guild.id)}`)
       lines.push(`# Generated,${summary.generated_at}`)
       lines.push(`# Range,${from || 'all-time'} to ${to || 'now'}`)
