@@ -58,6 +58,54 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
   const [budgetInput, setBudgetInput] = useState('')
   const [budgetCurrency, setBudgetCurrency] = useState('SOL')
 
+  // Audit / ledger export form (owner-only)
+  const today = new Date().toISOString().slice(0, 10)
+  const monthStart = today.slice(0, 8) + '01'
+  const [exportFrom, setExportFrom] = useState(monthStart)
+  const [exportTo, setExportTo] = useState(today)
+  const [exportFormat, setExportFormat] = useState<'pdf' | 'csv'>('pdf')
+  const [exportSync, setExportSync] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportMsg, setExportMsg] = useState<string | null>(null)
+
+  const downloadAuditReport = async () => {
+    if (!guildId) return
+    setExporting(true)
+    setExportMsg(null)
+    try {
+      const params = new URLSearchParams()
+      params.set('format', exportFormat)
+      if (exportFrom) params.set('from', exportFrom)
+      if (exportTo) params.set('to', exportTo)
+      if (exportSync) params.set('sync', '1')
+      const res = await api.get(`/admin/guilds/${guildId}/audit/report?${params.toString()}`, {
+        responseType: 'blob',
+        timeout: exportSync ? 0 : 60000,
+      })
+      const blob = new Blob([res.data], {
+        type: exportFormat === 'pdf' ? 'application/pdf' : 'text/csv;charset=utf-8',
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const stamp = `${exportFrom || 'all'}_to_${exportTo || 'now'}`
+      a.download = `dcb-treasury-audit_${stamp}.${exportFormat}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setExportMsg(`Downloaded ${exportFormat.toUpperCase()} report.`)
+    } catch (err: any) {
+      console.error('[Treasury] export failed:', err?.response?.status, err?.message || err)
+      const msg = err?.response?.status === 403
+        ? 'Only the server owner can export the ledger.'
+        : err?.message || 'Export failed.'
+      setExportMsg(`Error: ${msg}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const load = async () => {
     if (!guildId) return
     setLoading(true)
@@ -564,6 +612,90 @@ export default function Treasury({ guildId, isOwner = true }: Props) {
               )}
             </div>
           </div>
+
+          {/* Ledger Audit Export — Owner Only */}
+          {isOwner && (
+            <div className="card" style={{ marginTop: 20 }}>
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="card-title">📊 Ledger Audit Export <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', marginLeft: 8, background: 'rgba(180,35,24,0.12)', color: '#b42318', borderRadius: 10, verticalAlign: 'middle' }}>OWNER</span></div>
+              </div>
+              <div style={{ padding: '4px 0 8px 0', color: 'var(--text-muted, #6b7280)', fontSize: 13 }}>
+                Generate a downloadable ledger of every recorded payout, deposit, and network fee for this guild over a chosen period. Use for monthly bank/audit records.
+              </div>
+              <div className="form-row" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div className="form-group" style={{ flex: '1 1 140px' }}>
+                  <label className="form-label">From</label>
+                  <input
+                    className="form-input"
+                    type="date"
+                    value={exportFrom}
+                    onChange={e => setExportFrom(e.target.value)}
+                    max={exportTo || undefined}
+                  />
+                </div>
+                <div className="form-group" style={{ flex: '1 1 140px' }}>
+                  <label className="form-label">To</label>
+                  <input
+                    className="form-input"
+                    type="date"
+                    value={exportTo}
+                    onChange={e => setExportTo(e.target.value)}
+                    min={exportFrom || undefined}
+                    max={today}
+                  />
+                </div>
+                <div className="form-group" style={{ flex: '0 0 130px' }}>
+                  <label className="form-label">Format</label>
+                  <select
+                    className="form-select"
+                    value={exportFormat}
+                    onChange={e => setExportFormat(e.target.value as 'pdf' | 'csv')}
+                  >
+                    <option value="pdf">PDF</option>
+                    <option value="csv">CSV</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8 }}>
+                  <input
+                    id="audit-sync"
+                    type="checkbox"
+                    checked={exportSync}
+                    onChange={e => setExportSync(e.target.checked)}
+                  />
+                  <label htmlFor="audit-sync" style={{ fontSize: 12, cursor: 'pointer' }} title="Refresh transaction data from the Solana chain before generating the report. Slower but produces the most accurate fee data.">
+                    Re-sync from chain first
+                  </label>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={downloadAuditReport}
+                  disabled={exporting || !guildId}
+                >
+                  {exporting ? <span className="spinner" /> : `⬇ Download ${exportFormat.toUpperCase()}`}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setExportFrom(monthStart); setExportTo(today) }}
+                  disabled={exporting}
+                >This month</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { setExportFrom(''); setExportTo('') }}
+                  disabled={exporting}
+                >All time</button>
+                {exportMsg && (
+                  <span style={{ fontSize: 12, color: exportMsg.startsWith('Error') ? 'var(--danger, #b42318)' : 'var(--success, #067647)' }}>
+                    {exportMsg}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

@@ -7,6 +7,8 @@ const crypto = require('crypto')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
 const multer = require('multer')
+let PDFDocument = null
+try { PDFDocument = require('pdfkit') } catch (_) { /* pdfkit optional; PDF export disabled if missing */ }
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } })
 
 module.exports = function buildApi({ discordClient }) {
@@ -2471,6 +2473,136 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       if (format === 'json') {
         res.json({ summary, transactions: enriched })
+        return
+      }
+
+      if (format === 'pdf') {
+        if (!PDFDocument) {
+          res.status(500).json({ error: 'pdf_unavailable', message: 'pdfkit module is not installed on the server' })
+          return
+        }
+        const doc = new PDFDocument({ size: 'LETTER', layout: 'landscape', margin: 36, info: {
+          Title: `DCB Treasury Audit ${from || 'all-time'} → ${to || 'now'}`,
+          Author: 'DiscryptoBank',
+          Subject: 'Treasury ledger audit report',
+        }})
+        res.setHeader('Content-Type', 'application/pdf')
+        res.setHeader('Content-Disposition', `attachment; filename="dcb-audit-${req.guild.id}${rangeStamp}_${filenameStamp}.pdf"`)
+        doc.pipe(res)
+
+        const fmtSol = (n) => `${(Number(n) || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '.0')} SOL`
+        const fmtAddr = (a) => !a ? '—' : (a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a)
+        const fmtSig  = (s) => !s ? '' : `${s.slice(0, 8)}…${s.slice(-6)}`
+        const fmtDate = (s) => {
+          if (!s) return ''
+          try { return new Date(s).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' } catch { return String(s) }
+        }
+
+        // ── Header ───────────────────────────────────────────────────────
+        doc.fillColor('#111').font('Helvetica-Bold').fontSize(20).text('DCB Treasury Audit Report')
+        doc.moveDown(0.2)
+        doc.font('Helvetica').fontSize(10).fillColor('#444')
+          .text(`Guild: ${req.guild.id}`)
+          .text(`Range: ${from || 'all-time'}  →  ${to || 'now'}`)
+          .text(`Generated: ${summary.generated_at}`)
+        doc.moveDown(0.6)
+
+        // ── Summary box ──────────────────────────────────────────────────
+        const boxTop = doc.y
+        doc.roundedRect(36, boxTop, doc.page.width - 72, 80, 6).fillAndStroke('#f6f8fa', '#d0d7de')
+        doc.fillColor('#111').font('Helvetica-Bold').fontSize(11).text('Summary', 48, boxTop + 8)
+        doc.font('Helvetica').fontSize(10).fillColor('#222')
+        const colW = (doc.page.width - 96) / 4
+        const rowY1 = boxTop + 28
+        const rowY2 = boxTop + 50
+        const cells = [
+          [`Rows`, `${summary.row_count}`],
+          [`Payouts`, `${summary.payouts_count}  /  ${fmtSol(summary.total_payouts_sol)}`],
+          [`Deposits`, `${summary.deposits_count}  /  ${fmtSol(summary.total_deposits_sol)}`],
+          [`Network fees`, fmtSol(summary.total_network_fees_sol)],
+          [`Unknown direction`, `${summary.unknown_count}`],
+          [`Net outflow`, fmtSol(summary.net_outflow_sol)],
+          [`Treasury wallets`, `${treasuries.size}`],
+          [`Synced`, syncStats ? `${syncStats.scanned ?? 0} scanned` : 'cache only'],
+        ]
+        cells.forEach(([label, val], i) => {
+          const x = 48 + (i % 4) * colW
+          const y = i < 4 ? rowY1 : rowY2
+          doc.fillColor('#666').font('Helvetica').fontSize(8).text(label.toUpperCase(), x, y, { width: colW - 8 })
+          doc.fillColor('#111').font('Helvetica-Bold').fontSize(10).text(val, x, y + 9, { width: colW - 8 })
+        })
+        doc.y = boxTop + 92
+
+        // ── Ledger table ─────────────────────────────────────────────────
+        const cols = [
+          { key: 'occurred_at', label: 'Date (UTC)',   w: 110, align: 'left' },
+          { key: 'direction',   label: 'Type',         w: 56,  align: 'left' },
+          { key: 'amount',      label: 'Amount (SOL)', w: 78,  align: 'right' },
+          { key: 'network_fee', label: 'Fee (SOL)',    w: 70,  align: 'right' },
+          { key: 'counterparty',label: 'Counterparty', w: 100, align: 'left' },
+          { key: 'treasury',    label: 'Treasury',     w: 100, align: 'left' },
+          { key: 'signature',   label: 'Signature',    w: 130, align: 'left' },
+          { key: 'status',      label: 'Status',       w: 60,  align: 'left' },
+        ]
+        const tableX = 36
+        const tableW = cols.reduce((s, c) => s + c.w, 0)
+        const rowH = 16
+
+        const drawTableHeader = () => {
+          doc.font('Helvetica-Bold').fontSize(8).fillColor('#fff')
+          doc.rect(tableX, doc.y, tableW, rowH).fill('#24292f')
+          let cx = tableX
+          cols.forEach(c => {
+            doc.fillColor('#fff').text(c.label, cx + 4, doc.y + 4, { width: c.w - 8, align: c.align, lineBreak: false })
+            cx += c.w
+          })
+          doc.y += rowH
+        }
+        drawTableHeader()
+
+        const directionColor = (d) => d === 'payout' ? '#b42318' : d === 'deposit' ? '#067647' : d === 'self' ? '#7a4500' : '#666'
+
+        doc.font('Helvetica').fontSize(8)
+        let zebra = false
+        for (const r of enriched) {
+          if (doc.y + rowH > doc.page.height - 36) {
+            doc.addPage()
+            drawTableHeader()
+            doc.font('Helvetica').fontSize(8)
+            zebra = false
+          }
+          if (zebra) { doc.rect(tableX, doc.y, tableW, rowH).fill('#f6f8fa') }
+          zebra = !zebra
+          let cx = tableX
+          const rowVals = {
+            occurred_at: fmtDate(r.occurred_at),
+            direction: r.direction || '—',
+            amount: (Number(r.amount) || 0).toFixed(6),
+            network_fee: r.network_fee != null ? Number(r.network_fee).toFixed(6) : '—',
+            counterparty: fmtAddr(r.counterparty),
+            treasury: r.treasury_label ? `${r.treasury_label} (${fmtAddr(r.treasury_address)})` : fmtAddr(r.treasury_address),
+            signature: fmtSig(r.signature),
+            status: r.status || '',
+          }
+          cols.forEach(c => {
+            const val = rowVals[c.key] ?? ''
+            const color = c.key === 'direction' ? directionColor(r.direction) : '#222'
+            doc.fillColor(color).text(String(val), cx + 4, doc.y + 4, { width: c.w - 8, align: c.align, lineBreak: false, ellipsis: true })
+            cx += c.w
+          })
+          doc.y += rowH
+        }
+
+        // ── Footer with page numbers ─────────────────────────────────────
+        const range = doc.bufferedPageRange()
+        for (let i = 0; i < range.count; i++) {
+          doc.switchToPage(range.start + i)
+          doc.font('Helvetica').fontSize(8).fillColor('#666')
+            .text(`DCB Treasury Audit • Guild ${req.guild.id} • Page ${i + 1} of ${range.count}`,
+              36, doc.page.height - 24, { width: doc.page.width - 72, align: 'center', lineBreak: false })
+        }
+
+        doc.end()
         return
       }
 

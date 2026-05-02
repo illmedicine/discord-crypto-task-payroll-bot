@@ -85,6 +85,7 @@ async function ensureColumns() {
 // ── Solana RPC helpers ──────────────────────────────────────────────────────
 const RPC_DELAY_MS = Number(args['rpc-delay']) || 120  // pause between RPC calls (public RPC ≈ 5 req/s safe)
 const RPC_MAX_RETRIES = Number(args['rpc-retries']) || 6
+const RPC_BATCH = Number(args['rpc-batch']) || 25      // JSON-RPC batch size for getTransaction
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 async function rpc(method, params, timeout = 25000) {
@@ -104,6 +105,42 @@ async function rpc(method, params, timeout = 25000) {
       if (status === 429) console.log(`[audit]   rate-limited (429), waiting ${wait}ms (attempt ${attempt + 1}/${RPC_MAX_RETRIES})`)
       await sleep(wait)
       backoff = Math.min(backoff * 2, 10000)
+      attempt++
+    }
+  }
+}
+
+// JSON-RPC batch: send N getTransaction calls in one HTTP POST. Returns array
+// of parsed tx results (or null) in the same order as `signatures`.
+async function rpcBatchGetTransactions(signatures, timeout = 45000) {
+  if (!signatures.length) return []
+  const body = signatures.map((sig, i) => ({
+    jsonrpc: '2.0',
+    id: i,
+    method: 'getTransaction',
+    params: [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+  }))
+  let attempt = 0
+  let backoff = 700
+  while (true) {
+    try {
+      const res = await axios.post(SOLANA_RPC_URL, body, { timeout })
+      if (RPC_DELAY_MS) await sleep(RPC_DELAY_MS)
+      const arr = Array.isArray(res.data) ? res.data : [res.data]
+      // Reorder by id to align with input order.
+      const out = new Array(signatures.length).fill(null)
+      for (const item of arr) {
+        if (item && typeof item.id === 'number' && !item.error && item.result) out[item.id] = item.result
+      }
+      return out
+    } catch (err) {
+      const status = err?.response?.status
+      const retriable = status === 429 || status === 502 || status === 503 || status === 504 || err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT'
+      if (!retriable || attempt >= RPC_MAX_RETRIES) throw err
+      const wait = backoff + Math.floor(Math.random() * 250)
+      if (status === 429) console.log(`[audit]   batch rate-limited (429), waiting ${wait}ms (attempt ${attempt + 1}/${RPC_MAX_RETRIES})`)
+      await sleep(wait)
+      backoff = Math.min(backoff * 2, 15000)
       attempt++
     }
   }
@@ -175,42 +212,52 @@ async function syncWallet(guildId, walletAddress) {
   const sigs = await fetchAllSignatures(walletAddress, untilSig)
   console.log(`[audit] ${walletAddress} → ${sigs.length} new signatures${untilSig ? ` since ${untilSig.slice(0,8)}…` : ''}`)
   let inserted = 0, updated = 0
-  for (let i = 0; i < sigs.length; i++) {
-    const sigInfo = sigs[i]
-    if (sigInfo.err) continue
-    let tx
-    try { tx = await rpc('getTransaction', [sigInfo.signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }]) }
-    catch (err) { console.warn(`[audit]   getTransaction failed ${sigInfo.signature}: ${err.message}`); continue }
-    if (!tx?.meta || !tx?.transaction) continue
-    const c = classifyTx(tx, walletAddress)
-    if (!c) continue
-    if (c.direction === 'self' && !c.fee) continue
-
-    const fromAddr = c.direction === 'deposit' ? (c.counterparty || '') : walletAddress
-    const toAddr = c.direction === 'payout' ? (c.counterparty || '') : walletAddress
-    const blockIso = c.blockTime ? new Date(c.blockTime * 1000).toISOString() : null
-
-    const existing = await dbGet('SELECT id FROM transactions WHERE signature = ?', [sigInfo.signature])
-    if (existing) {
-      await dbRun(
-        `UPDATE transactions SET network_fee = ?, block_time = ?, slot = ?, direction = ?,
-                                 counterparty = ?, treasury_address = ?, audit_synced_at = CURRENT_TIMESTAMP
-          WHERE signature = ?`,
-        [c.fee, c.blockTime, c.slot, c.direction, c.counterparty, walletAddress, sigInfo.signature]
-      )
-      updated++
-    } else {
-      await dbRun(
-        `INSERT INTO transactions
-           (guild_id, from_address, to_address, amount, signature, status, currency,
-            created_at, network_fee, block_time, slot, direction, counterparty, treasury_address, audit_synced_at)
-         VALUES (?, ?, ?, ?, ?, 'confirmed', 'SOL', COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-         ON CONFLICT(signature) DO NOTHING`,
-        [guildId, fromAddr, toAddr, c.sol, sigInfo.signature, blockIso, c.fee, c.blockTime, c.slot, c.direction, c.counterparty, walletAddress]
-      )
-      inserted++
+  // Process in batches via JSON-RPC batching to dramatically cut HTTP requests.
+  for (let start = 0; start < sigs.length; start += RPC_BATCH) {
+    const slice = sigs.slice(start, start + RPC_BATCH).filter(s => !s.err)
+    if (!slice.length) continue
+    const sigList = slice.map(s => s.signature)
+    let txs
+    try { txs = await rpcBatchGetTransactions(sigList) }
+    catch (err) {
+      console.warn(`[audit]   batch failed (${slice.length} sigs): ${err.message}`)
+      continue
     }
-    if ((i + 1) % 50 === 0) console.log(`[audit]   ${i + 1}/${sigs.length} processed`)
+    for (let j = 0; j < slice.length; j++) {
+      const sigInfo = slice[j]
+      const tx = txs[j]
+      if (!tx?.meta || !tx?.transaction) continue
+      const c = classifyTx(tx, walletAddress)
+      if (!c) continue
+      if (c.direction === 'self' && !c.fee) continue
+
+      const fromAddr = c.direction === 'deposit' ? (c.counterparty || '') : walletAddress
+      const toAddr = c.direction === 'payout' ? (c.counterparty || '') : walletAddress
+      const blockIso = c.blockTime ? new Date(c.blockTime * 1000).toISOString() : null
+
+      const existing = await dbGet('SELECT id FROM transactions WHERE signature = ?', [sigInfo.signature])
+      if (existing) {
+        await dbRun(
+          `UPDATE transactions SET network_fee = ?, block_time = ?, slot = ?, direction = ?,
+                                   counterparty = ?, treasury_address = ?, audit_synced_at = CURRENT_TIMESTAMP
+            WHERE signature = ?`,
+          [c.fee, c.blockTime, c.slot, c.direction, c.counterparty, walletAddress, sigInfo.signature]
+        )
+        updated++
+      } else {
+        await dbRun(
+          `INSERT INTO transactions
+             (guild_id, from_address, to_address, amount, signature, status, currency,
+              created_at, network_fee, block_time, slot, direction, counterparty, treasury_address, audit_synced_at)
+           VALUES (?, ?, ?, ?, ?, 'confirmed', 'SOL', COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(signature) DO NOTHING`,
+          [guildId, fromAddr, toAddr, c.sol, sigInfo.signature, blockIso, c.fee, c.blockTime, c.slot, c.direction, c.counterparty, walletAddress]
+        )
+        inserted++
+      }
+    }
+    const done = Math.min(start + RPC_BATCH, sigs.length)
+    console.log(`[audit]   ${done}/${sigs.length} processed (inserted=${inserted} updated=${updated})`)
   }
   return { inserted, updated, scanned: sigs.length }
 }
