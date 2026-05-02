@@ -3760,14 +3760,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           return v < 0 ? `-${s}` : s
         }
 
-        const periodStart = from || (enriched[0]?.occurred_at || new Date().toISOString())
-        const periodEnd   = to   || (enriched[enriched.length - 1]?.occurred_at || new Date().toISOString())
-        // Forced statement period: Jan 1 of current year → today (formatted)
-        const _now = new Date()
-        const _yr  = _now.getUTCFullYear()
-        const _monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
-        const periodStartLabel = `1 January, ${_yr}`
-        const periodEndLabel   = `${_monthNames[_now.getUTCMonth()]} ${_now.getUTCDate()}, ${_yr}`
+        const periodStart = from
+          ? new Date(from + 'T00:00:00Z').toISOString()
+          : (enriched[0]?.occurred_at || new Date().toISOString())
+        const periodEnd   = to
+          ? new Date(to + 'T23:59:59Z').toISOString()
+          : (enriched[enriched.length - 1]?.occurred_at || new Date().toISOString())
+        // Statement period labels mirror the requested from/to range so the PDF
+        // matches the date filter chosen on the Treasury export screen.
+        const periodStartLabel = fmtMonthDay(periodStart)
+        const periodEndLabel   = fmtMonthDay(periodEnd)
 
         const doc = new PDFDocument({ size: 'LETTER', layout: 'portrait', margin: 54, bufferPages: true, info: {
           Title: `Bank Account Statement ${periodStartLabel} - ${periodEndLabel}`,
@@ -3954,12 +3956,15 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           .text('\u00A9 2026 Lili App Inc. All Rights Reserved.', M, y, { width: PAGE_W - 2*M, align: 'center' })
         y = doc.y
 
-        // Page numbers
+        // Page numbers — keep y within bottom margin so doc.text() does NOT auto-paginate.
+        // (Writing below page.margins.bottom triggers an internal addPage and produced
+        //  the trailing blank pages users were seeing.)
         const range = doc.bufferedPageRange()
+        const footerY = doc.page.height - doc.page.margins.bottom - 12
         for (let i = 0; i < range.count; i++) {
           doc.switchToPage(range.start + i)
           doc.font('Helvetica').fontSize(9).fillColor(SUBTLE)
-            .text(`Page ${i + 1} of ${range.count}`, M, doc.page.height - 36, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
+            .text(`Page ${i + 1} of ${range.count}`, M, footerY, { width: PAGE_W - 2*M, align: 'right', lineBreak: false })
         }
 
         doc.end()
