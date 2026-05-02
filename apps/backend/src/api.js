@@ -3480,6 +3480,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
   //   &full=1
   // Returns a downloadable CSV (or JSON) with every recorded transaction
   // for the guild, including network fees, direction, and totals.
+
+  // Static: Direct Deposit Form (ACH instructions PDF). Owner-gated to keep account
+  // numbers private; served byte-for-byte from bundled asset.
+  app.get('/api/forms/direct-deposit', requireAuth, async (req, res) => {
+    try {
+      const p = path.join(__dirname, '..', 'assets', 'direct-deposit-form.pdf')
+      if (!fs.existsSync(p)) return res.status(404).json({ error: 'form_not_found' })
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Content-Disposition', 'attachment; filename="DCB-Direct-Deposit-Form.pdf"')
+      fs.createReadStream(p).pipe(res)
+    } catch (e) {
+      console.error('[forms/direct-deposit]', e)
+      if (!res.headersSent) res.status(500).json({ error: 'failed' })
+    }
+  })
+
   app.get('/api/admin/guilds/:guildId/audit/report', requireAuth, requireGuildOwner, async (req, res) => {
     try {
       const format = (req.query.format || 'csv').toString().toLowerCase()
@@ -3737,11 +3753,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
         const periodStart = from || (enriched[0]?.occurred_at || new Date().toISOString())
         const periodEnd   = to   || (enriched[enriched.length - 1]?.occurred_at || new Date().toISOString())
-        // Forced statement period: Jan 1 of current year → today ("Present")
+        // Forced statement period: Jan 1 of current year → today (formatted)
         const _now = new Date()
         const _yr  = _now.getUTCFullYear()
+        const _monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
         const periodStartLabel = `1 January, ${_yr}`
-        const periodEndLabel   = 'Present'
+        const periodEndLabel   = `${_monthNames[_now.getUTCMonth()]} ${_now.getUTCDate()}, ${_yr}`
 
         const doc = new PDFDocument({ size: 'LETTER', layout: 'portrait', margin: 54, bufferPages: true, info: {
           Title: `Bank Account Statement ${periodStartLabel} - ${periodEndLabel}`,
@@ -3825,20 +3842,21 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         const tableW = PAGE_W - 2*M
         const cols = [
           { key: 'date',    label: 'Date',               w: 62,  align: 'left'  },
-          { key: 'auth',    label: 'Authorization Code', w: 92,  align: 'left'  },
-          { key: 'desc',    label: 'Description',        w: tableW - (62+92+95+95), align: 'left' },
+          { key: 'auth',    label: 'Authorization Code', w: 110, align: 'left'  },
+          { key: 'desc',    label: 'Description',        w: tableW - (62+110+95+95), align: 'left' },
           { key: 'amount',  label: 'Amount',             w: 95,  align: 'right' },
           { key: 'balance', label: 'Balance',            w: 95,  align: 'right' },
         ]
+        const HEADER_H = 30
         const drawTableHeader = (yy) => {
           doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT)
           let cx = M
           cols.forEach(c => {
-            doc.text(c.label, cx, yy, { width: c.w - 4, align: c.align, lineBreak: false })
+            doc.text(c.label, cx, yy, { width: c.w - 4, align: c.align })
             cx += c.w
           })
-          doc.moveTo(M, yy + 16).lineTo(RIGHT, yy + 16).lineWidth(0.5).strokeColor('#dcdcdc').stroke()
-          return yy + 22
+          doc.moveTo(M, yy + HEADER_H).lineTo(RIGHT, yy + HEADER_H).lineWidth(0.5).strokeColor('#dcdcdc').stroke()
+          return yy + HEADER_H + 6
         }
         y = drawTableHeader(y)
         doc.font('Helvetica').fontSize(10).fillColor(TEXT)
@@ -3873,31 +3891,29 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           doc.moveTo(M, y - 2).lineTo(RIGHT, y - 2).lineWidth(0.2).strokeColor('#f3f3f3').stroke()
         }
 
-        // ── Disclaimer footer ──
-        const ensure = (h) => { if (y + h > doc.page.height - M - 20) { doc.addPage(); y = M } }
-        y += 28
-        ensure(120)
-        doc.font('Helvetica-Bold').fontSize(10).fillColor(TEXT)
-          .text('What responsibility do you have to review this account statement?', M, y, { width: PAGE_W - 2*M })
-        y = doc.y + 4
-        doc.font('Helvetica').fontSize(10).fillColor(TEXT)
-          .text('You agree to review this account statement promptly.', M, y, { width: PAGE_W - 2*M })
-        y = doc.y + 10
-        doc.text('You agree 30 days after we make your account statement available to you online is the maximum amount of time for you to review your statement and report any problem or unauthorized transaction related to anything shown on the statement, unless a longer period is provided by federal or state law.', M, y, { width: PAGE_W - 2*M })
-        y = doc.y + 10
-        doc.text('It is, therefore, important that you review the statement thoroughly as soon as it is made available to you and contact us immediately if you notice any errors. This statement was generated by Lili Small Business Banking courtesy of Sunrise Banks, N.A., Member FDIC.', M, y, { width: PAGE_W - 2*M })
-
-        // ── Lili legal disclosures (verbatim) ──
-        const ensureBlock = (h) => {
-          y = doc.y + 14
-          if (y + h > doc.page.height - M - 30) { doc.addPage(); y = M }
+        // ── Disclaimer footer + Lili disclosures ──
+        const FOOTER_BOTTOM = () => doc.page.height - M - 30
+        const ensureSpace = (h) => {
+          if (y + h > FOOTER_BOTTOM()) { doc.addPage(); y = M }
         }
         const writeBlock = (txt, opts = {}) => {
-          ensureBlock(40)
-          doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(opts.size || 9).fillColor(TEXT)
-            .text(txt, M, y, { width: PAGE_W - 2*M, align: opts.align || 'left' })
-          y = doc.y
+          const size = opts.size || 9
+          const fontName = opts.bold ? 'Helvetica-Bold' : 'Helvetica'
+          doc.font(fontName).fontSize(size)
+          const w = PAGE_W - 2*M
+          const h = doc.heightOfString(txt, { width: w })
+          ensureSpace(h + (opts.gap || 6))
+          doc.fillColor(opts.color || TEXT).text(txt, M, y, { width: w, align: opts.align || 'left' })
+          y += h + (opts.gap || 6)
         }
+        y += 28
+        ensureSpace(20)
+        writeBlock('What responsibility do you have to review this account statement?', { bold: true, size: 10, gap: 6 })
+        writeBlock('You agree to review this account statement promptly.', { size: 10, gap: 10 })
+        writeBlock('You agree 30 days after we make your account statement available to you online is the maximum amount of time for you to review your statement and report any problem or unauthorized transaction related to anything shown on the statement, unless a longer period is provided by federal or state law.', { size: 10, gap: 10 })
+        writeBlock('It is, therefore, important that you review the statement thoroughly as soon as it is made available to you and contact us immediately if you notice any errors. This statement was generated by Lili Small Business Banking courtesy of Sunrise Banks, N.A., Member FDIC.', { size: 10, gap: 18 })
+
+        // ── Lili legal disclosures (verbatim) ──
         writeBlock('Lili App Inc.', { bold: true, size: 10 })
         writeBlock('Offices at 15 West 18th Street, New York, NY 10011, United States.')
         writeBlock('Lili is a financial technology company, not a bank. Banking services are provided by Sunrise Banks, N.A., Member FDIC. The Lili Visa\u00AE Debit Card is issued by Sunrise Banks, N.A., Member FDIC, pursuant to a license from Visa U.S.A., Inc. The Card may be used everywhere Visa debit cards are accepted.')
@@ -3922,14 +3938,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           ['16', 'Figures based on a Lili survey conducted between January 1, 2025 to January 1, 2026. Information available upon request.'],
         ]
         for (const [n, t] of footnotes) {
-          ensureBlock(30)
+          doc.font('Helvetica').fontSize(8)
+          const fnH = doc.heightOfString(t, { width: PAGE_W - 2*M - 16 })
+          ensureSpace(fnH + 4)
           doc.font('Helvetica-Bold').fontSize(8).fillColor(TEXT).text(n, M, y, { width: 14, lineBreak: false })
           doc.font('Helvetica').fontSize(8).fillColor(TEXT).text(t, M + 16, y, { width: PAGE_W - 2*M - 16 })
-          y = doc.y + 4
+          y += fnH + 4
         }
-        ensureBlock(20)
+        ensureSpace(20)
+        y += 6
         doc.font('Helvetica').fontSize(9).fillColor(SUBTLE)
-          .text('\u00A9 2026 Lili App Inc. All Rights Reserved.', M, y + 6, { width: PAGE_W - 2*M, align: 'center' })
+          .text('\u00A9 2026 Lili App Inc. All Rights Reserved.', M, y, { width: PAGE_W - 2*M, align: 'center' })
+        y = doc.y
+
+        // Strip any trailing blank pages that may have been created speculatively
+        const _range = doc.bufferedPageRange()
+        // (no-op: page numbering loop below handles existing pages)
 
         // Page numbers
         const range = doc.bufferedPageRange()

@@ -106,6 +106,22 @@ export default function Treasury({ guildId, isOwner = false }: Props) {
     }
   }
 
+  const downloadDirectDepositForm = async () => {
+    try {
+      const res = await api.get('/forms/direct-deposit', { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'DCB-Direct-Deposit-Form.pdf'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (err: any) {
+      console.error('[Treasury] direct deposit download failed:', err?.message || err)
+    }
+  }
+
   const load = async () => {
     if (!guildId) return
     setLoading(true)
@@ -719,6 +735,12 @@ export default function Treasury({ guildId, isOwner = false }: Props) {
                   onClick={() => { setExportFrom(''); setExportTo('') }}
                   disabled={exporting}
                 >All time</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={downloadDirectDepositForm}
+                  title="Download the ACH / Direct Deposit instructions PDF"
+                >📄 Direct Deposit Form</button>
                 {exportMsg && (
                   <span style={{ fontSize: 12, color: exportMsg.startsWith('Error') ? 'var(--danger, #b42318)' : 'var(--success, #067647)' }}>
                     {exportMsg}
