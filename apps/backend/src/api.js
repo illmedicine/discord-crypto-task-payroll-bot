@@ -10,8 +10,27 @@ const rateLimit = require('express-rate-limit')
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js')
 const db = require('./db')
 const multer = require('multer')
+const path = require('path')
+const fs = require('fs')
 let PDFDocument = null
 try { PDFDocument = require('pdfkit') } catch (_) { /* pdfkit optional; PDF export disabled if missing */ }
+// Cached DCB logo buffer for PDF exports (loaded lazily, kept in memory).
+let DCB_LOGO_BUFFER = null
+function loadDcbLogo() {
+  if (DCB_LOGO_BUFFER !== null) return DCB_LOGO_BUFFER
+  const candidates = [
+    path.join(__dirname, '..', 'assets', 'dcb-logo.png'),
+    path.join(__dirname, '..', '..', '..', 'web', 'public', 'logo-192.png'),
+  ]
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) { DCB_LOGO_BUFFER = fs.readFileSync(p); return DCB_LOGO_BUFFER } } catch (_) {}
+  }
+  DCB_LOGO_BUFFER = false
+  return DCB_LOGO_BUFFER
+}
+// Per-command revenue paid to the bot operator for every Discord command run.
+// Configurable via env var; defaults to $0.03 USD/command.
+const DCB_COMMAND_RATE_USD = Number(process.env.DCB_COMMAND_RATE_USD || 0.03)
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } })
 
 module.exports = function buildApi({ discordClient }) {
@@ -3549,6 +3568,36 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       summary.total_deposits_sol = +summary.total_deposits_sol.toFixed(9)
       summary.total_network_fees_sol = +summary.total_network_fees_sol.toFixed(9)
 
+      // ── DCB network-transaction income ($/command rate × commands run) ──
+      // commands_run is summed from worker_daily_stats; range filter applied
+      // when from/to are provided (compared against stat_date as ISO date).
+      let commandsRun = 0
+      try {
+        const cmdWhere = ['guild_id = ?']
+        const cmdParams = [req.guild.id]
+        if (from) { cmdWhere.push('stat_date >= ?'); cmdParams.push(from) }
+        if (to)   { cmdWhere.push('stat_date <= ?'); cmdParams.push(to) }
+        const cmdRow = await db.get(
+          `SELECT COALESCE(SUM(commands_run), 0) AS c FROM worker_daily_stats WHERE ${cmdWhere.join(' AND ')}`,
+          cmdParams
+        )
+        commandsRun = Number(cmdRow?.c || 0)
+      } catch (e) {
+        console.warn('[audit/report] commands_run query failed:', e?.message || e)
+      }
+      summary.commands_run = commandsRun
+      summary.command_rate_usd = DCB_COMMAND_RATE_USD
+      summary.command_income_usd = +(commandsRun * DCB_COMMAND_RATE_USD).toFixed(2)
+
+      // Phantom wallet last-4 indicators — make it visually clear on the
+      // report that funds physically reside in the Phantom wallet(s).
+      const treasuryAddrs = Array.from(treasuries).filter(Boolean)
+      summary.phantom_wallets = treasuryAddrs.map(a => ({
+        address: a,
+        last4: a.slice(-4),
+        label: `Phantom ••${a.slice(-4)}`,
+      }))
+
       const filenameStamp = new Date().toISOString().slice(0, 10)
       const rangeStamp = from || to ? `_${from || 'all'}_to_${to || 'now'}` : '_all-time'
 
@@ -3580,22 +3629,42 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
         }
 
         // ── Header ───────────────────────────────────────────────────────
-        doc.fillColor('#111').font('Helvetica-Bold').fontSize(20).text('DCB Treasury Audit Report')
-        doc.moveDown(0.2)
+        const logoBuf = loadDcbLogo()
+        const headerTop = doc.y
+        if (logoBuf) {
+          try { doc.image(logoBuf, 36, headerTop, { fit: [56, 56] }) } catch (_) { /* ignore broken logo */ }
+        }
+        const titleX = logoBuf ? 104 : 36
+        doc.fillColor('#111').font('Helvetica-Bold').fontSize(20).text('DCB Treasury Audit Report', titleX, headerTop)
         doc.font('Helvetica').fontSize(10).fillColor('#444')
-          .text(`Guild: ${req.guild.id}`)
-          .text(`Range: ${from || 'all-time'}  →  ${to || 'now'}`)
-          .text(`Generated: ${summary.generated_at}`)
-        doc.moveDown(0.6)
+          .text(`Guild: ${req.guild.id}`, titleX, doc.y)
+          .text(`Range: ${from || 'all-time'}  →  ${to || 'now'}`, titleX)
+          .text(`Generated: ${summary.generated_at}`, titleX)
+        const phantomLabels = (summary.phantom_wallets || []).map(p => p.label).join('   ')
+        if (phantomLabels) {
+          doc.fillColor('#7c3aed').font('Helvetica-Bold').fontSize(10)
+            .text(`Funds held in: ${phantomLabels}`, titleX)
+        }
+        doc.y = Math.max(doc.y, headerTop + (logoBuf ? 60 : 0))
+        doc.moveDown(0.4)
+        // Reset x to page margin so subsequent flow content starts at the left.
+        doc.x = 36
 
         // ── Summary box ──────────────────────────────────────────────────
         const boxTop = doc.y
-        doc.roundedRect(36, boxTop, doc.page.width - 72, 80, 6).fillAndStroke('#f6f8fa', '#d0d7de')
+        const boxHeight = 110
+        doc.roundedRect(36, boxTop, doc.page.width - 72, boxHeight, 6).fillAndStroke('#f6f8fa', '#d0d7de')
         doc.fillColor('#111').font('Helvetica-Bold').fontSize(11).text('Summary', 48, boxTop + 8)
         doc.font('Helvetica').fontSize(10).fillColor('#222')
         const colW = (doc.page.width - 96) / 4
         const rowY1 = boxTop + 28
-        const rowY2 = boxTop + 50
+        const rowY2 = boxTop + 54
+        const rowY3 = boxTop + 80
+        const usdFmt = (n) => `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        const intFmt = (n) => Number(n || 0).toLocaleString('en-US')
+        const phantomCellVal = (summary.phantom_wallets || []).length
+          ? (summary.phantom_wallets || []).map(p => `••${p.last4}`).join(', ')
+          : '—'
         const cells = [
           [`Rows`, `${summary.row_count}`],
           [`Payouts`, `${summary.payouts_count}  /  ${fmtSol(summary.total_payouts_sol)}`],
@@ -3605,14 +3674,22 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           [`Net outflow`, fmtSol(summary.net_outflow_sol)],
           [`Treasury wallets`, `${treasuries.size}`],
           [`Synced`, syncStats ? `${syncStats.scanned ?? 0} scanned` : 'cache only'],
+          [`DCB commands run`, intFmt(summary.commands_run)],
+          [`DCB network income`, `${usdFmt(summary.command_income_usd)}  (@ $${summary.command_rate_usd.toFixed(2)}/cmd)`],
+          [`Phantom wallet`, phantomCellVal],
+          [`Period`, `${from || 'all-time'} → ${to || 'now'}`],
         ]
         cells.forEach(([label, val], i) => {
           const x = 48 + (i % 4) * colW
-          const y = i < 4 ? rowY1 : rowY2
+          const y = i < 4 ? rowY1 : i < 8 ? rowY2 : rowY3
           doc.fillColor('#666').font('Helvetica').fontSize(8).text(label.toUpperCase(), x, y, { width: colW - 8 })
-          doc.fillColor('#111').font('Helvetica-Bold').fontSize(10).text(val, x, y + 9, { width: colW - 8 })
+          // Highlight income row green, phantom row purple.
+          const valColor = label === 'DCB network income' ? '#067647'
+                         : label === 'Phantom wallet' ? '#7c3aed'
+                         : '#111'
+          doc.fillColor(valColor).font('Helvetica-Bold').fontSize(10).text(val, x, y + 9, { width: colW - 8 })
         })
-        doc.y = boxTop + 92
+        doc.y = boxTop + boxHeight + 12
 
         // ── Ledger table ─────────────────────────────────────────────────
         const cols = [
@@ -3707,6 +3784,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       lines.push(`# PayoutsCount,${summary.payouts_count}`)
       lines.push(`# DepositsCount,${summary.deposits_count}`)
       lines.push(`# UnknownCount,${summary.unknown_count}`)
+      lines.push(`# DcbCommandsRun,${summary.commands_run}`)
+      lines.push(`# DcbCommandRateUSD,${summary.command_rate_usd}`)
+      lines.push(`# DcbCommandIncomeUSD,${summary.command_income_usd}`)
+      lines.push(`# PhantomWallets,${csvEscape((summary.phantom_wallets || []).map(p => p.label).join(' | '))}`)
       lines.push('')
       const headers = [
         'occurred_at', 'block_time_unix', 'slot', 'direction',
