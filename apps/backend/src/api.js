@@ -620,6 +620,12 @@ module.exports = function buildApi({ discordClient }) {
 
     const state = crypto.randomBytes(12).toString('hex')
     res.cookie('dcb_oauth_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
+    // Track mobile platform so the callback can deep-link back into the native app
+    if (req.query.platform === 'android' || req.query.platform === 'ios') {
+      res.cookie('dcb_oauth_platform', String(req.query.platform), { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 10 * 60 * 1000 })
+    } else {
+      res.clearCookie('dcb_oauth_platform')
+    }
 
     const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/discord/callback`)
     const scope = encodeURIComponent('identify email guilds')
@@ -800,6 +806,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
       console.log('[OAuth Discord] login success for', userResp.data.username, '— redirecting')
 
+      const mobilePlatform = req.cookies?.dcb_oauth_platform
+      if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
+        res.clearCookie('dcb_oauth_platform')
+        // Deep-link back into the native app via the custom URL scheme registered in AndroidManifest.
+        return res.redirect(`com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`)
+      }
       if (uiBase) {
         const u = new URL(uiBase)
         u.searchParams.set('dcb_token', jwtToken)
@@ -832,6 +844,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
 
     const state = crypto.randomBytes(12).toString('hex')
     res.cookie('dcb_google_state', state, { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure })
+    if (req.query.platform === 'android' || req.query.platform === 'ios') {
+      res.cookie('dcb_oauth_platform', String(req.query.platform), { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 10 * 60 * 1000 })
+    } else {
+      res.clearCookie('dcb_oauth_platform')
+    }
 
     const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/google/callback`)
     const scope = encodeURIComponent('openid email profile')
@@ -931,6 +948,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       })
       res.clearCookie('dcb_google_state')
 
+      const mobilePlatform = req.cookies?.dcb_oauth_platform
+      if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
+        res.clearCookie('dcb_oauth_platform')
+        return res.redirect(`com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`)
+      }
       if (uiBase) {
         const u = new URL(uiBase)
         u.searchParams.set('dcb_token', jwtToken)

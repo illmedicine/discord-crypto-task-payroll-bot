@@ -93,9 +93,19 @@ api.interceptors.response.use(
   }
 )
 
+export const IS_CAPACITOR = typeof window !== 'undefined' && (
+  window.location.protocol === 'capacitor:' ||
+  window.location.protocol === 'file:' ||
+  (window as any).Capacitor !== undefined
+)
+
 export const getAuthUrl = (path = '/auth/discord') => {
   const base = API_BASE || resolveApiBase()
-  return `${base.replace(/\/$/, '')}${path}`
+  const url = `${base.replace(/\/$/, '')}${path}`
+  if (IS_CAPACITOR) {
+    return `${url}${url.includes('?') ? '&' : '?'}platform=android`
+  }
+  return url
 }
 
 export const getGoogleAuthUrl = () => getAuthUrl('/auth/google')
