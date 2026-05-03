@@ -1,4 +1,4 @@
-package com.dcb.eventmanager;
+package com.discryptobank.app;
 
 import com.getcapacitor.BridgeActivity;
 

@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.dcbgames.eventmanager',
-  appName: 'DCB Event Manager',
+  appId: 'com.discryptobank.app',
+  appName: 'DisCryptoBank',
   webDir: 'dist',
   android: {
     backgroundColor: '#060a13',
