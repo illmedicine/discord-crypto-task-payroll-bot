@@ -3777,7 +3777,7 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
           Subject: 'Bank Account Statement',
         }})
         res.setHeader('Content-Type', 'application/pdf')
-        res.setHeader('Content-Disposition', `attachment; filename="bank-statement-${req.guild.id}${rangeStamp}_${filenameStamp}.pdf"`)
+        res.setHeader('Content-Disposition', `attachment; filename="Account_Statement_${from || 'all'}_to_${to || 'now'}.pdf"`)
         doc.pipe(res)
 
         const PAGE_W = doc.page.width

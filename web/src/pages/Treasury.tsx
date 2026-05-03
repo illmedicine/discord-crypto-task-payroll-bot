@@ -89,7 +89,7 @@ export default function Treasury({ guildId, isOwner = false }: Props) {
       const a = document.createElement('a')
       a.href = url
       const stamp = `${exportFrom || 'all'}_to_${exportTo || 'now'}`
-      a.download = `dcb-treasury-audit_${stamp}.${exportFormat}`
+      a.download = `Account_Statement_${stamp}.${exportFormat}`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
