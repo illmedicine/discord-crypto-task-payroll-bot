@@ -115,6 +115,12 @@ module.exports = function buildApi({ discordClient }) {
     origins.push('https://www.dcb-gm.com')
     origins.push('https://dcb-games.com')
     origins.push('https://www.dcb-games.com')
+    // Capacitor mobile app origins (Android serves from https://localhost,
+    // iOS from capacitor://localhost). Required so the in-app WebView can
+    // read fetch responses for the mobile-auth polling endpoints.
+    origins.push('https://localhost')
+    origins.push('capacitor://localhost')
+    origins.push('http://localhost')
     return origins
   })()
 
@@ -146,16 +152,33 @@ module.exports = function buildApi({ discordClient }) {
   })
   app.use(globalLimiter)
 
-  // Strict limiter for auth endpoints: 10 requests per minute per IP
+  // Strict limiter for auth endpoints: 10 requests per minute per IP.
+  // Skip the mobile polling endpoints — they are designed to be polled
+  // every ~1.5s while the user is in the OAuth Custom Tab.
   const authLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many login attempts, please try again later.' },
-    keyGenerator: (req) => req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    keyGenerator: (req) => req.ip || req.headers['x-forwarded-for'] || 'unknown',
+    skip: (req) => {
+      const p = req.path || ''
+      return p.startsWith('/mobile/poll') || p.startsWith('/mobile/start')
+    },
   })
   app.use('/auth', authLimiter)
+
+  // Lightweight limiter dedicated to the mobile polling endpoints.
+  const mobilePollLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120, // ~2 polls/sec sustained
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Polling too fast, slow down.' },
+    keyGenerator: (req) => req.ip || req.headers['x-forwarded-for'] || 'unknown',
+  })
+  app.use('/auth/mobile', mobilePollLimiter)
 
   // Strict limiter for wallet/financial endpoints: 30 requests per minute per IP
   const financialLimiter = rateLimit({
