@@ -809,8 +809,12 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const mobilePlatform = req.cookies?.dcb_oauth_platform
       if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
         res.clearCookie('dcb_oauth_platform')
-        // Deep-link back into the native app via the custom URL scheme registered in AndroidManifest.
-        return res.redirect(`com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`)
+        // HTML interstitial: more reliable than a 302 to a custom scheme,
+        // because some Chrome Custom Tab versions block server-side redirects
+        // to non-http(s) schemes. The page navigates via JS, which Custom Tabs
+        // hands off to the OS intent resolver -> our app's intent-filter.
+        const deepLink = `com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`
+        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>body{background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px}a{color:#7c3aed;font-weight:600}</style></head><body><div><h2>Signed in — returning to DisCryptoBank…</h2><p>If the app does not open automatically, <a id="l" href="${deepLink}">tap here</a>.</p></div><script>(function(){var u=${JSON.stringify(deepLink)};try{window.location.replace(u)}catch(e){window.location.href=u}setTimeout(function(){try{window.location.href=u}catch(e){}},250);})();</script></body></html>`)
       }
       if (uiBase) {
         const u = new URL(uiBase)
@@ -951,7 +955,8 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const mobilePlatform = req.cookies?.dcb_oauth_platform
       if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
         res.clearCookie('dcb_oauth_platform')
-        return res.redirect(`com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`)
+        const deepLink = `com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`
+        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>body{background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px}a{color:#7c3aed;font-weight:600}</style></head><body><div><h2>Signed in — returning to DisCryptoBank…</h2><p>If the app does not open automatically, <a id="l" href="${deepLink}">tap here</a>.</p></div><script>(function(){var u=${JSON.stringify(deepLink)};try{window.location.replace(u)}catch(e){window.location.href=u}setTimeout(function(){try{window.location.href=u}catch(e){}},250);})();</script></body></html>`)
       }
       if (uiBase) {
         const u = new URL(uiBase)
