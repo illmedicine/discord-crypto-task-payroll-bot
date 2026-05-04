@@ -809,12 +809,16 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const mobilePlatform = req.cookies?.dcb_oauth_platform
       if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
         res.clearCookie('dcb_oauth_platform')
-        // HTML interstitial: more reliable than a 302 to a custom scheme,
-        // because some Chrome Custom Tab versions block server-side redirects
-        // to non-http(s) schemes. The page navigates via JS, which Custom Tabs
-        // hands off to the OS intent resolver -> our app's intent-filter.
-        const deepLink = `com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`
-        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>body{background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px}a{color:#7c3aed;font-weight:600}</style></head><body><div><h2>Signed in — returning to DisCryptoBank…</h2><p>If the app does not open automatically, <a id="l" href="${deepLink}">tap here</a>.</p></div><script>(function(){var u=${JSON.stringify(deepLink)};try{window.location.replace(u)}catch(e){window.location.href=u}setTimeout(function(){try{window.location.href=u}catch(e){}},250);})();</script></body></html>`)
+        // Chrome Custom Tabs blocks JS-initiated navigation to non-http(s) schemes,
+        // but reliably honors `intent://` URIs and user-initiated link clicks.
+        // Render a page that:
+        //   1. tries an intent:// auto-redirect (Chrome handles this in Custom Tabs),
+        //   2. falls back to a big tap button that uses the custom scheme directly
+        //      (treated as user gesture -> always allowed).
+        const tokenEnc = encodeURIComponent(jwtToken)
+        const customScheme = `com.discryptobank.app://auth?dcb_token=${tokenEnc}`
+        const intentUrl = `intent://auth?dcb_token=${tokenEnc}#Intent;scheme=com.discryptobank.app;package=com.discryptobank.app;end`
+        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>html,body{margin:0;padding:0;background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;min-height:100vh}main{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:18px}h2{margin:0;font-size:22px}p{margin:0;color:#9aa3b2;max-width:340px;line-height:1.5}a.btn{display:inline-block;padding:16px 36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:14px;font-weight:700;font-size:17px;box-shadow:0 10px 30px rgba(99,102,241,.35)}a.btn:active{transform:scale(.98)}.spin{width:46px;height:46px;border:3px solid #1f2937;border-top-color:#8b5cf6;border-radius:50%;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head><body><main><div class="spin"></div><h2>Signed in successfully</h2><p>Returning you to the DisCryptoBank app… if it does not open automatically, tap the button below.</p><a class="btn" id="go" href=${JSON.stringify(customScheme)}>Open DisCryptoBank</a></main><script>(function(){var intentUrl=${JSON.stringify(intentUrl)};var custom=${JSON.stringify(customScheme)};try{window.location.replace(intentUrl)}catch(e){}setTimeout(function(){try{window.location.href=intentUrl}catch(e){}},120);setTimeout(function(){try{window.location.href=custom}catch(e){}},900);})();</script></body></html>`)
       }
       if (uiBase) {
         const u = new URL(uiBase)
@@ -955,8 +959,10 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       const mobilePlatform = req.cookies?.dcb_oauth_platform
       if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
         res.clearCookie('dcb_oauth_platform')
-        const deepLink = `com.discryptobank.app://auth?dcb_token=${encodeURIComponent(jwtToken)}`
-        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>body{background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:24px}a{color:#7c3aed;font-weight:600}</style></head><body><div><h2>Signed in — returning to DisCryptoBank…</h2><p>If the app does not open automatically, <a id="l" href="${deepLink}">tap here</a>.</p></div><script>(function(){var u=${JSON.stringify(deepLink)};try{window.location.replace(u)}catch(e){window.location.href=u}setTimeout(function(){try{window.location.href=u}catch(e){}},250);})();</script></body></html>`)
+        const tokenEnc = encodeURIComponent(jwtToken)
+        const customScheme = `com.discryptobank.app://auth?dcb_token=${tokenEnc}`
+        const intentUrl = `intent://auth?dcb_token=${tokenEnc}#Intent;scheme=com.discryptobank.app;package=com.discryptobank.app;end`
+        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>html,body{margin:0;padding:0;background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;min-height:100vh}main{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:18px}h2{margin:0;font-size:22px}p{margin:0;color:#9aa3b2;max-width:340px;line-height:1.5}a.btn{display:inline-block;padding:16px 36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:14px;font-weight:700;font-size:17px;box-shadow:0 10px 30px rgba(99,102,241,.35)}a.btn:active{transform:scale(.98)}.spin{width:46px;height:46px;border:3px solid #1f2937;border-top-color:#8b5cf6;border-radius:50%;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head><body><main><div class="spin"></div><h2>Signed in successfully</h2><p>Returning you to the DisCryptoBank app… if it does not open automatically, tap the button below.</p><a class="btn" id="go" href=${JSON.stringify(customScheme)}>Open DisCryptoBank</a></main><script>(function(){var intentUrl=${JSON.stringify(intentUrl)};var custom=${JSON.stringify(customScheme)};try{window.location.replace(intentUrl)}catch(e){}setTimeout(function(){try{window.location.href=intentUrl}catch(e){}},120);setTimeout(function(){try{window.location.href=custom}catch(e){}},900);})();</script></body></html>`)
       }
       if (uiBase) {
         const u = new URL(uiBase)
