@@ -611,6 +611,46 @@ module.exports = function buildApi({ discordClient }) {
     })
   })
 
+  // ── Mobile auth session exchange (polling-based, deep-link independent) ──
+  // The Android/iOS app generates a session_id, opens the OAuth flow with
+  // ?mobile_session=<id>, and polls /auth/mobile/poll until the JWT is ready.
+  // This works even if the Custom Tab fails to dispatch the deep-link intent.
+  const mobileAuthSessions = new Map() // session_id -> { token, expiresAt }
+  const MOBILE_SESSION_TTL_MS = 10 * 60 * 1000 // 10 minutes
+  function pruneMobileSessions() {
+    const now = Date.now()
+    for (const [k, v] of mobileAuthSessions) {
+      if (!v || v.expiresAt < now) mobileAuthSessions.delete(k)
+    }
+  }
+  function storeMobileSessionToken(sessionId, token) {
+    if (!sessionId || !token) return
+    pruneMobileSessions()
+    mobileAuthSessions.set(sessionId, { token, expiresAt: Date.now() + MOBILE_SESSION_TTL_MS })
+  }
+  function isValidMobileSessionId(s) {
+    return typeof s === 'string' && /^[a-zA-Z0-9_-]{16,128}$/.test(s)
+  }
+
+  app.post('/auth/mobile/start', (req, res) => {
+    pruneMobileSessions()
+    const sessionId = crypto.randomBytes(24).toString('hex')
+    mobileAuthSessions.set(sessionId, { token: null, expiresAt: Date.now() + MOBILE_SESSION_TTL_MS })
+    res.json({ session_id: sessionId, expires_in: MOBILE_SESSION_TTL_MS / 1000 })
+  })
+
+  app.get('/auth/mobile/poll', (req, res) => {
+    const sessionId = String(req.query.session_id || '')
+    if (!isValidMobileSessionId(sessionId)) return res.status(400).json({ error: 'invalid_session_id' })
+    pruneMobileSessions()
+    const entry = mobileAuthSessions.get(sessionId)
+    if (!entry) return res.status(404).json({ error: 'session_not_found' })
+    if (!entry.token) return res.status(202).json({ pending: true })
+    // One-time read: delete after delivering
+    mobileAuthSessions.delete(sessionId)
+    return res.json({ token: entry.token })
+  })
+
   app.get('/auth/discord', (req, res) => {
     const clientId = process.env.DISCORD_CLIENT_ID
     if (!clientId) return res.status(500).send('DISCORD_CLIENT_ID not configured')
@@ -625,6 +665,12 @@ module.exports = function buildApi({ discordClient }) {
       res.cookie('dcb_oauth_platform', String(req.query.platform), { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 10 * 60 * 1000 })
     } else {
       res.clearCookie('dcb_oauth_platform')
+    }
+    // Track mobile polling session id (deep-link-independent token exchange)
+    if (isValidMobileSessionId(req.query.mobile_session)) {
+      res.cookie('dcb_mobile_session', String(req.query.mobile_session), { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 10 * 60 * 1000 })
+    } else {
+      res.clearCookie('dcb_mobile_session')
     }
 
     const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/discord/callback`)
@@ -807,18 +853,19 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       console.log('[OAuth Discord] login success for', userResp.data.username, '— redirecting')
 
       const mobilePlatform = req.cookies?.dcb_oauth_platform
+      const mobileSessionId = req.cookies?.dcb_mobile_session
       if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
         res.clearCookie('dcb_oauth_platform')
-        // Chrome Custom Tabs blocks JS-initiated navigation to non-http(s) schemes,
-        // but reliably honors `intent://` URIs and user-initiated link clicks.
-        // Render a page that:
-        //   1. tries an intent:// auto-redirect (Chrome handles this in Custom Tabs),
-        //   2. falls back to a big tap button that uses the custom scheme directly
-        //      (treated as user gesture -> always allowed).
+        if (isValidMobileSessionId(mobileSessionId)) {
+          storeMobileSessionToken(mobileSessionId, jwtToken)
+          res.clearCookie('dcb_mobile_session')
+        }
+        // The native app will pick up the JWT via /auth/mobile/poll within ~1s.
+        // We still attempt the legacy deep-link as a best-effort fast path.
         const tokenEnc = encodeURIComponent(jwtToken)
         const customScheme = `com.discryptobank.app://auth?dcb_token=${tokenEnc}`
         const intentUrl = `intent://auth?dcb_token=${tokenEnc}#Intent;scheme=com.discryptobank.app;package=com.discryptobank.app;end`
-        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>html,body{margin:0;padding:0;background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;min-height:100vh}main{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:18px}h2{margin:0;font-size:22px}p{margin:0;color:#9aa3b2;max-width:340px;line-height:1.5}a.btn{display:inline-block;padding:16px 36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:14px;font-weight:700;font-size:17px;box-shadow:0 10px 30px rgba(99,102,241,.35)}a.btn:active{transform:scale(.98)}.spin{width:46px;height:46px;border:3px solid #1f2937;border-top-color:#8b5cf6;border-radius:50%;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head><body><main><div class="spin"></div><h2>Signed in successfully</h2><p>Returning you to the DisCryptoBank app… if it does not open automatically, tap the button below.</p><a class="btn" id="go" href=${JSON.stringify(customScheme)}>Open DisCryptoBank</a></main><script>(function(){var intentUrl=${JSON.stringify(intentUrl)};var custom=${JSON.stringify(customScheme)};try{window.location.replace(intentUrl)}catch(e){}setTimeout(function(){try{window.location.href=intentUrl}catch(e){}},120);setTimeout(function(){try{window.location.href=custom}catch(e){}},900);})();</script></body></html>`)
+        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signed in — Return to DisCryptoBank</title><style>html,body{margin:0;padding:0;background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;min-height:100vh}main{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:18px}h2{margin:0;font-size:22px;color:#a78bfa}p{margin:0;color:#9aa3b2;max-width:340px;line-height:1.5}.check{width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#22c55e,#16a34a);display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;box-shadow:0 10px 30px rgba(34,197,94,.35)}a.btn{display:inline-block;padding:16px 36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:14px;font-weight:700;font-size:17px;box-shadow:0 10px 30px rgba(99,102,241,.35)}a.btn:active{transform:scale(.98)}.hint{font-size:12px;color:#6b7280;margin-top:8px}</style></head><body><main><div class="check">✓</div><h2>Signed in successfully</h2><p>You can return to the DisCryptoBank app — your dashboard is loading automatically.</p><a class="btn" href=${JSON.stringify(intentUrl)}>Open DisCryptoBank</a><p class="hint">If nothing happens, just close this tab.</p></main><script>(function(){try{window.location.replace(${JSON.stringify(intentUrl)})}catch(e){}})();</script></body></html>`)
       }
       if (uiBase) {
         const u = new URL(uiBase)
@@ -856,6 +903,11 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.cookie('dcb_oauth_platform', String(req.query.platform), { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 10 * 60 * 1000 })
     } else {
       res.clearCookie('dcb_oauth_platform')
+    }
+    if (isValidMobileSessionId(req.query.mobile_session)) {
+      res.cookie('dcb_mobile_session', String(req.query.mobile_session), { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 10 * 60 * 1000 })
+    } else {
+      res.clearCookie('dcb_mobile_session')
     }
 
     const redirectUri = encodeURIComponent(`${baseUrl(req)}/auth/google/callback`)
@@ -957,12 +1009,17 @@ td{border:1px solid #333}.info{margin-top:20px;padding:12px;background:#1e293b;b
       res.clearCookie('dcb_google_state')
 
       const mobilePlatform = req.cookies?.dcb_oauth_platform
+      const mobileSessionId = req.cookies?.dcb_mobile_session
       if (mobilePlatform === 'android' || mobilePlatform === 'ios') {
         res.clearCookie('dcb_oauth_platform')
+        if (isValidMobileSessionId(mobileSessionId)) {
+          storeMobileSessionToken(mobileSessionId, jwtToken)
+          res.clearCookie('dcb_mobile_session')
+        }
         const tokenEnc = encodeURIComponent(jwtToken)
         const customScheme = `com.discryptobank.app://auth?dcb_token=${tokenEnc}`
         const intentUrl = `intent://auth?dcb_token=${tokenEnc}#Intent;scheme=com.discryptobank.app;package=com.discryptobank.app;end`
-        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Returning to DisCryptoBank…</title><style>html,body{margin:0;padding:0;background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;min-height:100vh}main{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:18px}h2{margin:0;font-size:22px}p{margin:0;color:#9aa3b2;max-width:340px;line-height:1.5}a.btn{display:inline-block;padding:16px 36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:14px;font-weight:700;font-size:17px;box-shadow:0 10px 30px rgba(99,102,241,.35)}a.btn:active{transform:scale(.98)}.spin{width:46px;height:46px;border:3px solid #1f2937;border-top-color:#8b5cf6;border-radius:50%;animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head><body><main><div class="spin"></div><h2>Signed in successfully</h2><p>Returning you to the DisCryptoBank app… if it does not open automatically, tap the button below.</p><a class="btn" id="go" href=${JSON.stringify(customScheme)}>Open DisCryptoBank</a></main><script>(function(){var intentUrl=${JSON.stringify(intentUrl)};var custom=${JSON.stringify(customScheme)};try{window.location.replace(intentUrl)}catch(e){}setTimeout(function(){try{window.location.href=intentUrl}catch(e){}},120);setTimeout(function(){try{window.location.href=custom}catch(e){}},900);})();</script></body></html>`)
+        return res.set('Content-Type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signed in — Return to DisCryptoBank</title><style>html,body{margin:0;padding:0;background:#060a13;color:#e5e5e5;font-family:system-ui,sans-serif;min-height:100vh}main{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:18px}h2{margin:0;font-size:22px;color:#a78bfa}p{margin:0;color:#9aa3b2;max-width:340px;line-height:1.5}.check{width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#22c55e,#16a34a);display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;box-shadow:0 10px 30px rgba(34,197,94,.35)}a.btn{display:inline-block;padding:16px 36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;border-radius:14px;font-weight:700;font-size:17px;box-shadow:0 10px 30px rgba(99,102,241,.35)}a.btn:active{transform:scale(.98)}.hint{font-size:12px;color:#6b7280;margin-top:8px}</style></head><body><main><div class="check">✓</div><h2>Signed in successfully</h2><p>You can return to the DisCryptoBank app — your dashboard is loading automatically.</p><a class="btn" href=${JSON.stringify(intentUrl)}>Open DisCryptoBank</a><p class="hint">If nothing happens, just close this tab.</p></main><script>(function(){try{window.location.replace(${JSON.stringify(intentUrl)})}catch(e){}})();</script></body></html>`)
       }
       if (uiBase) {
         const u = new URL(uiBase)

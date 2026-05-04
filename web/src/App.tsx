@@ -110,9 +110,10 @@ export default function App() {
     // Check which auth providers are available
     api.get('/auth/providers').then(r => setAuthProviders(r.data || { discord: true, google: false })).catch(() => {})
 
-    api.get('/auth/me')
+    const loadAuth = () => api.get('/auth/me')
       .then(async (r) => {
         setUser(r.data.user)
+        try { (window as any).__dcbAuthRefreshed = true } catch (_) {}
 
         // Load saved preferences (backend first, localStorage fallback)
         let savedGuild = ''
@@ -153,6 +154,19 @@ export default function App() {
         setGuildId('')
         setPrefsLoaded(true)
       })
+
+    loadAuth()
+
+    // Listen for mobile-auth token delivery (polling or deep link) so we can
+    // refresh state without a full reload.
+    const onTokenApplied = () => {
+      try { (window as any).__dcbAuthRefreshed = false } catch (_) {}
+      loadAuth()
+    }
+    window.addEventListener('dcb-token-applied', onTokenApplied)
+    return () => {
+      window.removeEventListener('dcb-token-applied', onTokenApplied)
+    }
   }, [])
 
   const navigate = (p: Page) => {
